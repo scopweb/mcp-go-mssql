@@ -1,0 +1,40 @@
+# Configuration files with sensitive data
+config.json
+*.config.json
+
+# Build artifacts
+mcp-go-mssql
+mcp-go-mssql.exe
+mcp-go-mssql-secure
+mcp-go-mssql-secure.exe
+
+# Go build cache
+go.sum
+
+# Logs
+*.log
+security.log
+
+# Certificate files
+*.pem
+*.crt
+*.key
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
