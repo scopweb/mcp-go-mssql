@@ -4,17 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **secure** Go-based MCP (Model Context Protocol) server implementation that provides MSSQL database connectivity for critical data environments. The application serves as a hardened bridge between MCP clients and Microsoft SQL Server databases, with comprehensive security features including TLS encryption, rate limiting, input validation, and IP whitelisting.
+This is a **secure** Go-based MCP (Model Context Protocol) server implementation that provides MSSQL database connectivity for critical data environments. The application serves as a hardened bridge between MCP clients and Microsoft SQL Server databases, with comprehensive security features including TLS encryption, input validation, and connection pooling.
 
 ## Architecture
 
 The codebase implements a security-first architecture with these key components:
 
-- **Config/Configs structs**: Define configuration with security parameters (TLS, rate limiting, IP restrictions)
 - **SecurityLogger**: Dedicated security event logging with sanitization
-- **RateLimiter**: IP-based rate limiting to prevent abuse
 - **MCPServer struct**: Handles secure server instances with input validation and SQL injection protection
-- **Connection security**: TLS support, connection timeouts, and IP whitelisting
+- **Connection security**: TLS support and connection timeouts
 - **Database security**: Encrypted connections, connection pooling, and prepared statement support
 
 ## Security Features
@@ -26,15 +24,14 @@ The codebase implements a security-first architecture with these key components:
 - **Secure error handling**: Generic error messages to clients, detailed logs internally
 
 ### Network Security
-- **TLS encryption**: Optional TLS for client connections
-- **IP whitelisting**: Restrict access to specific client IPs
-- **Rate limiting**: Configurable requests per second per IP
+- **Database TLS encryption**: Mandatory TLS for all database connections
 - **Connection timeouts**: Prevent hanging connections
+- **Resource limits**: Connection pooling with limits
 
 ### Logging Security
 - **Security event logging**: Dedicated security logger for all security events
 - **Data sanitization**: Automatic removal of sensitive data from logs
-- **Connection tracking**: Log all connection attempts with IP addresses
+- **Connection tracking**: Log all database connection attempts
 
 ## Development Commands
 
@@ -75,10 +72,10 @@ go build -ldflags "-w -s" -o mcp-go-mssql-secure
 This server now implements the proper MCP (Model Context Protocol) using stdin/stdout JSON-RPC communication, compatible with Claude Desktop.
 
 ### For Claude Desktop Integration
-1. Copy `config.example.json` to `config.json` and customize for your environment
-2. **NEVER commit config.json to version control**
-3. Place the compiled `mcp-go-mssql.exe` in the same directory as your config.json
-4. Configuration uses environment variables passed through Claude Desktop
+1. Use `config.example.json` as template for Claude Desktop configuration
+2. **NEVER commit sensitive credentials to version control**
+3. Place the compiled `mcp-go-mssql.exe` in the same directory
+4. Configuration uses environment variables passed through Claude Desktop MCP settings
 
 ### Environment Variables
 The server reads database connection from these environment variables:

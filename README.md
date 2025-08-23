@@ -4,9 +4,9 @@ A secure Go-based MCP (Model Context Protocol) server for Microsoft SQL Server c
 
 ## Features
 
-- **Security-first design** with TLS encryption and IP whitelisting
+- **Security-first design** with TLS encryption for database connections
 - **SQL injection protection** using prepared statements
-- **Rate limiting** and connection timeouts
+- **Connection timeouts** and resource limits
 - **Configurable security parameters** for production and development
 - **Secure logging** with sensitive data sanitization
 
