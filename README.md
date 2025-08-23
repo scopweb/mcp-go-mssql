@@ -1,6 +1,6 @@
 # MCP-Go-MSSQL
 
-A secure Go-based MCP (Model Context Protocol) server for Microsoft SQL Server connectivity.
+A secure Go-based solution for Microsoft SQL Server connectivity supporting both **Claude Desktop** (via MCP server) and **Claude Code** (via CLI tools).
 
 ## Features
 
@@ -96,9 +96,40 @@ cd test
 go run test-connection.go
 ```
 
-### Available Tools
+### Usage Options
+
+### 🖥️ Claude Desktop (MCP Server)
+Use `main.go` as an MCP server with Claude Desktop:
+
+**Available Tools:**
 - `get_database_info`: Check connection status
 - `query_database`: Execute SQL queries securely
+
+### 💻 Claude Code (CLI Tool)  
+Use `claude-code/db-connector.go` directly with Claude Code:
+
+```bash
+cd claude-code
+go run db-connector.go test                    # Test connection
+go run db-connector.go tables                  # List tables
+go run db-connector.go query "SELECT ..."      # Execute queries
+```
+
+See [claude-code/README.md](claude-code/README.md) for detailed Claude Code integration.
+
+## Project Structure
+
+```
+mcp-go-mssql/
+├── main.go                    # MCP server for Claude Desktop
+├── claude-code/               # Claude Code integration
+│   ├── db-connector.go       # CLI database tool
+│   └── README.md             # Claude Code documentation
+├── test/
+│   └── test-connection.go    # Connection testing utility
+├── config.example.json       # Claude Desktop configuration template
+└── README.md                 # This file
+```
 
 ## License
 
