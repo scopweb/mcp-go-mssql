@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **secure** Go-based MCP (Model Context Protocol) server implementation that provides MSSQL database connectivity for critical data environments. The application serves as a hardened bridge between MCP clients and Microsoft SQL Server databases, with comprehensive security features including TLS encryption, input validation, and connection pooling.
+This is a **secure** Go-based solution that provides MSSQL database connectivity for critical data environments in two ways:
+
+1. **MCP Server** (`main.go`): For Claude Desktop integration via Model Context Protocol
+2. **CLI Tool** (`claude-code/db-connector.go`): For Claude Code direct database access
+
+Both implementations serve as hardened bridges to Microsoft SQL Server databases, with comprehensive security features including TLS encryption, input validation, and connection pooling.
 
 ## Architecture
 
