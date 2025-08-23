@@ -46,6 +46,22 @@ go mod init mcp-go-mssql
 go mod tidy
 ```
 
+### Environment Configuration
+```bash
+# Copy environment template and configure
+cp .env.example .env
+# Edit .env with your database credentials
+
+# Load environment variables (Linux/Mac)
+source .env
+
+# Windows PowerShell
+Get-Content .env | ForEach-Object { 
+  $name, $value = $_ -split '=', 2
+  [Environment]::SetEnvironmentVariable($name, $value) 
+}
+```
+
 ### Build
 ```bash
 go build
@@ -83,13 +99,34 @@ This server now implements the proper MCP (Model Context Protocol) using stdin/s
 4. Configuration uses environment variables passed through Claude Desktop MCP settings
 
 ### Environment Variables
-The server reads database connection from these environment variables:
-- `MSSQL_SERVER`: SQL Server hostname/IP
-- `MSSQL_DATABASE`: Database name
-- `MSSQL_USER`: Username for connection
-- `MSSQL_PASSWORD`: Password for connection
-- `MSSQL_PORT`: Port (defaults to 1433)
-- `DEVELOPER_MODE`: "true" for detailed errors and relaxed TLS certificate validation, "false" for production
+The server reads database connection from these environment variables. See `.env.example` for complete configuration templates.
+
+**Required Variables:**
+- `MSSQL_SERVER`: SQL Server hostname/IP address
+- `MSSQL_DATABASE`: Database name to connect to
+- `MSSQL_USER`: Username for SQL Server authentication
+- `MSSQL_PASSWORD`: Password for SQL Server authentication
+
+**Optional Variables:**
+- `MSSQL_PORT`: SQL Server port (defaults to 1433)
+- `DEVELOPER_MODE`: Controls error verbosity and certificate validation
+  - `"true"`: Development mode with detailed errors and relaxed TLS certificate validation
+  - `"false"`: Production mode with generic errors and strict certificate validation
+
+**Configuration Examples:**
+```bash
+# Production Azure SQL
+MSSQL_SERVER=prod-server.database.windows.net
+MSSQL_DATABASE=ProductionDB
+MSSQL_USER=prod_user@prod-server
+DEVELOPER_MODE=false
+
+# Local Development
+MSSQL_SERVER=localhost
+MSSQL_DATABASE=DevDB
+MSSQL_USER=dev_user
+DEVELOPER_MODE=true
+```
 
 ### TLS Certificate Handling
 - **Production Mode** (`DEVELOPER_MODE=false`): Requires valid, trusted TLS certificates
@@ -140,12 +177,17 @@ The server reads database connection from these environment variables:
 ## Security Best Practices
 
 ### Configuration Security
-1. **Environment Variables**: Use environment variables for sensitive data
+1. **Environment Variables**: Use environment variables for sensitive data (never hardcode credentials)
 2. **File Permissions**: 
-   - **Windows**: Use `icacls config.json /inheritance:r /grant:r "%USERNAME%:R"` 
-   - **Linux/Unix**: Use `chmod 600 config.json`
-3. **Credential Rotation**: Regularly rotate database passwords
-4. **Network Isolation**: Deploy in secure network segments
+   - **`.env` files**: Set restrictive permissions (600 on Unix, equivalent on Windows)
+   - **Windows**: `icacls .env /inheritance:r /grant:r "%USERNAME%:R"`
+   - **Linux/Unix**: `chmod 600 .env`
+3. **Git Security**: 
+   - ✅ `.env` files are in `.gitignore` 
+   - ❌ **NEVER** commit `.env` or `config.json` with real credentials
+   - ✅ Only commit `.env.example` and `config.example.json` templates
+4. **Credential Rotation**: Regularly rotate database passwords
+5. **Network Isolation**: Deploy in secure network segments
 
 ### Database Security
 1. **Least Privilege**: Use database users with minimal required permissions
@@ -198,3 +240,35 @@ go run test-connection.go
 - **TLS handshake failed**: Use `DEVELOPER_MODE=true` for self-signed certificates
 - **Login failed**: Verify username/password and SQL Server authentication mode
 - **Network error**: Check firewall rules and SQL Server port (default 1433)
+
+## Important Claude Code Instructions
+
+### Environment Setup for Database Operations
+When Claude Code needs to connect to the database:
+
+1. **Check if environment variables are set:**
+   ```bash
+   echo "Server: $MSSQL_SERVER"
+   echo "Database: $MSSQL_DATABASE" 
+   echo "User: $MSSQL_USER"
+   echo "Password: ${MSSQL_PASSWORD:+***SET***}"
+   ```
+
+2. **If not set, guide user to configure `.env`:**
+   ```bash
+   # Copy template and edit
+   cp .env.example .env
+   # User should edit .env with their credentials
+   source .env  # Load variables
+   ```
+
+3. **Use the appropriate tool:**
+   - **Connection testing**: `go run test/test-connection.go`
+   - **Claude Code operations**: `go run claude-code/db-connector.go [command]`
+
+### Available Claude Code Database Commands
+- `go run claude-code/db-connector.go test` - Test connection
+- `go run claude-code/db-connector.go info` - Database information  
+- `go run claude-code/db-connector.go tables` - List all tables
+- `go run claude-code/db-connector.go describe TABLE_NAME` - Table structure
+- `go run claude-code/db-connector.go query "SQL_STATEMENT"` - Execute queries
