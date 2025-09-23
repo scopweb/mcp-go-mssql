@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,39 +144,125 @@ type MCPMSSQLServer struct {
 }
 
 func buildSecureConnectionString() (string, error) {
+	// Check for custom connection string first
+	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+		return customConnStr, nil
+	}
+
 	server := os.Getenv("MSSQL_SERVER")
 	database := os.Getenv("MSSQL_DATABASE")
 	user := os.Getenv("MSSQL_USER")
 	password := os.Getenv("MSSQL_PASSWORD")
 	port := os.Getenv("MSSQL_PORT")
-	
+
 	if server == "" || database == "" || user == "" || password == "" {
 		return "", fmt.Errorf("missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE, MSSQL_USER, MSSQL_PASSWORD")
 	}
-	
+
 	if port == "" {
 		port = "1433"
 	}
-	
-	// For development mode, allow untrusted certificates
+
+	// For development mode, allow disabling encryption and untrusted certificates
+	encrypt := "true"
 	trustCert := "false"
 	if strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true" {
+		// In development mode, allow disabling encryption for local SQL Server instances
+		if envEncrypt := os.Getenv("MSSQL_ENCRYPT"); envEncrypt != "" {
+			encrypt = strings.ToLower(envEncrypt)
+		} else {
+			// Default to false for development mode to match local SQL Server setups
+			encrypt = "false"
+		}
 		trustCert = "true"
 	}
-	
-	return fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=true;trustservercertificate=%s;connection timeout=30;command timeout=30",
-		server, database, user, password, port, trustCert,
+
+	// Build connection string using standard format for modern SQL Server
+	return fmt.Sprintf("server=%s;port=%s;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+		server, port, database, user, password, encrypt, trustCert,
 	), nil
 }
 
 func (s *MCPMSSQLServer) validateBasicInput(input string) error {
-	if len(input) > 4096 {
-		return fmt.Errorf("input too large")
+	// Allow larger queries - up to 1MB (1048576 characters)
+	maxSize := 1048576
+	if customMax := os.Getenv("MSSQL_MAX_QUERY_SIZE"); customMax != "" {
+		if size, err := strconv.Atoi(customMax); err == nil && size > 0 {
+			maxSize = size
+		}
+	}
+
+	if len(input) > maxSize {
+		return fmt.Errorf("input too large (max %d characters)", maxSize)
 	}
 	if len(input) == 0 {
 		return fmt.Errorf("empty input")
 	}
 	return nil
+}
+
+func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
+	// Check if read-only mode is enabled
+	if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) != "true" {
+		return nil // Read-only mode disabled, allow all queries
+	}
+
+	// Normalize query for checking
+	normalizedQuery := strings.TrimSpace(strings.ToUpper(query))
+
+	// Remove leading comments and whitespace
+	for strings.HasPrefix(normalizedQuery, "--") || strings.HasPrefix(normalizedQuery, "/*") || strings.HasPrefix(normalizedQuery, " ") || strings.HasPrefix(normalizedQuery, "\t") || strings.HasPrefix(normalizedQuery, "\n") || strings.HasPrefix(normalizedQuery, "\r") {
+		if strings.HasPrefix(normalizedQuery, "--") {
+			// Skip until end of line
+			if idx := strings.Index(normalizedQuery, "\n"); idx != -1 {
+				normalizedQuery = strings.TrimSpace(normalizedQuery[idx+1:])
+			} else {
+				return fmt.Errorf("read-only mode: only SELECT queries are allowed")
+			}
+		} else if strings.HasPrefix(normalizedQuery, "/*") {
+			// Skip until end of block comment
+			if idx := strings.Index(normalizedQuery, "*/"); idx != -1 {
+				normalizedQuery = strings.TrimSpace(normalizedQuery[idx+2:])
+			} else {
+				return fmt.Errorf("read-only mode: only SELECT queries are allowed")
+			}
+		} else {
+			normalizedQuery = strings.TrimSpace(normalizedQuery[1:])
+		}
+	}
+
+	// List of allowed read-only operations
+	allowedPrefixes := []string{
+		"SELECT",
+		"WITH", // Common Table Expressions that start with WITH
+		"SHOW",
+		"DESCRIBE",
+		"DESC",
+		"EXPLAIN",
+	}
+
+	// Check if query starts with an allowed prefix
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(normalizedQuery, prefix) {
+			// Additional check: ensure no dangerous keywords are present
+			dangerousKeywords := []string{
+				"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
+				"TRUNCATE", "MERGE", "EXEC", "EXECUTE", "CALL",
+				"BULK", "BCP", "xp_", "sp_",
+			}
+
+			queryUpper := strings.ToUpper(query)
+			for _, keyword := range dangerousKeywords {
+				if strings.Contains(queryUpper, keyword) {
+					return fmt.Errorf("read-only mode: query contains forbidden operation '%s'", keyword)
+				}
+			}
+
+			return nil // Query is allowed
+		}
+	}
+
+	return fmt.Errorf("read-only mode: only SELECT and read operations are allowed")
 }
 
 func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, error) {
@@ -184,6 +271,12 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	}
 	
 	if err := s.validateBasicInput(query); err != nil {
+		return nil, err
+	}
+
+	// Validate read-only restrictions
+	if err := s.validateReadOnlyQuery(query); err != nil {
+		s.secLogger.Printf("Read-only violation blocked: %s", err)
 		return nil, err
 	}
 	
@@ -249,14 +342,32 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		if s.db == nil {
 			info.WriteString("Database Status: Disconnected\n")
 			info.WriteString("Reason: No database connection established\n")
-			if os.Getenv("MSSQL_SERVER") == "" {
+			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+				info.WriteString("Configuration: Using custom connection string\n")
+			} else if os.Getenv("MSSQL_SERVER") == "" {
 				info.WriteString("Configuration: Missing MSSQL_SERVER environment variable\n")
 			}
 		} else {
 			info.WriteString("Database Status: Connected\n")
-			info.WriteString("Server: " + os.Getenv("MSSQL_SERVER") + "\n")
-			info.WriteString("Database: " + os.Getenv("MSSQL_DATABASE") + "\n")
-			info.WriteString("Encryption: Enabled (TLS)\n")
+			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+				info.WriteString("Connection: Custom connection string\n")
+				info.WriteString("Mode: " + func() string { if os.Getenv("DEVELOPER_MODE") == "true" { return "Development" } else { return "Production" } }() + "\n")
+			} else {
+				info.WriteString("Server: " + os.Getenv("MSSQL_SERVER") + "\n")
+				info.WriteString("Database: " + os.Getenv("MSSQL_DATABASE") + "\n")
+				encrypt := "Enabled (TLS)"
+				if os.Getenv("DEVELOPER_MODE") == "true" && os.Getenv("MSSQL_ENCRYPT") != "true" {
+					encrypt = "Disabled (Development)"
+				}
+				info.WriteString("Encryption: " + encrypt + "\n")
+			}
+
+			// Show read-only status
+			if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true" {
+				info.WriteString("Access Mode: READ-ONLY (SELECT queries only)\n")
+			} else {
+				info.WriteString("Access Mode: Full access\n")
+			}
 		}
 		
 		return &MCPResponse{
@@ -484,13 +595,33 @@ func main() {
 		user := os.Getenv("MSSQL_USER")
 		password := os.Getenv("MSSQL_PASSWORD")
 		
-		secLogger.Printf("Environment variables - Server: %s, Database: %s, User: %s, Password: %s, DevMode: %s", 
-			serverHost, database, user, 
-			func() string { if password != "" { return "***" } else { return "MISSING" } }(),
-			os.Getenv("DEVELOPER_MODE"))
+		customConnStr := os.Getenv("MSSQL_CONNECTION_STRING")
+		if customConnStr != "" {
+			secLogger.Printf("Using custom connection string: %s", secLogger.sanitizeForLogging(customConnStr))
+		} else {
+			secLogger.Printf("Environment variables - Server: %s, Database: %s, User: %s, Password: %s, DevMode: %s",
+				serverHost, database, user,
+				func() string { if password != "" { return "***" } else { return "MISSING" } }(),
+				os.Getenv("DEVELOPER_MODE"))
+		}
+
+		// Additional debug logging
+		secLogger.Printf("All environment variables:")
+		for _, env := range os.Environ() {
+			if strings.HasPrefix(env, "MSSQL_") || strings.HasPrefix(env, "DEVELOPER_") {
+				secLogger.Printf("  %s", secLogger.sanitizeForLogging(env))
+			}
+		}
+
+		// Log security settings
+		if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true" {
+			secLogger.Printf("READ-ONLY MODE ENABLED - Only SELECT queries allowed")
+		} else {
+			secLogger.Printf("Full access mode enabled")
+		}
 		
-		if serverHost == "" {
-			secLogger.Printf("No MSSQL_SERVER environment variable - database features disabled")
+		if customConnStr == "" && serverHost == "" {
+			secLogger.Printf("No MSSQL_SERVER or MSSQL_CONNECTION_STRING environment variable - database features disabled")
 			return
 		}
 		
@@ -537,7 +668,19 @@ func main() {
 				if strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true" {
 					trustCert = "true"
 				}
-				secLogger.Printf("Connection string format: server=SERVER;database=DB;user id=USER;password=***;port=PORT;encrypt=true;trustservercertificate=%s;connection timeout=30;command timeout=30", trustCert)
+				if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+					secLogger.Printf("Using custom connection string format")
+				} else {
+					encrypt := "true"
+					if strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true" {
+						if envEncrypt := os.Getenv("MSSQL_ENCRYPT"); envEncrypt != "" {
+							encrypt = strings.ToLower(envEncrypt)
+						} else {
+							encrypt = "false"
+						}
+					}
+					secLogger.Printf("Connection string format: server=SERVER;port=PORT;database=DB;user id=USER;password=***;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30", encrypt, trustCert)
+				}
 			} else {
 				secLogger.Printf("Failed to ping database: connection test failed")
 			}
