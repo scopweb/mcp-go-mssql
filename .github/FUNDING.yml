@@ -1,0 +1,42 @@
+# These are supported funding model platforms
+
+# GitHub Sponsors (replace with your GitHub username)
+# github: your-username
+
+# Open Collective (replace with your project name)
+# open_collective: your-project
+
+# Ko-fi (replace with your Ko-fi username)
+# ko_fi: your-username
+
+# Tidelift (replace with your package name)
+# tidelift: npm/your-package
+
+# Community Bridge (replace with your project name)
+# community_bridge: your-project
+
+# Liberapay (replace with your username)
+# liberapay: your-username
+
+# IssueHunt (replace with your username)
+# issuehunt: your-username
+
+# Patreon (replace with your username)
+# patreon: your-username
+
+# Buy Me a Coffee (replace with your username)
+# custom: ['https://www.buymeacoffee.com/your-username']
+
+# PayPal (replace with your PayPal.me link)
+# custom: ['https://paypal.me/your-username']
+
+# Custom funding URLs (you can add multiple)
+custom: [
+  'https://github.com/sponsors',
+  'https://ko-fi.com/',
+  'https://www.buymeacoffee.com/'
+]
+
+# Note: Uncomment and customize the platforms you want to use
+# This file enables the "Sponsor" button on your GitHub repository
+# Users will see funding options when they visit your repo
