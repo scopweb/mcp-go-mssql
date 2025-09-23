@@ -4,11 +4,13 @@ A secure Go-based solution for Microsoft SQL Server connectivity supporting both
 
 ## Features
 
-- **Security-first design** with TLS encryption for database connections
-- **SQL injection protection** using prepared statements
-- **Connection timeouts** and resource limits
-- **Configurable security parameters** for production and development
-- **Secure logging** with sensitive data sanitization
+- **Security-first design** with configurable TLS encryption for database connections
+- **SQL injection protection** using prepared statements exclusively
+- **Connection timeouts** and resource limits with pooling
+- **Flexible connection support** for modern and legacy SQL Server versions
+- **Custom connection strings** for special configurations (SQL Server 2008+)
+- **Configurable security parameters** for production and development environments
+- **Secure logging** with automatic sensitive data sanitization
 
 ## Quick Start
 
@@ -47,24 +49,31 @@ A secure Go-based solution for Microsoft SQL Server connectivity supporting both
    # Edit config.json with your database credentials
    ```
 
-3. **Run**
+3. **Build and Run**
    ```bash
+   # Quick build (Windows)
+   build.bat
+
+   # Manual build
+   go build -o mcp-go-mssql.exe
+
    # Development mode (detailed errors)
    go run main.go
 
-   # Production build
-   go build -ldflags "-w -s" -o mcp-go-mssql-secure
-   ./mcp-go-mssql-secure
+   # Production build (optimized)
+   go build -ldflags "-w -s" -o mcp-go-mssql-secure.exe
    ```
 
 ## Configuration
 
-### Claude Desktop Configuration
+### Claude Desktop Configuration Examples
+
+**Modern SQL Server (Standard Configuration):**
 ```json
 {
   "mcpServers": {
     "production-db": {
-      "command": "mcp-go-mssql.exe",
+      "command": "C:\\path\\to\\mcp-go-mssql.exe",
       "args": [],
       "env": {
         "MSSQL_SERVER": "your-server.database.windows.net",
@@ -79,11 +88,27 @@ A secure Go-based solution for Microsoft SQL Server connectivity supporting both
 }
 ```
 
+**Legacy SQL Server (Custom Connection String):**
+```json
+{
+  "mcpServers": {
+    "legacy-db": {
+      "command": "C:\\path\\to\\mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_CONNECTION_STRING": "sqlserver://sa:password@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true",
+        "DEVELOPER_MODE": "true"
+      }
+    }
+  }
+}
+```
+
 ### Environment Variables
 
 All database connections use environment variables for security. See `.env.example` for complete configuration examples.
 
-**Required Variables:**
+**Required Variables (when not using custom connection string):**
 - `MSSQL_SERVER`: SQL Server hostname or IP address
 - `MSSQL_DATABASE`: Database name to connect to
 - `MSSQL_USER`: Username for SQL Server authentication
@@ -91,31 +116,62 @@ All database connections use environment variables for security. See `.env.examp
 
 **Optional Variables:**
 - `MSSQL_PORT`: SQL Server port (default: 1433)
-- `DEVELOPER_MODE`: 
-  - `"true"`: Development mode (detailed errors, allows self-signed certificates)
-  - `"false"`: Production mode (generic errors, strict certificate validation)
+- `MSSQL_ENCRYPT`: Override encryption setting (`"true"` or `"false"`)
+- `MSSQL_CONNECTION_STRING`: **Complete custom connection string** (overrides all other MSSQL_* settings)
+- `MSSQL_READ_ONLY`: **Security restriction** (`"true"` allows only SELECT queries, `"false"` allows all operations)
+- `DEVELOPER_MODE`:
+  - `"true"`: Development mode (detailed errors, allows self-signed certificates, disables encryption by default)
+  - `"false"`: Production mode (generic errors, strict certificate validation, forces encryption)
+
+**🔧 Custom Connection String Priority:**
+When `MSSQL_CONNECTION_STRING` is set, all other `MSSQL_*` variables are ignored except `DEVELOPER_MODE`.
 
 **Environment Setup Examples:**
 ```bash
-# Azure SQL Database
+# Azure SQL Database (Production)
 MSSQL_SERVER=your-server.database.windows.net
 MSSQL_DATABASE=YourAzureDB
 MSSQL_USER=your_user@your-server
+MSSQL_PASSWORD=your_secure_password
 DEVELOPER_MODE=false
 
-# Local Development
+# Local Development (No Encryption)
 MSSQL_SERVER=localhost
 MSSQL_DATABASE=DevDB
 MSSQL_USER=dev_user
+MSSQL_PASSWORD=dev_password
 DEVELOPER_MODE=true
+
+# Local Development (Force Encryption)
+MSSQL_SERVER=localhost
+MSSQL_DATABASE=DevDB
+MSSQL_USER=dev_user
+MSSQL_PASSWORD=dev_password
+MSSQL_ENCRYPT=true
+DEVELOPER_MODE=true
+
+# Legacy SQL Server (e.g., SQL Server 2008) - Custom Connection String
+MSSQL_CONNECTION_STRING=sqlserver://sa:password@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true
+DEVELOPER_MODE=true
+
+# Read-Only Mode (Security Restricted)
+MSSQL_SERVER=server.example.com
+MSSQL_DATABASE=MyDatabase
+MSSQL_USER=readonly_user
+MSSQL_PASSWORD=readonly_password
+MSSQL_READ_ONLY=true
+MSSQL_MAX_QUERY_SIZE=2097152
+DEVELOPER_MODE=false
 ```
 
 ## Security Features
 
-- **Forced TLS encryption** for all database connections
+- **Configurable TLS encryption** for database connections:
+  - Production: Forces encryption (`encrypt=true`)
+  - Development: Allows disabling encryption for local SQL Server instances
 - **Flexible certificate validation**:
-  - Production: Strict certificate validation
-  - Development: Allows self-signed certificates
+  - Production: Strict certificate validation (`trustservercertificate=false`)
+  - Development: Allows self-signed certificates (`trustservercertificate=true`)
 - **Prepared statements** to prevent SQL injection
 - **Secure error handling** with production/development modes
 - **Connection pooling** with resource limits
@@ -129,10 +185,57 @@ DEVELOPER_MODE=true
 
 ## Troubleshooting
 
-### TLS Certificate Issues
+### Connection Issues
+
+**TLS Certificate Issues:**
 ```
 Error: "certificate signed by unknown authority"
 Solution: Set DEVELOPER_MODE=true for self-signed certificates
+```
+
+**Encryption Issues:**
+```
+Error: "SSL Provider: No credentials are available in the security package"
+Solution: Set DEVELOPER_MODE=true to disable encryption for local SQL Server
+```
+
+**Force No Encryption (Development):**
+```bash
+# For local SQL Server without TLS
+DEVELOPER_MODE=true
+# This automatically sets encrypt=false for development
+```
+
+**TLS Handshake Issues (Legacy SQL Server):**
+```
+Error: "TLS Handshake failed: tls: server selected unsupported protocol version"
+Solution: Use custom connection string with URL format for SQL Server 2008/2012
+```
+
+**Connection String Formats:**
+
+**Standard Format (Modern SQL Server 2014+):**
+```bash
+# Automatically used when individual variables are set
+MSSQL_SERVER=server.example.com
+MSSQL_DATABASE=MyDatabase
+MSSQL_USER=username
+MSSQL_PASSWORD=password
+DEVELOPER_MODE=true
+```
+
+**URL Format (Legacy SQL Server 2008-2012):**
+```bash
+# Use this for older SQL Server versions
+MSSQL_CONNECTION_STRING=sqlserver://username:password@server:1433?database=dbname&encrypt=disable&trustservercertificate=true
+DEVELOPER_MODE=true
+```
+
+**No Encryption (Development):**
+```bash
+# For local SQL Server without TLS
+DEVELOPER_MODE=true
+# This automatically sets encrypt=false for development
 ```
 
 ### Connection Test
@@ -140,6 +243,10 @@ Solution: Set DEVELOPER_MODE=true for self-signed certificates
 # Make sure environment variables are set first
 cd test
 go run test-connection.go
+
+# For debugging connection issues
+cd debug
+go run debug-connection.go
 ```
 
 ### Security Notes
@@ -174,11 +281,14 @@ See [claude-code/README.md](claude-code/README.md) for detailed Claude Code inte
 ```
 mcp-go-mssql/
 ├── main.go                    # MCP server for Claude Desktop
+├── build.bat                  # Windows build script
 ├── claude-code/               # Claude Code integration
 │   ├── db-connector.go       # CLI database tool
 │   └── README.md             # Claude Code documentation
+├── debug/
+│   └── debug-connection.go   # Advanced connection debugging tool
 ├── test/
-│   └── test-connection.go    # Connection testing utility
+│   └── test-connection.go    # Basic connection testing utility
 ├── .env.example              # Environment variables template
 ├── config.example.json       # Claude Desktop configuration template
 ├── CLAUDE.md                 # Claude Code project documentation
