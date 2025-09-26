@@ -467,7 +467,199 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				},
 			},
 		}
-		
+
+	case "list_tables":
+		if s.db == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		query := `
+			SELECT
+				TABLE_SCHEMA as schema_name,
+				TABLE_NAME as table_name,
+				TABLE_TYPE as table_type
+			FROM INFORMATION_SCHEMA.TABLES
+			WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+			ORDER BY TABLE_SCHEMA, TABLE_NAME
+		`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		results, err := s.executeSecureQuery(ctx, query)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error listing tables: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Format results as JSON
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Tables and views found:\n%s", string(resultBytes)),
+					},
+				},
+			},
+		}
+
+	case "describe_table":
+		if s.db == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		tableName, ok := params.Arguments["table_name"].(string)
+		if !ok {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Missing or invalid 'table_name' parameter",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		query := `
+			SELECT
+				COLUMN_NAME as column_name,
+				DATA_TYPE as data_type,
+				IS_NULLABLE as is_nullable,
+				COLUMN_DEFAULT as default_value,
+				CHARACTER_MAXIMUM_LENGTH as max_length,
+				ORDINAL_POSITION as position
+			FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_NAME = ?
+			ORDER BY ORDINAL_POSITION
+		`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		results, err := s.executeSecureQuery(ctx, query, tableName)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error describing table '%s': %v", tableName, err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		if len(results) == 0 {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Table '%s' not found", tableName),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Format results as JSON
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Table structure for '%s':\n%s", tableName, string(resultBytes)),
+					},
+				},
+			},
+		}
+
 	default:
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -528,6 +720,29 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Type:       "object",
 					Properties: map[string]Property{},
 					Required:   []string{},
+				},
+			},
+			{
+				Name:        "list_tables",
+				Description: "List all tables and views in the database",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+					Required:   []string{},
+				},
+			},
+			{
+				Name:        "describe_table",
+				Description: "Get the structure and schema information for a specific table",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"table_name": {
+							Type:        "string",
+							Description: "Name of the table to describe",
+						},
+					},
+					Required: []string{"table_name"},
 				},
 			},
 		}
