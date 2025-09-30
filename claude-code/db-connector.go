@@ -5,9 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
