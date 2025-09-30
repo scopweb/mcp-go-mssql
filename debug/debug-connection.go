@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/denisenkom/go-mssqldb"
+	_ "github.com/microsoft/go-mssqldb"
 )
 
 func main() {
