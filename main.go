@@ -589,7 +589,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				CHARACTER_MAXIMUM_LENGTH as max_length,
 				ORDINAL_POSITION as position
 			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_NAME = ?
+			WHERE TABLE_NAME = @p1
 			ORDER BY ORDINAL_POSITION
 		`
 

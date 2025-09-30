@@ -277,31 +277,22 @@ func listTables(db *sql.DB) {
 
 func describeTable(db *sql.DB, tableName string) {
 	query := `
-		SELECT 
+		SELECT
 			COLUMN_NAME as column_name,
 			DATA_TYPE as data_type,
 			IS_NULLABLE as is_nullable,
 			COLUMN_DEFAULT as default_value,
 			CHARACTER_MAXIMUM_LENGTH as max_length
-		FROM INFORMATION_SCHEMA.COLUMNS 
-		WHERE TABLE_NAME = @tableName
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_NAME = @p1
 		ORDER BY ORDINAL_POSITION
 	`
-	
+
 	result := QueryResult{Success: true}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	stmt, err := db.PrepareContext(ctx, query)
-	if err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("Failed to prepare statement: %v", err)
-		printResult(result)
-		return
-	}
-	defer stmt.Close()
-
-	rows, err := stmt.QueryContext(ctx, sql.Named("tableName", tableName))
+	rows, err := db.QueryContext(ctx, query, tableName)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("Query failed: %v", err)
@@ -310,7 +301,14 @@ func describeTable(db *sql.DB, tableName string) {
 	}
 	defer rows.Close()
 
-	columns, _ := rows.Columns()
+	columns, err := rows.Columns()
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("Failed to get columns: %v", err)
+		printResult(result)
+		return
+	}
+
 	var data []map[string]interface{}
 	
 	for rows.Next() {
