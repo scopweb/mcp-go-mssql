@@ -5,7 +5,9 @@ A secure Go-based solution for Microsoft SQL Server connectivity supporting both
 ## Features
 
 - **Security-first design** with configurable TLS encryption for database connections
+- **Granular table permissions** with whitelist for AI-safe database access
 - **SQL injection protection** using prepared statements exclusively
+- **Multi-table query validation** preventing unauthorized access via JOINs/subqueries
 - **Connection timeouts** and resource limits with pooling
 - **Flexible connection support** for modern and legacy SQL Server versions
 - **Custom connection strings** for special configurations (SQL Server 2008+)
@@ -68,7 +70,29 @@ A secure Go-based solution for Microsoft SQL Server connectivity supporting both
 
 ### Claude Desktop Configuration Examples
 
-**Modern SQL Server (Standard Configuration):**
+**AI-Safe Production Configuration (RECOMMENDED for AI Assistants):**
+```json
+{
+  "mcpServers": {
+    "production-db-ai-safe": {
+      "command": "C:\\path\\to\\mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "your-server.database.windows.net",
+        "MSSQL_DATABASE": "YourDatabase",
+        "MSSQL_USER": "ai_user",
+        "MSSQL_PASSWORD": "secure_password",
+        "MSSQL_PORT": "1433",
+        "MSSQL_READ_ONLY": "true",
+        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia",
+        "DEVELOPER_MODE": "false"
+      }
+    }
+  }
+}
+```
+
+**Standard Production Configuration:**
 ```json
 {
   "mcpServers": {
@@ -119,6 +143,11 @@ All database connections use environment variables for security. See `.env.examp
 - `MSSQL_ENCRYPT`: Override encryption setting (`"true"` or `"false"`)
 - `MSSQL_CONNECTION_STRING`: **Complete custom connection string** (overrides all other MSSQL_* settings)
 - `MSSQL_READ_ONLY`: **Security restriction** (`"true"` allows only SELECT queries, `"false"` allows all operations)
+- `MSSQL_WHITELIST_TABLES`: **Granular permissions** (comma-separated list of tables/views allowed for modification when `MSSQL_READ_ONLY=true`)
+  - Example: `"temp_ai,v_temp_ia"`
+  - Enables AI to modify specific tables while protecting production data
+  - Validates ALL tables in queries (including JOINs, subqueries, CTEs)
+  - See [WHITELIST_SECURITY.md](WHITELIST_SECURITY.md) for details
 - `DEVELOPER_MODE`:
   - `"true"`: Development mode (detailed errors, allows self-signed certificates, disables encryption by default)
   - `"false"`: Production mode (generic errors, strict certificate validation, forces encryption)
@@ -162,20 +191,39 @@ MSSQL_PASSWORD=readonly_password
 MSSQL_READ_ONLY=true
 MSSQL_MAX_QUERY_SIZE=2097152
 DEVELOPER_MODE=false
+
+# AI-Safe Mode with Whitelist (RECOMMENDED for AI Assistants)
+MSSQL_SERVER=prod-server.database.windows.net
+MSSQL_DATABASE=ProductionDB
+MSSQL_USER=ai_user
+MSSQL_PASSWORD=secure_password
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+DEVELOPER_MODE=false
 ```
 
 ## Security Features
 
+### Database Access Control
+- **Granular table permissions** with whitelist system:
+  - Validate ALL tables in queries (FROM, JOIN, subqueries, CTEs)
+  - Block unauthorized access even through complex SQL patterns
+  - Perfect for AI assistants accessing production databases
+  - Example: `DELETE temp_ai FROM temp_ai JOIN users` → BLOCKED if `users` not whitelisted
+  - See [WHITELIST_SECURITY.md](WHITELIST_SECURITY.md) for complete guide
+- **Read-only mode** for query-only access
+- **Prepared statements** to prevent SQL injection
+- **Input validation** and sanitization
+
+### Connection Security
 - **Configurable TLS encryption** for database connections:
   - Production: Forces encryption (`encrypt=true`)
   - Development: Allows disabling encryption for local SQL Server instances
 - **Flexible certificate validation**:
   - Production: Strict certificate validation (`trustservercertificate=false`)
   - Development: Allows self-signed certificates (`trustservercertificate=true`)
-- **Prepared statements** to prevent SQL injection
-- **Secure error handling** with production/development modes
 - **Connection pooling** with resource limits
-- **Input validation** and sanitization
+- **Secure error handling** with production/development modes
 
 ## Requirements
 

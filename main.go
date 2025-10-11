@@ -33,13 +33,13 @@ type MCPResponse struct {
 }
 
 type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
 type InitializeParams struct {
-	ProtocolVersion string `json:"protocolVersion"`
+	ProtocolVersion string   `json:"protocolVersion"`
 	Capabilities    struct{} `json:"capabilities"`
 	ClientInfo      struct {
 		Name    string `json:"name"`
@@ -48,9 +48,9 @@ type InitializeParams struct {
 }
 
 type InitializeResult struct {
-	ProtocolVersion string `json:"protocolVersion"`
+	ProtocolVersion string       `json:"protocolVersion"`
 	Capabilities    Capabilities `json:"capabilities"`
-	ServerInfo      ServerInfo `json:"serverInfo"`
+	ServerInfo      ServerInfo   `json:"serverInfo"`
 }
 
 type Capabilities struct {
@@ -121,18 +121,18 @@ func (sl *SecurityLogger) LogConnectionAttempt(success bool) {
 	sl.Printf("Database connection attempt: %s", status)
 }
 
+// Compiled regex patterns for better performance
+var sensitivePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(password|pwd|secret|key|token)=[^;\\s]*`),
+	regexp.MustCompile(`(?i)(password|pwd)\\s*=\\s*[^;\\s]*`),
+}
+
 func (sl *SecurityLogger) sanitizeForLogging(input string) string {
-	sensitivePatterns := []string{
-		`(?i)(password|pwd|secret|key|token)=[^;\\s]*`,
-		`(?i)(password|pwd)\\s*=\\s*[^;\\s]*`,
-	}
-	
 	result := input
 	for _, pattern := range sensitivePatterns {
-		re := regexp.MustCompile(pattern)
-		result = re.ReplaceAllString(result, "${1}=***")
+		result = pattern.ReplaceAllString(result, "${1}=***")
 	}
-	
+
 	return result
 }
 
@@ -265,11 +265,172 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	return fmt.Errorf("read-only mode: only SELECT and read operations are allowed")
 }
 
+// getWhitelistedTables returns the list of tables/views allowed for modification
+func (s *MCPMSSQLServer) getWhitelistedTables() []string {
+	whitelistEnv := os.Getenv("MSSQL_WHITELIST_TABLES")
+	if whitelistEnv == "" {
+		return []string{} // Empty whitelist means no tables allowed for modification
+	}
+
+	// Parse comma-separated list and normalize to lowercase
+	tables := strings.Split(whitelistEnv, ",")
+	var normalized []string
+	for _, table := range tables {
+		table = strings.TrimSpace(table)
+		if table != "" {
+			normalized = append(normalized, strings.ToLower(table))
+		}
+	}
+	return normalized
+}
+
+// extractAllTablesFromQuery finds all table/view names referenced in the query
+func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
+	queryUpper := strings.ToUpper(query)
+	tablesFound := make(map[string]bool) // Use map to avoid duplicates
+
+	// Regex patterns to detect table names in various contexts
+	// Note: These are basic patterns and may not catch all edge cases
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bFROM\s+(\[?[\w]+\]?)`),              // FROM table
+		regexp.MustCompile(`(?i)\bJOIN\s+(\[?[\w]+\]?)`),              // JOIN table
+		regexp.MustCompile(`(?i)\bINTO\s+(\[?[\w]+\]?)`),              // INSERT INTO table
+		regexp.MustCompile(`(?i)\bUPDATE\s+(\[?[\w]+\]?)`),            // UPDATE table
+		regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(\[?[\w]+\]?)`),     // DELETE FROM table
+		regexp.MustCompile(`(?i)\bDELETE\s+(\[?[\w]+\]?)\s+FROM`),     // DELETE table FROM (SQL Server syntax)
+		regexp.MustCompile(`(?i)\bTABLE\s+(\[?[\w]+\]?)`),             // CREATE/DROP TABLE
+		regexp.MustCompile(`(?i)\bVIEW\s+(\[?[\w]+\]?)`),              // CREATE/DROP VIEW
+		regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(\[?[\w]+\]?)`),  // TRUNCATE TABLE
+	}
+
+	for _, pattern := range patterns {
+		matches := pattern.FindAllStringSubmatch(queryUpper, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				tableName := match[1]
+				// Remove brackets if present [tablename] -> tablename
+				tableName = strings.Trim(tableName, "[]")
+				tableName = strings.ToLower(strings.TrimSpace(tableName))
+				if tableName != "" {
+					tablesFound[tableName] = true
+				}
+			}
+		}
+	}
+
+	// Convert map keys to slice
+	var tables []string
+	for table := range tablesFound {
+		tables = append(tables, table)
+	}
+	return tables
+}
+
+// extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
+func (s *MCPMSSQLServer) extractOperation(query string) string {
+	queryUpper := strings.ToUpper(strings.TrimSpace(query))
+
+	// Remove leading comments
+	for strings.HasPrefix(queryUpper, "--") || strings.HasPrefix(queryUpper, "/*") {
+		if strings.HasPrefix(queryUpper, "--") {
+			if idx := strings.Index(queryUpper, "\n"); idx != -1 {
+				queryUpper = strings.TrimSpace(queryUpper[idx+1:])
+			} else {
+				break
+			}
+		} else if strings.HasPrefix(queryUpper, "/*") {
+			if idx := strings.Index(queryUpper, "*/"); idx != -1 {
+				queryUpper = strings.TrimSpace(queryUpper[idx+2:])
+			} else {
+				break
+			}
+		}
+	}
+
+	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
+	for _, op := range modifyOps {
+		if strings.HasPrefix(queryUpper, op) {
+			return op
+		}
+	}
+
+	// If WITH is found, check if there's a modify operation after the CTE
+	if strings.HasPrefix(queryUpper, "WITH") {
+		for _, op := range modifyOps {
+			if strings.Contains(queryUpper, op) {
+				return op
+			}
+		}
+	}
+
+	return "SELECT" // Default to SELECT for read operations
+}
+
+// validateTablePermissions validates that all tables in a modify operation are whitelisted
+func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
+	// Only validate if read-only mode is enabled
+	if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) != "true" {
+		return nil // Whitelist mode disabled, allow all operations
+	}
+
+	whitelist := s.getWhitelistedTables()
+	operation := s.extractOperation(query)
+
+	// Determine if this is a modification operation
+	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
+	isModifyOp := false
+	for _, op := range modifyOps {
+		if operation == op {
+			isModifyOp = true
+			break
+		}
+	}
+
+	// If not a modify operation (e.g., SELECT), allow it
+	if !isModifyOp {
+		return nil
+	}
+
+	// Extract ALL tables referenced in the query
+	tablesInQuery := s.extractAllTablesFromQuery(query)
+
+	s.secLogger.Printf("Permission check - Operation: %s, Tables found: %v, Whitelist: %v",
+		operation, tablesInQuery, whitelist)
+
+	// If whitelist is empty, deny all modifications
+	if len(whitelist) == 0 {
+		return fmt.Errorf("permission denied: no tables are whitelisted for %s operations", operation)
+	}
+
+	// Check if ALL tables in the query are whitelisted
+	for _, table := range tablesInQuery {
+		isWhitelisted := false
+		for _, allowedTable := range whitelist {
+			if table == allowedTable {
+				isWhitelisted = true
+				break
+			}
+		}
+
+		if !isWhitelisted {
+			s.secLogger.Printf("SECURITY VIOLATION: Attempted %s operation on non-whitelisted table '%s'",
+				operation, table)
+			return fmt.Errorf("permission denied: table '%s' is not whitelisted for %s operations",
+				table, operation)
+		}
+	}
+
+	// All tables are whitelisted
+	s.secLogger.Printf("Permission granted: %s operation on whitelisted table(s) %v",
+		operation, tablesInQuery)
+	return nil
+}
+
 func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("database not connected")
 	}
-	
+
 	if err := s.validateBasicInput(query); err != nil {
 		return nil, err
 	}
@@ -279,7 +440,13 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
 		return nil, err
 	}
-	
+
+	// Validate granular table permissions (whitelist)
+	if err := s.validateTablePermissions(query); err != nil {
+		s.secLogger.Printf("Permission violation blocked: %s", err)
+		return nil, err
+	}
+
 	stmt, err := s.db.PrepareContext(ctx, query)
 	if err != nil {
 		if s.devMode {
@@ -290,7 +457,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		return nil, fmt.Errorf("query preparation failed")
 	}
 	defer stmt.Close()
-	
+
 	rows, err := stmt.QueryContext(ctx, args...)
 	if err != nil {
 		if s.devMode {
@@ -301,12 +468,12 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		return nil, fmt.Errorf("query execution failed")
 	}
 	defer rows.Close()
-	
+
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var results []map[string]interface{}
 	for rows.Next() {
 		values := make([]interface{}, len(columns))
@@ -314,11 +481,11 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		for i := range columns {
 			valuePtrs[i] = &values[i]
 		}
-		
+
 		if err := rows.Scan(valuePtrs...); err != nil {
 			return nil, err
 		}
-		
+
 		row := make(map[string]interface{})
 		for i, col := range columns {
 			val := values[i]
@@ -330,7 +497,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		}
 		results = append(results, row)
 	}
-	
+
 	return results, nil
 }
 
@@ -338,7 +505,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 	switch params.Name {
 	case "get_database_info":
 		var info strings.Builder
-		
+
 		if s.db == nil {
 			info.WriteString("Database Status: Disconnected\n")
 			info.WriteString("Reason: No database connection established\n")
@@ -351,7 +518,13 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			info.WriteString("Database Status: Connected\n")
 			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
 				info.WriteString("Connection: Custom connection string\n")
-				info.WriteString("Mode: " + func() string { if os.Getenv("DEVELOPER_MODE") == "true" { return "Development" } else { return "Production" } }() + "\n")
+				info.WriteString("Mode: " + func() string {
+					if os.Getenv("DEVELOPER_MODE") == "true" {
+						return "Development"
+					} else {
+						return "Production"
+					}
+				}() + "\n")
 			} else {
 				info.WriteString("Server: " + os.Getenv("MSSQL_SERVER") + "\n")
 				info.WriteString("Database: " + os.Getenv("MSSQL_DATABASE") + "\n")
@@ -362,14 +535,23 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				info.WriteString("Encryption: " + encrypt + "\n")
 			}
 
-			// Show read-only status
+			// Show read-only status and whitelist
 			if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true" {
 				info.WriteString("Access Mode: READ-ONLY (SELECT queries only)\n")
+
+				// Show whitelist if configured
+				whitelist := s.getWhitelistedTables()
+				if len(whitelist) > 0 {
+					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
+					info.WriteString("Note: Only whitelisted tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP)\n")
+				} else {
+					info.WriteString("Whitelisted Tables: NONE (all modifications blocked)\n")
+				}
 			} else {
 				info.WriteString("Access Mode: Full access\n")
 			}
 		}
-		
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
@@ -382,7 +564,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				},
 			},
 		}
-		
+
 	case "query_database":
 		if s.db == nil {
 			return &MCPResponse{
@@ -399,7 +581,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				},
 			}
 		}
-		
+
 		query, ok := params.Arguments["query"].(string)
 		if !ok {
 			return &MCPResponse{
@@ -416,10 +598,10 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				},
 			}
 		}
-		
+
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		
+
 		results, err := s.executeSecureQuery(ctx, query)
 		if err != nil {
 			return &MCPResponse{
@@ -436,7 +618,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				},
 			}
 		}
-		
+
 		// Format results as JSON
 		resultBytes, err := json.MarshalIndent(results, "", "  ")
 		if err != nil {
@@ -454,7 +636,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				},
 			}
 		}
-		
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
@@ -495,7 +677,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			ORDER BY TABLE_SCHEMA, TABLE_NAME
 		`
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Use shorter timeout for metadata queries (faster)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		results, err := s.executeSecureQuery(ctx, query)
@@ -593,7 +776,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			ORDER BY ORDINAL_POSITION
 		`
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Use shorter timeout for metadata queries (faster)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		results, err := s.executeSecureQuery(ctx, query, tableName)
@@ -679,7 +863,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 		if s.db != nil {
 			dbStatus = "connected"
 		}
-		
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -696,7 +880,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 				},
 			},
 		}
-	
+
 	case "tools/list":
 		tools := []Tool{
 			{
@@ -746,25 +930,25 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 				},
 			},
 		}
-		
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
 			Result:  ToolsListResult{Tools: tools},
 		}
-	
+
 	case "tools/call":
 		var params CallToolParams
 		if paramBytes, err := json.Marshal(req.Params); err == nil {
 			json.Unmarshal(paramBytes, &params)
 		}
-		
+
 		return s.handleToolCall(req.ID, params)
-	
+
 	case "notifications/initialized":
 		// Notifications don't need a response
 		return nil
-	
+
 	default:
 		// Only respond to requests with IDs (not notifications)
 		if req.ID != nil {
@@ -785,38 +969,44 @@ func main() {
 	// Initialize security logger
 	secLogger := NewSecurityLogger()
 	secLogger.Printf("Starting secure MCP-MSSQL server")
-	
+
 	// Check for developer mode
 	devMode := strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
 	if devMode {
 		secLogger.Printf("DEVELOPER MODE ENABLED - Detailed errors will be shown")
 	}
-	
+
 	// Create MCP server without database initially
 	server := &MCPMSSQLServer{
 		db:        nil,
 		secLogger: secLogger,
 		devMode:   devMode,
 	}
-	
+
 	// Try to establish database connection (non-fatal)
 	go func() {
 		// Give MCP protocol time to initialize
 		time.Sleep(2 * time.Second)
-		
+
 		// Check if we have required environment variables
 		serverHost := os.Getenv("MSSQL_SERVER")
-		database := os.Getenv("MSSQL_DATABASE") 
+		database := os.Getenv("MSSQL_DATABASE")
 		user := os.Getenv("MSSQL_USER")
 		password := os.Getenv("MSSQL_PASSWORD")
-		
+
 		customConnStr := os.Getenv("MSSQL_CONNECTION_STRING")
 		if customConnStr != "" {
 			secLogger.Printf("Using custom connection string: %s", secLogger.sanitizeForLogging(customConnStr))
 		} else {
 			secLogger.Printf("Environment variables - Server: %s, Database: %s, User: %s, Password: %s, DevMode: %s",
 				serverHost, database, user,
-				func() string { if password != "" { return "***" } else { return "MISSING" } }(),
+				func() string {
+					if password != "" {
+						return "***"
+					} else {
+						return "MISSING"
+					}
+				}(),
 				os.Getenv("DEVELOPER_MODE"))
 		}
 
@@ -834,12 +1024,12 @@ func main() {
 		} else {
 			secLogger.Printf("Full access mode enabled")
 		}
-		
+
 		if customConnStr == "" && serverHost == "" {
 			secLogger.Printf("No MSSQL_SERVER or MSSQL_CONNECTION_STRING environment variable - database features disabled")
 			return
 		}
-		
+
 		// Build secure connection string
 		connStr, err := buildSecureConnectionString()
 		if err != nil {
@@ -850,7 +1040,7 @@ func main() {
 			}
 			return
 		}
-		
+
 		// Connect to MSSQL
 		secLogger.Printf("Attempting to connect to MSSQL server...")
 		db, err := sql.Open("sqlserver", connStr)
@@ -863,17 +1053,17 @@ func main() {
 			return
 		}
 		secLogger.Printf("sql.Open successful, testing connection...")
-		
-		// Configure connection pool for security
-		db.SetMaxOpenConns(5)
-		db.SetMaxIdleConns(2)
-		db.SetConnMaxLifetime(time.Hour)
-		db.SetConnMaxIdleTime(time.Minute * 15)
-		
+
+		// Configure optimized connection pool
+		db.SetMaxOpenConns(10)                  // More concurrent connections
+		db.SetMaxIdleConns(5)                   // More idle connections for reuse
+		db.SetConnMaxLifetime(30 * time.Minute) // Shorter lifetime for fresher connections
+		db.SetConnMaxIdleTime(5 * time.Minute)  // Quick cleanup of unused connections
+
 		// Test connection with longer timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		
+
 		secLogger.Printf("Testing database connection with ping...")
 		if err := db.PingContext(ctx); err != nil {
 			secLogger.LogConnectionAttempt(false)
@@ -902,14 +1092,14 @@ func main() {
 			db.Close()
 			return
 		}
-		
+
 		secLogger.LogConnectionAttempt(true)
 		secLogger.Printf("Database connection established successfully")
-		
+
 		// Update server with working database connection
 		server.db = db
 	}()
-	
+
 	// Start MCP protocol handler
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -917,18 +1107,18 @@ func main() {
 		if line == "" {
 			continue
 		}
-		
+
 		var req MCPRequest
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
 			secLogger.Printf("Invalid JSON received: %v", err)
 			continue
 		}
-		
+
 		sanitizedReq := secLogger.sanitizeForLogging(line)
 		secLogger.Printf("Processing request: %s", sanitizedReq)
-		
+
 		response := server.handleRequest(req)
-		
+
 		// Only send response if one is needed (not for notifications)
 		if response != nil {
 			responseBytes, err := json.Marshal(response)
@@ -936,11 +1126,11 @@ func main() {
 				secLogger.Printf("Failed to marshal response: %v", err)
 				continue
 			}
-			
+
 			fmt.Println(string(responseBytes))
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		secLogger.Printf("Scanner error: %v", err)
 	}
