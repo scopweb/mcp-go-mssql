@@ -112,20 +112,44 @@ The server reads database connection from these environment variables. See `.env
 - `DEVELOPER_MODE`: Controls error verbosity and certificate validation
   - `"true"`: Development mode with detailed errors and relaxed TLS certificate validation
   - `"false"`: Production mode with generic errors and strict certificate validation
+- `MSSQL_READ_ONLY`: Enable read-only mode with optional whitelist (security feature)
+  - `"true"`: Only SELECT queries allowed (except for whitelisted tables)
+  - `"false"`: Full access mode (default)
+- `MSSQL_WHITELIST_TABLES`: Comma-separated list of tables/views allowed for modification in read-only mode
+  - Example: `"temp_ai,v_temp_ia"`
+  - Only these tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP) when `MSSQL_READ_ONLY=true`
+  - All other tables remain read-only
+  - Prevents accidental data modification in production databases while allowing AI to work with temporary tables
 
 **Configuration Examples:**
 ```bash
-# Production Azure SQL
+# Production Azure SQL with AI Whitelist (RECOMMENDED for AI assistants)
 MSSQL_SERVER=prod-server.database.windows.net
 MSSQL_DATABASE=ProductionDB
 MSSQL_USER=prod_user@prod-server
+MSSQL_PASSWORD=your_password
 DEVELOPER_MODE=false
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+# This allows AI to read all data but only modify temp_ai and v_temp_ia
 
-# Local Development
+# Production with Full Read-Only (No modifications)
+MSSQL_SERVER=prod-server.database.windows.net
+MSSQL_DATABASE=ProductionDB
+MSSQL_USER=prod_user@prod-server
+MSSQL_PASSWORD=your_password
+DEVELOPER_MODE=false
+MSSQL_READ_ONLY=true
+# No MSSQL_WHITELIST_TABLES means ALL modifications are blocked
+
+# Local Development (Full Access)
 MSSQL_SERVER=localhost
 MSSQL_DATABASE=DevDB
 MSSQL_USER=dev_user
+MSSQL_PASSWORD=dev_password
 DEVELOPER_MODE=true
+MSSQL_READ_ONLY=false
+# Full access for development
 ```
 
 ### TLS Certificate Handling
@@ -137,7 +161,7 @@ DEVELOPER_MODE=true
 ```json
 {
   "mcpServers": {
-    "production-db": {
+    "production-db-ai-safe": {
       "command": "mcp-go-mssql.exe",
       "args": [],
       "env": {
@@ -146,7 +170,22 @@ DEVELOPER_MODE=true
         "MSSQL_USER": "your_user",
         "MSSQL_PASSWORD": "your_password",
         "MSSQL_PORT": "1433",
-        "DEVELOPER_MODE": "false"
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true",
+        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia"
+      }
+    },
+    "production-db-readonly": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "your-server.database.windows.net",
+        "MSSQL_DATABASE": "YourDatabase",
+        "MSSQL_USER": "readonly_user",
+        "MSSQL_PASSWORD": "readonly_password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true"
       }
     },
     "dev-db": {
@@ -158,7 +197,8 @@ DEVELOPER_MODE=true
         "MSSQL_USER": "dev_user",
         "MSSQL_PASSWORD": "dev_password",
         "MSSQL_PORT": "1433",
-        "DEVELOPER_MODE": "true"
+        "DEVELOPER_MODE": "true",
+        "MSSQL_READ_ONLY": "false"
       }
     }
   }
@@ -166,13 +206,21 @@ DEVELOPER_MODE=true
 ```
 
 ### Critical Security Parameters:
-- `DEVELOPER_MODE`: 
+- `DEVELOPER_MODE`:
   - `"false"` for production: Strict TLS certificate validation, generic error messages
   - `"true"` for development: Allows untrusted certificates, detailed error messages
 - **Database Encryption**: Always uses TLS encryption (`encrypt=true`)
-- **Certificate Validation**: 
+- **Certificate Validation**:
   - Production: `trustservercertificate=false` (requires valid certificates)
   - Development: `trustservercertificate=true` (allows self-signed certificates)
+- `MSSQL_READ_ONLY` with `MSSQL_WHITELIST_TABLES`: Granular Permission Control
+  - **How it works**: When enabled, the server validates ALL tables referenced in modification queries
+  - **Example**: `DELETE temp_ai FROM temp_ai JOIN users` → BLOCKED (users not whitelisted)
+  - **Protection against**:
+    - Accidental data deletion in production tables
+    - SQL injection via JOIN/subquery to non-whitelisted tables
+    - Unauthorized data exfiltration through INSERT...SELECT
+  - **Recommended setup**: Create dedicated temp tables for AI operations
 
 ## Security Best Practices
 
