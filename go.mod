@@ -1,6 +1,6 @@
 module mcp-go-mssql
 
-go 1.24.6
+go 1.24.9
 
 require github.com/microsoft/go-mssqldb v1.9.3
 
