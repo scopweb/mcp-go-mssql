@@ -27,7 +27,13 @@ func main() {
 	fmt.Printf("  MSSQL_SERVER: %s\n", server)
 	fmt.Printf("  MSSQL_DATABASE: %s\n", database)
 	fmt.Printf("  MSSQL_USER: %s\n", user)
-	fmt.Printf("  MSSQL_PASSWORD: %s\n", func() string { if password != "" { return "***SET***" } else { return "NOT SET" } }())
+	fmt.Printf("  MSSQL_PASSWORD: %s\n", func() string {
+		if password != "" {
+			return "***SET***"
+		} else {
+			return "NOT SET"
+		}
+	}())
 	fmt.Printf("  MSSQL_PORT: %s\n", port)
 	fmt.Printf("  MSSQL_ENCRYPT: %s\n", encrypt)
 	fmt.Printf("  DEVELOPER_MODE: %s\n", devMode)
@@ -74,7 +80,9 @@ func main() {
 			}
 		}
 
-		db.Close()
+		if cerr := db.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close db: %v\n", cerr)
+		}
 		fmt.Printf("\n=== Custom Connection String Test Complete ===\n")
 		return
 	}
@@ -141,7 +149,9 @@ func main() {
 			}
 		}
 
-		db.Close()
+		if cerr := db.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close db: %v\n", cerr)
+		}
 		fmt.Println()
 	}
 
