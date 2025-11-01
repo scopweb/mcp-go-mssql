@@ -42,7 +42,7 @@ func main() {
 	}
 
 	command := os.Args[1]
-	
+
 	config, err := loadConfig()
 	if err != nil {
 		printError("Configuration error: %v", err)
@@ -127,7 +127,9 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		if cerr := db.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to close db after ping failure: %v\n", cerr)
+		}
 		return nil, fmt.Errorf("failed to ping database: %v", err)
 	}
 
@@ -136,7 +138,7 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 
 func testConnection(db *sql.DB, config *DatabaseConfig) {
 	result := QueryResult{Success: true}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -155,7 +157,7 @@ func testConnection(db *sql.DB, config *DatabaseConfig) {
 
 func showDatabaseInfo(db *sql.DB, config *DatabaseConfig) {
 	result := QueryResult{Success: true}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -183,7 +185,7 @@ func showDatabaseInfo(db *sql.DB, config *DatabaseConfig) {
 
 func executeQuery(db *sql.DB, query string) {
 	result := QueryResult{Success: true}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -308,7 +310,7 @@ func describeTable(db *sql.DB, tableName string) {
 	}
 
 	var data []map[string]interface{}
-	
+
 	for rows.Next() {
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
@@ -316,8 +318,13 @@ func describeTable(db *sql.DB, tableName string) {
 			valuePtrs[i] = &values[i]
 		}
 
-		rows.Scan(valuePtrs...)
-		
+		if err := rows.Scan(valuePtrs...); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("Failed to scan row: %v", err)
+			printResult(result)
+			return
+		}
+
 		row := make(map[string]interface{})
 		for i, col := range columns {
 			val := values[i]
