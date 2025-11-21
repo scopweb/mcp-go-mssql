@@ -1,0 +1,152 @@
+{
+  "name": "mcp-go-mssql",
+  "version": "1.1.0",
+  "description": "Secure Microsoft SQL Server MCP server for Claude Desktop. Production-ready with TLS encryption, SQL injection protection, and support for SQL Server 2008-2022 + Azure SQL Database.",
+  "author": {
+    "name": "scopweb",
+    "url": "https://github.com/scopweb"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scopweb/mcp-go-mssql"
+  },
+  "homepage": "https://github.com/scopweb/mcp-go-mssql",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "sql-server",
+    "mssql",
+    "database",
+    "claude",
+    "claude-desktop",
+    "anthropic",
+    "ai",
+    "security",
+    "tls",
+    "azure-sql",
+    "go",
+    "golang"
+  ],
+  "categories": [
+    "database",
+    "data-access",
+    "enterprise",
+    "security"
+  ],
+  "mcpVersion": "1.0",
+  "language": "go",
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "compatibility": {
+    "sqlServer": [
+      "2008",
+      "2008R2",
+      "2012",
+      "2014",
+      "2016",
+      "2017",
+      "2019",
+      "2022",
+      "Azure SQL Database"
+    ],
+    "minGoVersion": "1.20"
+  },
+  "features": [
+    "SQL injection protection with prepared statements",
+    "TLS/SSL encrypted connections",
+    "Connection pooling with resource limits",
+    "Query execution with safe parameter binding",
+    "Table and schema discovery",
+    "Table structure inspection",
+    "Sanitized logging for security",
+    "Developer and production modes",
+    "Support for legacy SQL Server versions",
+    "Azure SQL Database integration",
+    "CLI tool for direct database access"
+  ],
+  "tools": [
+    {
+      "name": "execute_query",
+      "description": "Execute SELECT queries safely with automatic parameter binding and SQL injection protection",
+      "category": "data-query"
+    },
+    {
+      "name": "list_tables",
+      "description": "List all tables and views in the database with schema information",
+      "category": "schema-discovery"
+    },
+    {
+      "name": "describe_table",
+      "description": "Get detailed table structure including columns, data types, constraints, and defaults",
+      "category": "schema-inspection"
+    }
+  ],
+  "security": {
+    "features": [
+      "SQL injection protection",
+      "TLS encryption",
+      "Input validation",
+      "Data sanitization",
+      "Connection timeouts",
+      "Resource limits"
+    ],
+    "certifications": [
+      "Uses official Microsoft SQL Server driver",
+      "Follows Go security best practices",
+      "Production-tested"
+    ]
+  },
+  "installation": {
+    "binary": {
+      "windows": "https://github.com/scopweb/mcp-go-mssql/releases/latest/download/mcp-go-mssql.exe",
+      "linux": "https://github.com/scopweb/mcp-go-mssql/releases/latest/download/mcp-go-mssql-linux",
+      "macos": "https://github.com/scopweb/mcp-go-mssql/releases/latest/download/mcp-go-mssql-macos"
+    },
+    "source": {
+      "command": "go build -o mcp-go-mssql.exe",
+      "requires": ["go >= 1.20"]
+    }
+  },
+  "configuration": {
+    "required": [
+      "MSSQL_SERVER",
+      "MSSQL_DATABASE",
+      "MSSQL_USER",
+      "MSSQL_PASSWORD"
+    ],
+    "optional": [
+      "MSSQL_PORT",
+      "DEVELOPER_MODE",
+      "MSSQL_ENCRYPT"
+    ]
+  },
+  "examples": [
+    {
+      "title": "List all tables",
+      "prompt": "Show me all tables in the database"
+    },
+    {
+      "title": "Describe table structure",
+      "prompt": "Describe the structure of the Users table"
+    },
+    {
+      "title": "Execute query",
+      "prompt": "Show me the top 10 products ordered by price"
+    }
+  ],
+  "links": {
+    "documentation": "https://github.com/scopweb/mcp-go-mssql/blob/master/README.md",
+    "issues": "https://github.com/scopweb/mcp-go-mssql/issues",
+    "releases": "https://github.com/scopweb/mcp-go-mssql/releases",
+    "changelog": "https://github.com/scopweb/mcp-go-mssql/blob/master/CHANGELOG.md"
+  },
+  "stats": {
+    "stars": 0,
+    "forks": 0,
+    "lastUpdated": "2025-01-30"
+  }
+}

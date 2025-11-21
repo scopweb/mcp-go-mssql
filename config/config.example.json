@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "production-db": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "your-secure-server.database.windows.net",
+        "MSSQL_DATABASE": "YourSecureDatabase",
+        "MSSQL_USER": "secure_user",
+        "MSSQL_PASSWORD": "your-strong-password-here",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "false"
+      }
+    },
+    "dev-db": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "dev-server.local",
+        "MSSQL_DATABASE": "DevDatabase",
+        "MSSQL_USER": "dev_user",
+        "MSSQL_PASSWORD": "dev-password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "true"
+      }
+    }
+  }
+}
