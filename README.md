@@ -2,6 +2,16 @@
 
 A secure Go-based solution for Microsoft SQL Server connectivity supporting both **Claude Desktop** (via MCP server) and **Claude Code** (via CLI tools).
 
+## 🤖 Designed for AI Assistants
+
+This server is **optimized for use with Claude Desktop and AI assistants**, providing:
+- ✅ **Safe production access** - AI can analyze without risk of data corruption
+- ✅ **Full query capabilities** - AI can perform complex SELECT queries, JOINs, CTEs
+- ✅ **Temporal workspace** - Optional whitelist for AI to use temporary tables
+- ✅ **Smart restrictions** - Blocks dangerous operations while keeping AI fully functional
+
+**👉 See [AI Usage Guide](docs/AI_USAGE_GUIDE.md) for detailed examples of what Claude can and cannot do.**
+
 ## Features
 
 - **Security-first design** with configurable TLS encryption for database connections
@@ -324,23 +334,49 @@ go run db-connector.go query "SELECT ..."      # Execute queries
 
 See [claude-code/README.md](claude-code/README.md) for detailed Claude Code integration.
 
+## 📚 Documentation
+
+### For Users
+- **[AI Usage Guide](docs/AI_USAGE_GUIDE.md)** - How Claude/AI works with security restrictions
+- **[Whitelist Security](docs/WHITELIST_SECURITY.md)** - Configure granular table permissions
+- **[README (this file)](README.md)** - Installation and configuration
+
+### For Security Audits
+- **[Security Analysis](docs/SECURITY_ANALYSIS.md)** - Comprehensive security assessment
+- **[Security Audit Report](docs/SECURITY_AUDIT_REPORT.md)** - Detailed audit findings
+
+### For Developers
+- **[Claude Code Documentation](CLAUDE.md)** - Using with Claude Code
+- **[Test Results](docs/TEST_RESULTS_SUMMARY.md)** - Test coverage and results
+
 ## Project Structure
 
 ```
 mcp-go-mssql/
-├── main.go                    # MCP server for Claude Desktop
-├── build.bat                  # Windows build script
-├── claude-code/               # Claude Code integration
-│   ├── db-connector.go       # CLI database tool
-│   └── README.md             # Claude Code documentation
-├── debug/
-│   └── debug-connection.go   # Advanced connection debugging tool
-├── test/
-│   └── test-connection.go    # Basic connection testing utility
-├── .env.example              # Environment variables template
-├── config.example.json       # Claude Desktop configuration template
-├── CLAUDE.md                 # Claude Code project documentation
-└── README.md                 # This file
+├── main.go                          # MCP server for Claude Desktop
+├── build.bat                        # Windows build script
+├── docs/                            # Documentation
+│   ├── AI_USAGE_GUIDE.md           # How to use with Claude/AI ⭐
+│   ├── SECURITY_ANALYSIS.md        # Security assessment
+│   ├── SECURITY_AUDIT_REPORT.md    # Audit report
+│   ├── WHITELIST_SECURITY.md       # Table whitelist guide
+│   └── ...                         # Other documentation
+├── scripts/                         # Utility scripts
+│   ├── security-check.ps1          # Automated security validation
+│   ├── test-mcp-server.ps1         # Server testing
+│   └── ...                         # Other scripts
+├── test/                            # Tests
+│   ├── security/                   # Security test suite
+│   │   ├── cves_test.go           # CVE checks
+│   │   └── security_tests.go       # Security validation
+│   └── test-connection.go          # Connection testing
+├── claude-code/                     # Claude Code integration
+│   ├── db-connector.go             # CLI database tool
+│   └── README.md                   # Claude Code documentation
+├── .env.example                    # Environment variables template
+├── config.example.json             # Claude Desktop config template
+├── CLAUDE.md                       # Claude Code project documentation
+└── README.md                       # This file
 ```
 
 ## License
