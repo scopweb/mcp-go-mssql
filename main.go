@@ -292,15 +292,15 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 	// Regex patterns to detect table names in various contexts
 	// Note: These are basic patterns and may not catch all edge cases
 	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bFROM\s+(\[?[\w]+\]?)`),              // FROM table
-		regexp.MustCompile(`(?i)\bJOIN\s+(\[?[\w]+\]?)`),              // JOIN table
-		regexp.MustCompile(`(?i)\bINTO\s+(\[?[\w]+\]?)`),              // INSERT INTO table
-		regexp.MustCompile(`(?i)\bUPDATE\s+(\[?[\w]+\]?)`),            // UPDATE table
-		regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(\[?[\w]+\]?)`),     // DELETE FROM table
-		regexp.MustCompile(`(?i)\bDELETE\s+(\[?[\w]+\]?)\s+FROM`),     // DELETE table FROM (SQL Server syntax)
-		regexp.MustCompile(`(?i)\bTABLE\s+(\[?[\w]+\]?)`),             // CREATE/DROP TABLE
-		regexp.MustCompile(`(?i)\bVIEW\s+(\[?[\w]+\]?)`),              // CREATE/DROP VIEW
-		regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(\[?[\w]+\]?)`),  // TRUNCATE TABLE
+		regexp.MustCompile(`(?i)\bFROM\s+(\[?[\w]+\]?)`),             // FROM table
+		regexp.MustCompile(`(?i)\bJOIN\s+(\[?[\w]+\]?)`),             // JOIN table
+		regexp.MustCompile(`(?i)\bINTO\s+(\[?[\w]+\]?)`),             // INSERT INTO table
+		regexp.MustCompile(`(?i)\bUPDATE\s+(\[?[\w]+\]?)`),           // UPDATE table
+		regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(\[?[\w]+\]?)`),    // DELETE FROM table
+		regexp.MustCompile(`(?i)\bDELETE\s+(\[?[\w]+\]?)\s+FROM`),    // DELETE table FROM (SQL Server syntax)
+		regexp.MustCompile(`(?i)\bTABLE\s+(\[?[\w]+\]?)`),            // CREATE/DROP TABLE
+		regexp.MustCompile(`(?i)\bVIEW\s+(\[?[\w]+\]?)`),             // CREATE/DROP VIEW
+		regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(\[?[\w]+\]?)`), // TRUNCATE TABLE
 	}
 
 	for _, pattern := range patterns {
@@ -940,7 +940,9 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 	case "tools/call":
 		var params CallToolParams
 		if paramBytes, err := json.Marshal(req.Params); err == nil {
-			json.Unmarshal(paramBytes, &params)
+			if err2 := json.Unmarshal(paramBytes, &params); err2 != nil {
+				s.secLogger.Printf("Failed to unmarshal call params: %v", err2)
+			}
 		}
 
 		return s.handleToolCall(req.ID, params)
@@ -1089,7 +1091,9 @@ func main() {
 			} else {
 				secLogger.Printf("Failed to ping database: connection test failed")
 			}
-			db.Close()
+			if cerr := db.Close(); cerr != nil {
+				secLogger.Printf("Error closing DB after failed ping: %v", cerr)
+			}
 			return
 		}
 
