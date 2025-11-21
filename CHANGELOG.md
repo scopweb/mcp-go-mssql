@@ -1,0 +1,86 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [1.1.1] - 2024-11-01
+
+### Security
+- ✅ **Vulnerability Audit Complete**: Passed comprehensive security scans
+  - `govulncheck ./...` - No vulnerabilities detected in dependencies
+  - `gosec ./...` - Security analysis completed, all critical findings addressed
+- Code reorganization: Moved build artifacts, scripts, and documentation to dedicated directories
+- Updated `.gitignore` to reflect new project structure
+
+### Changed
+- **Project Structure Refactor**: Organized repository for better maintainability
+  - `/docs/` - All documentation files
+  - `/scripts/` - Build and test scripts with unified interface
+  - `/build/` - Compiled binaries
+  - `/config/` - Configuration templates
+  - `/test/` - Test files and utilities
+- Root directory now contains only essential files: Go modules, main source, and documentation
+- **Build Scripts Updated**:
+  - `scripts/build.bat` - Windows build (outputs to `build/mcp-go-mssql.exe`)
+  - `scripts/build.sh` - Linux/macOS build (outputs to `build/mcp-go-mssql`)
+- **Added**: `scripts/README.md` - Complete guide for all build and test scripts
+
+## [1.1.0] - 2024-11-01
+
+### Added
+- Granular table permissions with whitelist system for read-only mode
+- Security audit logging with data sanitization
+- `MSSQL_WHITELIST_TABLES` environment variable for selective table modification in read-only mode
+- Comprehensive security scanning in CI pipeline (govulncheck, gosec)
+
+### Changed
+- Updated Go version to 1.24.9 to address stdlib security fixes
+- Updated Microsoft official SQL Server driver (github.com/microsoft/go-mssqldb)
+- Improved error handling to address security findings
+- Enhanced connection security with mandatory TLS encryption
+
+### Fixed
+- SQL syntax error in describe_table tool
+- Missing describe_table and list_tables tools in MCP server
+- Unused imports in db-connector.go
+
+### Security
+- Implemented mandatory TLS encryption for all database connections
+- Added granular permission validation for modification queries
+- Enhanced security logging for audit purposes
+- Strict input validation and SQL injection protection
+
+## [1.0.0] - 2024-10-02
+
+### Added
+- Initial release of secure Go-based MCP server for Microsoft SQL Server
+- Model Context Protocol (MCP) implementation for Claude Desktop integration
+- Claude Code CLI tool for direct database access
+- Database connection pooling and resource management
+- Comprehensive security features:
+  - TLS encryption support
+  - Connection timeouts
+  - Input validation
+  - SQL injection protection with prepared statements
+- Read-only mode support with environmental configuration
+- Development and production modes with appropriate certificate validation
+- Extensive documentation and security guidelines
+- Test utilities and examples
+- GitHub community features and discoverability
+- Support for legacy SQL Server versions
+
+### Features
+- Secure database connectivity to Microsoft SQL Server
+- Support for multiple connection profiles
+- Query execution with prepared statements
+- Table structure inspection
+- Connection testing utilities
+- Comprehensive logging and monitoring
+
+---
+
+For a detailed list of changes, commits, and authors, see the [Git commit history](https://github.com/your-repo/mcp-go-mssql/commits/master).

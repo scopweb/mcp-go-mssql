@@ -1,0 +1,39 @@
+name: Security scans
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [ master ]
+
+jobs:
+  security:
+    name: Run govulncheck and gosec
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24.9'
+
+      - name: Install security tools
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run govulncheck
+        run: |
+          govulncheck ./...
+
+      - name: Run gosec
+        run: |
+          # Use -fmt=json for machine-readable output if desired
+          gosec ./...
+
+      - name: Run tests
+        run: |
+          go test ./...
