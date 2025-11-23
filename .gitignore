@@ -8,8 +8,8 @@ mcp-go-mssql.exe
 mcp-go-mssql-secure
 mcp-go-mssql-secure.exe
 
-# Go build cache
-go.sum
+# Go build artifacts (go.sum should NOT be ignored - it's required for reproducible builds)
+*.test
 
 # Logs
 *.log

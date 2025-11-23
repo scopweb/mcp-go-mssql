@@ -1,4 +1,4 @@
-package main
+package security
 
 import (
 	"crypto/sha256"
@@ -149,7 +149,8 @@ func TestNoPrivateKeyCommitted(t *testing.T) {
 	}
 
 	for _, file := range checkFiles {
-		content, err := os.ReadFile(file)
+		// G304: file path is from a static hardcoded list in test code
+		content, err := os.ReadFile(file) // #nosec G304
 		if err != nil {
 			t.Logf("⚠️  Could not read file: %s", file)
 			continue
@@ -178,7 +179,8 @@ func TestNoDangerousImports(t *testing.T) {
 	}
 
 	for _, file := range checkFiles {
-		content, err := os.ReadFile(file)
+		// G304: file path is from a static hardcoded list in test code
+		content, err := os.ReadFile(file) // #nosec G304
 		if err != nil {
 			continue
 		}
@@ -321,7 +323,7 @@ func BenchmarkSecurityChecksIO(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		os.ReadFile("../../go.mod")
-		os.ReadFile("../../go.sum")
+		_, _ = os.ReadFile("../../go.mod")  // #nosec G104 - benchmark intentionally ignores errors
+		_, _ = os.ReadFile("../../go.sum")  // #nosec G104 - benchmark intentionally ignores errors
 	}
 }
