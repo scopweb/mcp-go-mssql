@@ -1,14 +1,15 @@
-# Security Test Suite - MCP Filesystem Ultra v3.1.0
+# Security Test Suite - MCP Go MSSQL
 
-Complete security testing framework for Go dependencies and vulnerability detection.
+Complete security testing framework for the MCP Go MSSQL server.
 
 ## Overview
 
-This test suite provides comprehensive security scanning including:
+This test suite provides comprehensive security scanning for the Go-based MSSQL MCP server, including:
 
 - **Dependency Vulnerability Scanning** - Check for known CVEs in dependencies
 - **Code Security Analysis** - Detect unsafe patterns and potential vulnerabilities
 - **Module Integrity Verification** - Ensure go.mod and go.sum haven't been tampered
+- **SQL Injection Detection** - Validate protection against SQL injection attacks
 - **Static Analysis** - Code quality and security issues (requires gosec)
 - **Race Condition Detection** - Identify data races with `-race` flag
 - **Coverage Analysis** - Security test coverage metrics
@@ -16,25 +17,29 @@ This test suite provides comprehensive security scanning including:
 ## Test Files
 
 ### 1. `security_tests.go`
-Core security unit tests for the MCP project.
+Core security unit tests for the MCP Go MSSQL project.
 
 **Tests included:**
 - `TestDependencyVersions` - Verify all dependencies are current
 - `TestGoModuleIntegrity` - Check go.mod for suspicious patterns
 - `TestGoSumIntegrity` - Validate go.sum file structure
-- `TestMainDependencies` - Track critical dependencies
+- `TestMainDependencies` - Track critical dependencies (go-mssqldb, crypto, etc.)
 - `TestNoPrivateKeyCommitted` - Detect accidentally committed secrets
 - `TestNoDangerousImports` - Check for unsafe/syscall imports
-- `TestInputValidation` - Verify path/input validation patterns
+- `TestInputValidation` - Verify SQL and input validation patterns
 - `TestErrorHandling` - Check error handling coverage
 - `TestLogSanitization` - Ensure logs don't leak sensitive data
 - `TestGoVersion` - Verify Go version compatibility
+- `TestCommunitySecurityAdvisories` - Check for known vulnerable packages
 
 ### 2. `cves_test.go`
 Known CVE detection and security pattern analysis.
 
 **Tests included:**
-- `TestKnownCVEs` - Check for known vulnerabilities
+- `TestKnownCVEs` - Check for known vulnerabilities in dependencies
+- `TestGolangSecurityDatabase` - Go's official vulnerability database info
+- `TestCommonWeaknessPatterns` - CWE patterns relevant to database apps
+- `TestSQLInjectionVulnerability` - SQL injection attack detection (CWE-89)
 - `TestPathTraversalVulnerability` - CWE-22 path traversal detection
 - `TestCommandInjectionVulnerability` - CWE-78 command injection detection
 - `TestRACEVulnerabilities` - Race condition patterns
@@ -44,171 +49,119 @@ Known CVE detection and security pattern analysis.
 - `TestSoftwareCompositionAnalysis` - SCA tool recommendations
 - `TestRegexVulnerabilities` - ReDoS (Regular Expression DoS) detection
 - `TestSecurityConfigurationBaseline` - Establish baseline
+- `TestSecurityHeadersAndDefenses` - Defense mechanism verification
 - `TestFuzzingRecommendations` - Fuzzing guidance
 - `TestSecurityAuditLog` - Audit documentation
 
 ## Running Tests
 
-### Quick Start (Windows)
-```batch
-cd c:\MCPs\clone\mcp-filesystem-go-ultra
+### Quick Start
 
-REM Run all security tests
-scripts\security\run_all_security_tests.bat
+```bash
+# Navigate to project root
+cd /path/to/mcp-go-mssql
 
-REM Run with detailed output
-scripts\security\run_all_security_tests.bat --verbose
+# Run all security tests
+go test ./test/security -v
 
-REM Generate coverage report
-scripts\security\run_all_security_tests.bat --coverage
+# Run with race detection
+go test ./test/security -race -v
 
-REM Generate security report
-scripts\security\run_all_security_tests.bat --report
+# Run with coverage
+go test ./test/security -coverprofile=coverage.out
+
+# Run specific test
+go test ./test/security -run TestSQLInjectionVulnerability -v
+
+# Run benchmarks
+go test ./test/security -bench=. -benchmem
 ```
 
-### Individual Test Runs
+### From Test Directory
 
-```batch
-REM Run only Go security tests
-go test ./tests/security -v
+```bash
+cd test/security
 
-REM Run with race detection
-go test ./tests/security -race -v
+# Run all tests
+go test -v
 
-REM Run with coverage
-go test ./tests/security -coverprofile=coverage.out
-
-REM Run specific test
-go test ./tests/security -run TestPathTraversalVulnerability -v
-
-REM Run benchmarks
-go test ./tests/security -bench=. -benchmem
-```
-
-### Vulnerability Scanning
-
-```batch
-REM Run vulnerability scan
-scripts\security\vulnerability_scan.bat
-
-REM Run with verbose output
-scripts\security\vulnerability_scan.bat --verbose
-
-REM Generate security report
-scripts\security\vulnerability_scan.bat --report
-
-REM Attempt to fix issues
-scripts\security\vulnerability_scan.bat --fix
-```
-
-## Batch Script Guide
-
-### `run_all_security_tests.bat`
-Master script orchestrating complete security assessment.
-
-**Phases:**
-1. Environment Verification
-2. Module Verification
-3. Vulnerability Scanning
-4. Security Unit Tests
-5. Static Analysis (gosec)
-6. Code Coverage (optional)
-7. Security Benchmarks (optional)
-8. Race Condition Detection
-9. Summary & Reporting
-
-**Usage:**
-```batch
-run_all_security_tests.bat [options]
-
-Options:
-  --verbose    Show detailed output for all phases
-  --bench      Include benchmark performance tests
-  --coverage   Generate code coverage metrics
-  --report     Generate comprehensive security report
-  --fix        Attempt to fix detected issues
-```
-
-### `vulnerability_scan.bat`
-Dependency vulnerability scanner with multiple checking methods.
-
-**Features:**
-- go mod verify
-- Outdated package detection
-- gosec static analysis (if installed)
-- nancy CVE scanning (if installed)
-- go-licenses compliance (if installed)
-- Manual credential detection
-- Unsafe import checking
-
-**Usage:**
-```batch
-vulnerability_scan.bat [options]
-
-Options:
-  --verbose    Show detailed output
-  --fix        Run 'go mod tidy' to fix
-  --report     Generate detailed report
-```
-
-### `run_security_tests.bat`
-Focused security test runner with optional features.
-
-**Features:**
-- Go security unit test execution
-- Dependency vulnerability scanning
-- Optional benchmarking
-- Optional code coverage generation
-- Test result summarization
-
-**Usage:**
-```batch
-run_security_tests.bat [options]
-
-Options:
-  --verbose    Show detailed test output
-  --bench      Include benchmark tests
-  --coverage   Generate coverage report
+# Run with verbose output
+go test -v -count=1
 ```
 
 ## Security Analysis Results
 
 ### Threat Model
-MCP Filesystem Ultra is a file operations service with these primary attack surfaces:
 
-1. **Path Traversal (CWE-22)** - Accessing files outside allowed directories
-2. **Command Injection (CWE-78)** - Injecting shell commands
-3. **Race Conditions** - Concurrent file access issues
-4. **Dependency Vulnerabilities** - Third-party package exploits
+MCP Go MSSQL is a database connectivity service with these primary attack surfaces:
+
+1. **SQL Injection (CWE-89)** - Malicious SQL queries through the MCP interface
+2. **Authentication Bypass (CWE-287)** - Unauthorized database access
+3. **Connection String Exposure** - Credential leakage in logs or errors
+4. **Race Conditions** - Concurrent database access issues
+5. **Dependency Vulnerabilities** - Third-party package exploits
 
 ### Current Status
 
 | Category | Status | Notes |
 |----------|--------|-------|
-| Unit Tests | ✅ PASS | All security tests passing |
-| Module Integrity | ✅ OK | go.mod/go.sum verified |
-| Dependencies | ✅ OK | 8 direct, ~20+ transitive |
-| Unsafe Code | ✅ OK | No unsafe imports |
-| Secrets | ✅ OK | No hardcoded credentials |
-| Path Validation | ✅ OK | Implemented in core/edit_operations.go |
-| Error Handling | ✅ OK | Consistent error returns |
-| Input Validation | ✅ OK | RequireString + path checks |
+| Unit Tests | PASS | All security tests passing |
+| Module Integrity | OK | go.mod/go.sum verified |
+| Dependencies | OK | go-mssqldb, x/crypto, x/text, testify |
+| Unsafe Code | OK | No unsafe imports |
+| Secrets | OK | No hardcoded credentials |
+| SQL Injection Protection | OK | Parameterized queries used |
+| Error Handling | OK | Consistent error returns |
+| Input Validation | OK | Query validation implemented |
+| TLS Encryption | OK | Mandatory for production |
+
+## Key Vulnerabilities Tested
+
+### CWE-89: SQL Injection
+Tests detect:
+- `1' OR '1'='1` - Classic injection
+- `UNION SELECT * FROM users--` - Union-based
+- `admin'--` - Comment injection
+- `1; DROP TABLE users--` - Stacked queries
+- `1' AND SLEEP(5)--` - Time-based blind injection
+
+### CWE-22: Path Traversal
+Tests detect:
+- `../../../etc/passwd`
+- `..\..\windows\system32`
+- `/etc/passwd` (absolute paths)
+- URL-encoded variations: `%2e%2e/`
+
+### CWE-78: OS Command Injection
+Tests detect:
+- Shell metacharacters: `;` `|` `&` `` ` ``
+- Command substitution: `$(...)`
+- Pipe chains: `file.txt | cat /etc/passwd`
+
+## Go Security Features
+
+This codebase leverages:
+- Memory safety (automatic)
+- Type safety (compile-time)
+- Bounds checking (automatic)
+- Race detection flag (`-race`)
+- Fuzzing support (`-fuzz`)
+- Go vulnerability database (Go 1.21+)
 
 ## Continuous Integration
 
-For CI/CD pipelines, run:
+For CI/CD pipelines:
 
 ```yaml
 # GitHub Actions example
 - name: Security Tests
   run: |
-    cd scripts\security
-    run_all_security_tests.bat --coverage --report
+    go test ./test/security -v -race -coverprofile=coverage.out
 
 - name: Upload Coverage
   uses: codecov/codecov-action@v3
   with:
-    files: coverage_security.out
+    files: coverage.out
 ```
 
 ## Installing Security Tools
@@ -227,84 +180,57 @@ go install github.com/google/go-licenses@latest
 
 # SBOM generation
 go install github.com/anchore/syft/cmd/syft@latest
+
+# Run gosec on the project
+gosec ./...
+
+# Run nancy for CVE detection
+go list -json -m all | nancy sleuth
 ```
-
-## Key Vulnerabilities Tested
-
-### CWE-22: Path Traversal
-Tests detect:
-- `../../../etc/passwd`
-- `..\..\windows\system32`
-- `/etc/shadow` (absolute paths)
-- URL-encoded variations: `%2e%2e/`
-
-### CWE-78: OS Command Injection
-Tests detect:
-- Shell metacharacters: `;` `|` `&` `` ` ``
-- Command substitution: `$(...)` `$(...)`
-- Pipe chains: `file.txt | cat /etc/passwd`
-
-### CWE-190: Integer Overflow
-- Buffer size validation
-- Line range boundary checks
-
-### CWE-416: Use After Free
-- Go's garbage collection prevents this
-
-### CWE-269: Improper Access Control
-- File permission checks
-- Path restriction validation
-
-## Go 1.24 Security Features
-
-This codebase leverages:
-- ✅ Memory safety (automatic)
-- ✅ Type safety (compile-time)
-- ✅ Bounds checking (automatic)
-- ✅ Race detection flag (`-race`)
-- ✅ Fuzzing support (`-fuzz`)
-- ✅ Go vulnerability database (Go 1.21+)
 
 ## Security Best Practices
 
 1. **Always run tests before deploying:**
-   ```batch
-   scripts\security\run_all_security_tests.bat
+   ```bash
+   go test ./test/security -v -race
    ```
 
 2. **Keep dependencies updated:**
-   ```batch
+   ```bash
    go get -u ./...
+   go mod tidy
    ```
 
-3. **Review security reports monthly:**
-   ```batch
-   scripts\security\run_all_security_tests.bat --report
-   ```
-
-4. **Use race detector during development:**
-   ```batch
+3. **Use race detector during development:**
+   ```bash
    go test -race ./...
    ```
 
-5. **Check for new vulnerabilities:**
-   ```batch
+4. **Check for new vulnerabilities:**
+   ```bash
    go list -m all | nancy sleuth
+   # Or with Go 1.21+
+   go vuln ./...
    ```
+
+5. **Never commit credentials:**
+   - Use `.env` files (already in `.gitignore`)
+   - Use environment variables
+   - Review code before committing
 
 ## Troubleshooting
 
 ### "Module verification failed"
-```batch
+```bash
 go mod tidy
 go mod verify
 ```
 
 ### "Unknown test package"
 Ensure you're in the project root directory:
-```batch
-cd c:\MCPs\clone\mcp-filesystem-go-ultra
-go test ./tests/security
+```bash
+cd /path/to/mcp-go-mssql
+go test ./test/security -v
 ```
 
 ### "Command 'gosec' not found"
@@ -315,51 +241,38 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 
 ### Tests timeout
 Increase timeout:
-```batch
-go test ./tests/security -timeout 10m
-```
-
-## Generated Reports
-
-Scripts can generate multiple reports:
-
-- `security_report_YYYYMMDD_HHMM.txt` - Complete security audit
-- `coverage_security.out` - Code coverage data
-- `coverage_security.txt` - Coverage report
-- `gosec_report.txt` - Static analysis findings
-- `dependencies.txt` - Full dependency list
-
-View coverage:
-```batch
-go tool cover -html=coverage_security.out
+```bash
+go test ./test/security -timeout 10m
 ```
 
 ## Security Test Metrics
 
-Baseline metrics for v3.1.0:
+Baseline metrics:
 
-- **Tests:** 20+ security-focused tests
-- **Coverage:** Pending (run with --coverage)
+- **Tests:** 25+ security-focused tests
+- **Coverage:** Run with `go test -cover ./test/security`
 - **Critical Issues:** 0
 - **High Issues:** 0
-- **Dependencies:** 8 direct, ~20+ transitive
+- **Key Dependencies:** go-mssqldb, x/crypto, x/text, testify
 - **Review Frequency:** Monthly recommended
 
 ## License
 
 Same as parent project (see LICENSE file)
 
-## Support
+## Security Reporting
 
 For security issues:
 1. **DO NOT** create public GitHub issues
 2. Use GitHub's private security advisory feature
-3. Email security team if available
+3. Email maintainers directly if available
 
 ## References
 
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
+- [OWASP SQL Injection Prevention](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html)
 - [Go Security Best Practices](https://golang.org/doc/security)
 - [CWE/SANS Top 25](https://cwe.mitre.org/top25/)
 - [CVE Database](https://cve.mitre.org/)
 - [Go Vulnerability Database](https://vuln.go.dev/)
+- [Microsoft SQL Server Security](https://docs.microsoft.com/en-us/sql/relational-databases/security/)
