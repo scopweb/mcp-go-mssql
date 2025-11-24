@@ -124,6 +124,8 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
 ```
 
 **Windows Integrated Authentication (SSPI - Named Pipes):**
+
+*Option 1: Access a specific database:*
 ```json
 {
   "mcpServers": {
@@ -140,7 +142,25 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
   }
 }
 ```
-> ℹ️ **Windows Auth Note:** Uses Named Pipes protocol (no TCP/IP required). `MSSQL_SERVER="."` for local server, or use server hostname for remote servers. See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for details.
+
+*Option 2: Access all databases (no database specified):*
+```json
+{
+  "mcpServers": {
+    "production-db-windows-auth-all": {
+      "command": "C:\\path\\to\\mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": ".",
+        "MSSQL_AUTH": "integrated",
+        "DEVELOPER_MODE": "false"
+      }
+    }
+  }
+}
+```
+
+> ℹ️ **Windows Auth Note:** Uses Named Pipes protocol (no TCP/IP required). `MSSQL_SERVER="."` for local server, or use server hostname for remote servers. `MSSQL_DATABASE` is optional with Windows Auth - omit it to access all permitted databases. See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for details.
 
 **Legacy SQL Server (Custom Connection String):**
 ```json
@@ -164,17 +184,18 @@ All database connections use environment variables for security. See `.env.examp
 
 **Required Variables (when not using custom connection string):**
 - `MSSQL_SERVER`: SQL Server hostname or IP address
-- `MSSQL_DATABASE`: Database name to connect to
-- `MSSQL_USER`: Username for SQL Server authentication
-- `MSSQL_PASSWORD`: Password for SQL Server authentication
+- `MSSQL_AUTH`: Authentication mode (`sql`, `integrated`/`windows`, or `azure`). For SQL Auth only:
+  - `MSSQL_DATABASE`: Database name to connect to (required for SQL Auth)
+  - `MSSQL_USER`: Username for SQL Server authentication
+  - `MSSQL_PASSWORD`: Password for SQL Server authentication
 
 **Optional Variables:**
 - `MSSQL_PORT`: SQL Server port (default: 1433)
 - `MSSQL_ENCRYPT`: Override encryption setting (`"true"` or `"false"`)
 - `MSSQL_CONNECTION_STRING`: **Complete custom connection string** (overrides all other MSSQL_* settings)
 - `MSSQL_AUTH`: Authentication mode for connecting to SQL Server. Supported values:
-  - `sql` (default) - SQL Server authentication using `MSSQL_USER` and `MSSQL_PASSWORD`.
-  - `integrated` or `windows` - Windows Integrated Authentication (SSPI) using Named Pipes protocol. Only supported on Windows; the process must run as a user with proper DB permissions. **Does not require TCP/IP to be enabled.** See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for configuration.
+  - `sql` (default) - SQL Server authentication using `MSSQL_USER` and `MSSQL_PASSWORD`. Requires `MSSQL_DATABASE`.
+  - `integrated` or `windows` - Windows Integrated Authentication (SSPI) using Named Pipes protocol. Only supported on Windows; the process must run as a user with proper DB permissions. **Does not require TCP/IP to be enabled.** `MSSQL_DATABASE` is optional - omit to access all permitted databases. See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for configuration.
   - `azure` - Azure Active Directory authentication (advanced; may require additional config and is not fully implemented by default).
 - `MSSQL_READ_ONLY`: **Security restriction** (`"true"` allows only SELECT queries, `"false"` allows all operations)
 - `MSSQL_WHITELIST_TABLES`: **Granular permissions** (comma-separated list of tables/views allowed for modification when `MSSQL_READ_ONLY=true`)
