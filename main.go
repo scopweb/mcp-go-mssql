@@ -160,11 +160,16 @@ func buildSecureConnectionString() (string, error) {
 		auth = "sql"
 	}
 
-	if server == "" || database == "" {
-		return "", fmt.Errorf("missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE")
+	if server == "" {
+		return "", fmt.Errorf("missing required environment variable: MSSQL_SERVER")
 	}
 
+	// For Windows Auth, database is optional (allows exploring all databases)
+	// For SQL Auth, database is required
 	if auth == "sql" {
+		if database == "" {
+			return "", fmt.Errorf("missing required environment variable for SQL auth: MSSQL_DATABASE")
+		}
 		if user == "" || password == "" {
 			return "", fmt.Errorf("missing required environment variables for SQL auth: MSSQL_USER, MSSQL_PASSWORD")
 		}
@@ -195,10 +200,18 @@ func buildSecureConnectionString() (string, error) {
 		// Try Named Pipes first (doesn't require TCP to be enabled)
 		// Named Pipes format: server=.\INSTANCENAME or server=HOSTNAME\INSTANCENAME
 		// For default instance, use server=. or server=HOSTNAME
-		namedPipesConn := fmt.Sprintf("server=%s;database=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
-			server, database, encrypt, trustCert,
-		)
-		return namedPipesConn, nil
+		// If no database specified, connects without selecting a specific database
+		if database != "" {
+			namedPipesConn := fmt.Sprintf("server=%s;database=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+				server, database, encrypt, trustCert,
+			)
+			return namedPipesConn, nil
+		} else {
+			namedPipesConn := fmt.Sprintf("server=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+				server, encrypt, trustCert,
+			)
+			return namedPipesConn, nil
+		}
 	case "azure":
 		// Azure AD auth needs an additional implementation to obtain tokens
 		return "", fmt.Errorf("Azure AD authentication not implemented in buildSecureConnectionString; use MSSQL_CONNECTION_STRING or set MSSQL_AUTH=sql")
