@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 🔐 **Windows Integrated Authentication (SSPI) support**: Added `MSSQL_AUTH` environment variable to allow selection of authentication mode; supports `sql` (default) and `integrated`/`windows` (SSPI) for Windows-based integrated authentication. When `MSSQL_AUTH=integrated` the server will build a connection string with `integrated security=SSPI` and will not require `MSSQL_USER` or `MSSQL_PASSWORD`.
+- 📝 **Documentation & examples updated**: `.env.example` and `README.md` updated to document `MSSQL_AUTH` and to show a sample configuration using integrated authentication.
+- 🧪 **Tools & tests**: `tools/debug/debug-connection.go` and `tools/test/test-connection.go` updated for `MSSQL_AUTH`; added a unit test case for `integrated` auth in `test/main_test.go`.
+- 📚 **Windows Auth Guide**: Added `WINDOWS_AUTH_GUIDE.md` with comprehensive Named Pipes configuration and troubleshooting.
+
+### Changed
+- 🔄 **Named Pipes for Windows Auth**: Windows Integrated Authentication now uses Named Pipes protocol instead of TCP/IP. This allows authentication to work without requiring TCP to be enabled in SQL Server Configuration Manager. Works with both local (`.`) and remote server names.
+  - `main.go`: Updated `buildSecureConnectionString()` to use Named Pipes for SSPI
+  - `claude-code/db-connector.go`: Updated `connectDatabase()` to use Named Pipes for Windows Auth
+  - Eliminates the need to enable TCP/IP protocol for Windows Auth scenarios
+  - Tested successfully with SQL Server 2022 on Windows 10
+
+
 ## [1.2.0] - 2025-11-21
 
 ### Added
