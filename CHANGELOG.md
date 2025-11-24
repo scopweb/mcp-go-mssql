@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `claude-code/db-connector.go`: Updated `connectDatabase()` to use Named Pipes for Windows Auth
   - Eliminates the need to enable TCP/IP protocol for Windows Auth scenarios
   - Tested successfully with SQL Server 2022 on Windows 10
+- 🗄️ **Optional Database with Windows Auth**: Made `MSSQL_DATABASE` optional for Windows Integrated Authentication
+  - When `MSSQL_DATABASE` is not specified with Windows Auth, users can access all databases they have permissions for
+  - Connection string is built dynamically: with database parameter when specified, without when omitted
+  - Enables multi-database exploration while maintaining single-database focus option
+  - Allows queries across databases using fully qualified names: `SELECT * FROM DatabaseName.schema.table`
+  - Useful for development and analysis scenarios with Windows credentials
 
 
 ## [1.2.0] - 2025-11-21
