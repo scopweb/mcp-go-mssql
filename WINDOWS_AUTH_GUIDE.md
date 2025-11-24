@@ -18,18 +18,40 @@ Set these environment variables:
 
 ```bash
 $env:MSSQL_SERVER = "."                    # "." for local server or server name
-$env:MSSQL_DATABASE = "YourDatabase"       # Database name
 $env:MSSQL_AUTH = "integrated"             # or "windows"
 $env:DEVELOPER_MODE = "true"               # For self-signed certificates
+
+# Optional: specify a database (omit to access all databases)
+$env:MSSQL_DATABASE = "YourDatabase"       # Database name (optional)
 
 # Then run:
 go run claude-code/db-connector.go test
 ```
 
+**Note**: When using Windows Auth, `MSSQL_DATABASE` is **optional**. If not specified, you can access all databases that your Windows user has permissions to.
+
 ### For Claude Desktop
 
 Update your `claude_desktop_config.json`:
 
+**Option 1: Access all databases (no database specified):**
+```json
+{
+  "mcpServers": {
+    "mssql-windows-auth-all-dbs": {
+      "command": "C:\\path\\to\\mcp-go-mssql-windows-amd64.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": ".",
+        "MSSQL_AUTH": "integrated",
+        "DEVELOPER_MODE": "true"
+      }
+    }
+  }
+}
+```
+
+**Option 2: Access a specific database:**
 ```json
 {
   "mcpServers": {
@@ -67,16 +89,44 @@ Update your `claude_desktop_config.json`:
 
 When `MSSQL_AUTH=integrated` or `MSSQL_AUTH=windows`:
 
+**With database specified (default):**
 ```
 server=SERVER;database=DATABASE;encrypt=true|false;trustservercertificate=true|false;integrated security=SSPI;connection timeout=30;command timeout=30
 ```
 
+**Without database specified (access all databases):**
+```
+server=SERVER;encrypt=true|false;trustservercertificate=true|false;integrated security=SSPI;connection timeout=30;command timeout=30
+```
+
 **Note**: No `user id` or `password` parameters are used with Windows Auth.
+
+## Accessing Multiple Databases
+
+When `MSSQL_DATABASE` is not specified with Windows Auth, you can:
+
+1. **List all databases:**
+   ```bash
+   go run claude-code/db-connector.go query "SELECT name FROM sys.databases ORDER BY name"
+   ```
+
+2. **Query across databases:**
+   ```bash
+   go run claude-code/db-connector.go query "SELECT * FROM DatabaseName.schema.TableName"
+   ```
+
+3. **Switch databases in operations:**
+   ```bash
+   go run claude-code/db-connector.go query "USE DatabaseName; SELECT * FROM TableName"
+   ```
+
+This is particularly useful when you have permissions to multiple databases and want a single connection to access all of them.
 
 ## Testing the Connection
 
 ### Using the db-connector tool:
 
+**Test with specific database:**
 ```bash
 $env:MSSQL_SERVER = "."
 $env:MSSQL_DATABASE = "JJP_CRM_LOCAL"
@@ -84,6 +134,17 @@ $env:MSSQL_AUTH = "integrated"
 $env:DEVELOPER_MODE = "true"
 
 go run claude-code/db-connector.go test
+```
+
+**Test with access to all databases:**
+```bash
+$env:MSSQL_SERVER = "."
+$env:MSSQL_AUTH = "integrated"
+$env:DEVELOPER_MODE = "true"
+# Note: MSSQL_DATABASE is not set
+
+go run claude-code/db-connector.go test
+go run claude-code/db-connector.go query "SELECT name FROM sys.databases"
 ```
 
 ### Using sqlcmd (for verification):

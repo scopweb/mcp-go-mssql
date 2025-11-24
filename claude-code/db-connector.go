@@ -98,11 +98,16 @@ func loadConfig() (*DatabaseConfig, error) {
 		config.Auth = "sql" // default to SQL authentication
 	}
 
-	if config.Server == "" || config.Database == "" {
-		return nil, fmt.Errorf("missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE")
+	if config.Server == "" {
+		return nil, fmt.Errorf("missing required environment variable: MSSQL_SERVER")
 	}
 
+	// For Windows Auth, database is optional (allows exploring all databases)
+	// For SQL Auth, database is required
 	if config.Auth == "sql" {
+		if config.Database == "" {
+			return nil, fmt.Errorf("missing required environment variable for SQL auth: MSSQL_DATABASE")
+		}
 		if config.User == "" || config.Password == "" {
 			return nil, fmt.Errorf("missing required environment variables for SQL auth: MSSQL_USER, MSSQL_PASSWORD")
 		}
@@ -138,8 +143,14 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 		// Use Named Pipes (no port required) which doesn't need TCP to be enabled
 		// Named Pipes format: server=.\INSTANCENAME or server=HOSTNAME\INSTANCENAME
 		// For default instance: server=. or server=HOSTNAME
-		connStr = fmt.Sprintf("server=%s;database=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
-			config.Server, config.Database, trustCert, trustCert)
+		// If no database specified, connects without selecting a specific database
+		if config.Database != "" {
+			connStr = fmt.Sprintf("server=%s;database=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
+				config.Server, config.Database, trustCert, trustCert)
+		} else {
+			connStr = fmt.Sprintf("server=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
+				config.Server, trustCert, trustCert)
+		}
 	default:
 		// Default to SQL Server authentication (user/password)
 		connStr = fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
@@ -191,8 +202,12 @@ func testConnection(db *sql.DB, config *DatabaseConfig) {
 		result.Success = false
 		result.Error = fmt.Sprintf("Test query failed: %v", err)
 	} else {
+		dbDisplay := config.Database
+		if dbDisplay == "" {
+			dbDisplay = "(default/all available)"
+		}
 		result.Info = fmt.Sprintf("✅ Connection successful!\nServer: %s:%s\nDatabase: %s\nUser: %s\nTLS: Enabled\nVersion: %s",
-			config.Server, config.Port, config.Database, userDisplay, strings.TrimSpace(version))
+			config.Server, config.Port, dbDisplay, userDisplay, strings.TrimSpace(version))
 	}
 
 	printResult(result)
