@@ -154,9 +154,20 @@ func buildSecureConnectionString() (string, error) {
 	user := os.Getenv("MSSQL_USER")
 	password := os.Getenv("MSSQL_PASSWORD")
 	port := os.Getenv("MSSQL_PORT")
+	auth := strings.ToLower(os.Getenv("MSSQL_AUTH"))
 
-	if server == "" || database == "" || user == "" || password == "" {
-		return "", fmt.Errorf("missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE, MSSQL_USER, MSSQL_PASSWORD")
+	if auth == "" {
+		auth = "sql"
+	}
+
+	if server == "" || database == "" {
+		return "", fmt.Errorf("missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE")
+	}
+
+	if auth == "sql" {
+		if user == "" || password == "" {
+			return "", fmt.Errorf("missing required environment variables for SQL auth: MSSQL_USER, MSSQL_PASSWORD")
+		}
 	}
 
 	if port == "" {
@@ -177,10 +188,26 @@ func buildSecureConnectionString() (string, error) {
 		trustCert = "true"
 	}
 
-	// Build connection string using standard format for modern SQL Server
-	return fmt.Sprintf("server=%s;port=%s;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
-		server, port, database, user, password, encrypt, trustCert,
-	), nil
+	// Build connection string depending on requested authentication mode
+	switch auth {
+	case "integrated", "windows":
+		// Windows Integrated Authentication (SSPI)
+		// Try Named Pipes first (doesn't require TCP to be enabled)
+		// Named Pipes format: server=.\INSTANCENAME or server=HOSTNAME\INSTANCENAME
+		// For default instance, use server=. or server=HOSTNAME
+		namedPipesConn := fmt.Sprintf("server=%s;database=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			server, database, encrypt, trustCert,
+		)
+		return namedPipesConn, nil
+	case "azure":
+		// Azure AD auth needs an additional implementation to obtain tokens
+		return "", fmt.Errorf("Azure AD authentication not implemented in buildSecureConnectionString; use MSSQL_CONNECTION_STRING or set MSSQL_AUTH=sql")
+	default:
+		// Default to SQL Server authentication
+		return fmt.Sprintf("server=%s;port=%s;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			server, port, database, user, password, encrypt, trustCert,
+		), nil
+	}
 }
 
 func (s *MCPMSSQLServer) validateBasicInput(input string) error {
@@ -995,13 +1022,14 @@ func main() {
 		database := os.Getenv("MSSQL_DATABASE")
 		user := os.Getenv("MSSQL_USER")
 		password := os.Getenv("MSSQL_PASSWORD")
+		authMode := os.Getenv("MSSQL_AUTH")
 
 		customConnStr := os.Getenv("MSSQL_CONNECTION_STRING")
 		if customConnStr != "" {
 			secLogger.Printf("Using custom connection string: %s", secLogger.sanitizeForLogging(customConnStr))
 		} else {
-			secLogger.Printf("Environment variables - Server: %s, Database: %s, User: %s, Password: %s, DevMode: %s",
-				serverHost, database, user,
+			secLogger.Printf("Environment variables - Server: %s, Database: %s, AuthMode: %s, User: %s, Password: %s, DevMode: %s",
+				serverHost, database, authMode, user,
 				func() string {
 					if password != "" {
 						return "***"
