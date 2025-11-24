@@ -112,8 +112,9 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
       "env": {
         "MSSQL_SERVER": "your-server.database.windows.net",
         "MSSQL_DATABASE": "YourDatabase",
-        "MSSQL_USER": "user",
-        "MSSQL_PASSWORD": "password",
+          "MSSQL_AUTH": "sql",
+          "MSSQL_USER": "user",
+          "MSSQL_PASSWORD": "password",
         "MSSQL_PORT": "1433",
         "DEVELOPER_MODE": "false"
       }
@@ -121,6 +122,25 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
   }
 }
 ```
+
+**Windows Integrated Authentication (SSPI - Named Pipes):**
+```json
+{
+  "mcpServers": {
+    "production-db-windows-auth": {
+      "command": "C:\\path\\to\\mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": ".",
+        "MSSQL_DATABASE": "YourDatabase",
+        "MSSQL_AUTH": "integrated",
+        "DEVELOPER_MODE": "false"
+      }
+    }
+  }
+}
+```
+> ℹ️ **Windows Auth Note:** Uses Named Pipes protocol (no TCP/IP required). `MSSQL_SERVER="."` for local server, or use server hostname for remote servers. See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for details.
 
 **Legacy SQL Server (Custom Connection String):**
 ```json
@@ -152,6 +172,10 @@ All database connections use environment variables for security. See `.env.examp
 - `MSSQL_PORT`: SQL Server port (default: 1433)
 - `MSSQL_ENCRYPT`: Override encryption setting (`"true"` or `"false"`)
 - `MSSQL_CONNECTION_STRING`: **Complete custom connection string** (overrides all other MSSQL_* settings)
+- `MSSQL_AUTH`: Authentication mode for connecting to SQL Server. Supported values:
+  - `sql` (default) - SQL Server authentication using `MSSQL_USER` and `MSSQL_PASSWORD`.
+  - `integrated` or `windows` - Windows Integrated Authentication (SSPI) using Named Pipes protocol. Only supported on Windows; the process must run as a user with proper DB permissions. **Does not require TCP/IP to be enabled.** See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for configuration.
+  - `azure` - Azure Active Directory authentication (advanced; may require additional config and is not fully implemented by default).
 - `MSSQL_READ_ONLY`: **Security restriction** (`"true"` allows only SELECT queries, `"false"` allows all operations)
 - `MSSQL_WHITELIST_TABLES`: **Granular permissions** (comma-separated list of tables/views allowed for modification when `MSSQL_READ_ONLY=true`)
   - Example: `"temp_ai,v_temp_ia"`
@@ -200,6 +224,13 @@ MSSQL_USER=readonly_user
 MSSQL_PASSWORD=readonly_password
 MSSQL_READ_ONLY=true
 MSSQL_MAX_QUERY_SIZE=2097152
+DEVELOPER_MODE=false
+
+# Windows Integrated Authentication (SSPI) - runs under the current OS account
+# Example (Windows, no user/password required):
+MSSQL_AUTH=integrated
+MSSQL_SERVER=your-windows-server.company.local
+MSSQL_DATABASE=YourDatabase
 DEVELOPER_MODE=false
 
 # AI-Safe Mode with Whitelist (RECOMMENDED for AI Assistants)
