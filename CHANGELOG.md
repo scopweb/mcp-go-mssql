@@ -9,8 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - 🔐 **Windows Integrated Authentication (SSPI) support**: Added `MSSQL_AUTH` environment variable to allow selection of authentication mode; supports `sql` (default) and `integrated`/`windows` (SSPI) for Windows-based integrated authentication. When `MSSQL_AUTH=integrated` the server will build a connection string with `integrated security=SSPI` and will not require `MSSQL_USER` or `MSSQL_PASSWORD`.
-- 📝 **Documentation & examples updated**: `.env.example` and `README.md` updated to document `MSSQL_AUTH` and to show a sample configuration using integrated authentication.
+  - `MSSQL_DATABASE` is now **optional** with integrated authentication - if omitted, connects to the Windows user's default database
+  - Supports local servers (`localhost`, `.`, `(local)`) and remote domain servers
+  - Uses Windows credentials automatically - perfect for Active Directory environments
+  - No passwords in configuration files - more secure credential management
+- 📝 **Enhanced logging for integrated auth**: Added detailed diagnostic logs showing:
+  - Current Windows user running the process
+  - Authentication mode being used (SQL vs Integrated)
+  - Database connection status with specific troubleshooting tips for Windows auth failures
+- 📝 **Documentation & examples updated**: `.env.example` and `README.md` updated to document `MSSQL_AUTH` with multiple configuration examples for integrated authentication scenarios.
 - 🧪 **Tools & tests**: `tools/debug/debug-connection.go` and `tools/test/test-connection.go` updated for `MSSQL_AUTH`; added a unit test case for `integrated` auth in `test/main_test.go`.
+- 🔧 **Diagnostic scripts**: Added `scripts/test-integrated-auth.ps1` and `scripts/view-logs.ps1` to help troubleshoot Windows authentication issues.
 - 📚 **Windows Auth Guide**: Added `WINDOWS_AUTH_GUIDE.md` with comprehensive Named Pipes configuration and troubleshooting.
 
 ### Changed

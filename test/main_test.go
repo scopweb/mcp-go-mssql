@@ -33,6 +33,9 @@ func setupTestEnv() {
 	if os.Getenv("DEVELOPER_MODE") == "" {
 		os.Setenv("DEVELOPER_MODE", "true")
 	}
+	if os.Getenv("MSSQL_AUTH") == "" {
+		os.Setenv("MSSQL_AUTH", "sql")
+	}
 }
 
 func TestSecurityLoggerSanitization(t *testing.T) {
@@ -150,6 +153,26 @@ func TestBuildSecureConnectionString(t *testing.T) {
 		}
 		if !strings.Contains(connStr, "trustservercertificate=false") {
 			t.Errorf("In production mode, should not trust server certificate")
+		}
+	})
+
+	t.Run("Integrated authentication (Windows)", func(t *testing.T) {
+		setupTestEnv()
+		os.Setenv("MSSQL_AUTH", "integrated")
+		// In integrated mode, user/password are not required
+		os.Setenv("MSSQL_USER", "")
+		os.Setenv("MSSQL_PASSWORD", "")
+
+		connStr, err := buildSecureConnectionString()
+		if err != nil {
+			t.Fatalf("Expected no error for integrated auth, got: %v", err)
+		}
+
+		if !strings.Contains(strings.ToLower(connStr), "integrated security=sspi") {
+			t.Errorf("Expected integrated security in connection string for integrated auth, got: %s", connStr)
+		}
+		if strings.Contains(strings.ToLower(connStr), "user id=") || strings.Contains(strings.ToLower(connStr), "password=") {
+			t.Errorf("Connection string for integrated auth should not include user or password: %s", connStr)
 		}
 	})
 }

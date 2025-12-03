@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	osuser "os/user"
 	"regexp"
 	"strconv"
 	"strings"
@@ -197,21 +198,20 @@ func buildSecureConnectionString() (string, error) {
 	switch auth {
 	case "integrated", "windows":
 		// Windows Integrated Authentication (SSPI)
-		// Try Named Pipes first (doesn't require TCP to be enabled)
-		// Named Pipes format: server=.\INSTANCENAME or server=HOSTNAME\INSTANCENAME
-		// For default instance, use server=. or server=HOSTNAME
-		// If no database specified, connects without selecting a specific database
+		// The process will use the credentials of the Windows user running it
+		// Database is optional - if not specified, connects to default database
+		var connStr string
 		if database != "" {
-			namedPipesConn := fmt.Sprintf("server=%s;database=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			connStr = fmt.Sprintf("server=%s;database=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
 				server, database, encrypt, trustCert,
 			)
-			return namedPipesConn, nil
 		} else {
-			namedPipesConn := fmt.Sprintf("server=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			// No database specified - connect to master or default database
+			connStr = fmt.Sprintf("server=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
 				server, encrypt, trustCert,
 			)
-			return namedPipesConn, nil
 		}
+		return connStr, nil
 	case "azure":
 		// Azure AD auth needs an additional implementation to obtain tokens
 		return "", fmt.Errorf("Azure AD authentication not implemented in buildSecureConnectionString; use MSSQL_CONNECTION_STRING or set MSSQL_AUTH=sql")
@@ -1041,16 +1041,38 @@ func main() {
 		if customConnStr != "" {
 			secLogger.Printf("Using custom connection string: %s", secLogger.sanitizeForLogging(customConnStr))
 		} else {
-			secLogger.Printf("Environment variables - Server: %s, Database: %s, AuthMode: %s, User: %s, Password: %s, DevMode: %s",
-				serverHost, database, authMode, user,
-				func() string {
-					if password != "" {
-						return "***"
-					} else {
-						return "MISSING"
-					}
-				}(),
-				os.Getenv("DEVELOPER_MODE"))
+			auth := strings.ToLower(authMode)
+			if auth == "" {
+				auth = "sql"
+			}
+
+			if auth == "integrated" || auth == "windows" {
+				secLogger.Printf("Environment variables - Server: %s, Database: %s, Auth: INTEGRATED (Windows), DevMode: %s",
+					serverHost,
+					func() string {
+						if database != "" {
+							return database
+						}
+						return "(not specified - will use default)"
+					}(),
+					os.Getenv("DEVELOPER_MODE"))
+
+				// Show current Windows user
+				if u, err := osuser.Current(); err == nil {
+					secLogger.Printf("Running as Windows user: %s", u.Username)
+				}
+			} else {
+				secLogger.Printf("Environment variables - Server: %s, Database: %s, Auth: SQL, User: %s, Password: %s, DevMode: %s",
+					serverHost, database, user,
+					func() string {
+						if password != "" {
+							return "***"
+						} else {
+							return "MISSING"
+						}
+					}(),
+					os.Getenv("DEVELOPER_MODE"))
+			}
 		}
 
 		// Additional debug logging
@@ -1116,8 +1138,26 @@ func main() {
 				if strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true" {
 					trustCert = "true"
 				}
+
+				auth := strings.ToLower(os.Getenv("MSSQL_AUTH"))
+				if auth == "" {
+					auth = "sql"
+				}
+
 				if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
 					secLogger.Printf("Using custom connection string format")
+				} else if auth == "integrated" || auth == "windows" {
+					secLogger.Printf("Using Windows Integrated Authentication (SSPI)")
+					secLogger.Printf("Troubleshooting tips for integrated auth:")
+					secLogger.Printf("  1. Ensure your Windows user has permission in SQL Server")
+					secLogger.Printf("  2. Check if SQL Server is configured to allow Windows Authentication")
+					secLogger.Printf("  3. Try using server='.' or server='localhost' or server='(local)'")
+					secLogger.Printf("  4. Verify TCP/IP or Named Pipes are enabled in SQL Server Configuration Manager")
+
+					// Get current Windows user
+					if u, err := osuser.Current(); err == nil {
+						secLogger.Printf("  Running as Windows user: %s\\%s", u.Username, u.Name)
+					}
 				} else {
 					encrypt := "true"
 					if strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true" {

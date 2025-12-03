@@ -19,6 +19,7 @@ func main() {
 	database := getEnvOrDefault("MSSQL_DATABASE", "GDPA")
 	user := getEnvOrDefault("MSSQL_USER", "sa")
 	password := getEnvOrDefault("MSSQL_PASSWORD", "aidima")
+	auth := strings.ToLower(getEnvOrDefault("MSSQL_AUTH", "sql"))
 	port := getEnvOrDefault("MSSQL_PORT", "1433")
 	encrypt := getEnvOrDefault("MSSQL_ENCRYPT", "false")
 	devMode := getEnvOrDefault("DEVELOPER_MODE", "true")
@@ -35,6 +36,7 @@ func main() {
 		}
 	}())
 	fmt.Printf("  MSSQL_PORT: %s\n", port)
+	fmt.Printf("  MSSQL_AUTH: %s\n", auth)
 	fmt.Printf("  MSSQL_ENCRYPT: %s\n", encrypt)
 	fmt.Printf("  DEVELOPER_MODE: %s\n", devMode)
 	fmt.Println()
@@ -108,6 +110,13 @@ func main() {
 		// Format 5: Exact SSMS format
 		fmt.Sprintf("Data Source=%s;Persist Security Info=True;User ID=%s;Password=%s;Pooling=False;MultipleActiveResultSets=False;Encrypt=False;TrustServerCertificate=False;Command Timeout=0",
 			server, user, password),
+	}
+
+	// If integrated auth is requested, add an integrated connection string variant
+	if auth == "integrated" || auth == "windows" {
+		integrated := fmt.Sprintf("server=%s;port=%s;database=%s;encrypt=false;trustservercertificate=true;integrated security=SSPI",
+			server, port, database)
+		connectionStrings = append(connectionStrings, integrated)
 	}
 
 	for i, connStr := range connectionStrings {

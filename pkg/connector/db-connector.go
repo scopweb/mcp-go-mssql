@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ type DatabaseConfig struct {
 	Password string `json:"password"`
 	Port     string `json:"port"`
 	DevMode  bool   `json:"developer_mode"`
+	Auth     string `json:"auth"` // auth mode: sql (default), integrated/windows, azure
 }
 
 // QueryResult holds query execution results
@@ -89,10 +91,21 @@ func loadConfig() (*DatabaseConfig, error) {
 		Password: os.Getenv("MSSQL_PASSWORD"),
 		Port:     os.Getenv("MSSQL_PORT"),
 		DevMode:  strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true",
+		Auth:     strings.ToLower(os.Getenv("MSSQL_AUTH")),
 	}
 
-	if config.Server == "" || config.Database == "" || config.User == "" || config.Password == "" {
-		return nil, fmt.Errorf("missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE, MSSQL_USER, MSSQL_PASSWORD")
+	if config.Auth == "" {
+		config.Auth = "sql"
+	}
+
+	if config.Server == "" || config.Database == "" {
+		return nil, fmt.Errorf("missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE")
+	}
+
+	if config.Auth == "sql" {
+		if config.User == "" || config.Password == "" {
+			return nil, fmt.Errorf("missing required environment variables for SQL auth: MSSQL_USER, MSSQL_PASSWORD")
+		}
 	}
 
 	if config.Port == "" {
@@ -108,8 +121,27 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 		trustCert = "true"
 	}
 
-	connStr := fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=true;trustservercertificate=%s;connection timeout=30;command timeout=30",
-		config.Server, config.Database, config.User, config.Password, config.Port, trustCert)
+	// Check for a complete custom connection string
+	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+		db, err := sql.Open("sqlserver", customConnStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open connection: %v", err)
+		}
+		return db, nil
+	}
+
+	// Build connection string depending on requested authentication mode
+	var connStr string
+	switch strings.ToLower(config.Auth) {
+	case "integrated", "windows":
+		// Windows Integrated Authentication (SSPI) — only works on Windows.
+		connStr = fmt.Sprintf("server=%s;database=%s;port=%s;encrypt=true;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
+			config.Server, config.Database, config.Port, trustCert)
+	default:
+		// Default to SQL Server authentication (user/password)
+		connStr = fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=true;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			config.Server, config.Database, config.User, config.Password, config.Port, trustCert)
+	}
 
 	db, err := sql.Open("sqlserver", connStr)
 	if err != nil {
@@ -146,13 +178,22 @@ func testConnection(db *sql.DB, config *DatabaseConfig) {
 	defer cancel()
 
 	var version string
+	userDisplay := config.User
+	if strings.ToLower(config.Auth) == "integrated" || strings.ToLower(config.Auth) == "windows" {
+		// Attempt to detect current OS user
+		if u, err := user.Current(); err == nil {
+			userDisplay = fmt.Sprintf("Integrated (%s)", u.Username)
+		} else {
+			userDisplay = "Integrated"
+		}
+	}
 	err := db.QueryRowContext(ctx, "SELECT @@VERSION").Scan(&version)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("Test query failed: %v", err)
 	} else {
 		result.Info = fmt.Sprintf("✅ Connection successful!\nServer: %s:%s\nDatabase: %s\nUser: %s\nTLS: Enabled\nVersion: %s",
-			config.Server, config.Port, config.Database, config.User, strings.TrimSpace(version))
+			config.Server, config.Port, config.Database, userDisplay, strings.TrimSpace(version))
 	}
 
 	printResult(result)
