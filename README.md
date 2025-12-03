@@ -160,7 +160,7 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
 }
 ```
 
-> ℹ️ **Windows Auth Note:** Uses Named Pipes protocol (no TCP/IP required). `MSSQL_SERVER="."` for local server, or use server hostname for remote servers. `MSSQL_DATABASE` is optional with Windows Auth - omit it to access all permitted databases. See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for details.
+> ℹ️ **Windows Auth Note:** Uses current Windows user credentials automatically (no passwords needed). `MSSQL_SERVER="."` for local server, `"localhost"`, or server hostname for remote servers. `MSSQL_DATABASE` is optional - if omitted, connects to user's default database. Works with Active Directory and local Windows accounts. See [Windows Authentication Guide](docs/WINDOWS_AUTH_GUIDE.md) for detailed setup and troubleshooting.
 
 **Legacy SQL Server (Custom Connection String):**
 ```json
@@ -184,10 +184,16 @@ All database connections use environment variables for security. See `.env.examp
 
 **Required Variables (when not using custom connection string):**
 - `MSSQL_SERVER`: SQL Server hostname or IP address
-- `MSSQL_AUTH`: Authentication mode (`sql`, `integrated`/`windows`, or `azure`). For SQL Auth only:
-  - `MSSQL_DATABASE`: Database name to connect to (required for SQL Auth)
-  - `MSSQL_USER`: Username for SQL Server authentication
-  - `MSSQL_PASSWORD`: Password for SQL Server authentication
+- `MSSQL_AUTH`: Authentication mode (`sql`, `integrated`/`windows`, or `azure`)
+
+**For SQL Server Authentication (`MSSQL_AUTH=sql` or not set):**
+- `MSSQL_DATABASE`: Database name to connect to (required)
+- `MSSQL_USER`: Username for SQL Server authentication (required)
+- `MSSQL_PASSWORD`: Password for SQL Server authentication (required)
+
+**For Windows Integrated Authentication (`MSSQL_AUTH=integrated` or `windows`):**
+- `MSSQL_DATABASE`: Database name (optional - if omitted, connects to default database for the Windows user)
+- No `MSSQL_USER` or `MSSQL_PASSWORD` needed - uses Windows credentials automatically
 
 **Optional Variables:**
 - `MSSQL_PORT`: SQL Server port (default: 1433)
@@ -195,7 +201,7 @@ All database connections use environment variables for security. See `.env.examp
 - `MSSQL_CONNECTION_STRING`: **Complete custom connection string** (overrides all other MSSQL_* settings)
 - `MSSQL_AUTH`: Authentication mode for connecting to SQL Server. Supported values:
   - `sql` (default) - SQL Server authentication using `MSSQL_USER` and `MSSQL_PASSWORD`. Requires `MSSQL_DATABASE`.
-  - `integrated` or `windows` - Windows Integrated Authentication (SSPI) using Named Pipes protocol. Only supported on Windows; the process must run as a user with proper DB permissions. **Does not require TCP/IP to be enabled.** `MSSQL_DATABASE` is optional - omit to access all permitted databases. See [WINDOWS_AUTH_GUIDE.md](WINDOWS_AUTH_GUIDE.md) for configuration.
+  - `integrated` or `windows` - Windows Integrated Authentication (SSPI). Only supported on Windows; the process runs under the current Windows user's credentials and must have proper DB permissions. `MSSQL_DATABASE` is optional - if omitted, connects to the user's default database. **Key benefits:** No passwords in config files, uses Active Directory/Windows security, seamless single sign-on.
   - `azure` - Azure Active Directory authentication (advanced; may require additional config and is not fully implemented by default).
 - `MSSQL_READ_ONLY`: **Security restriction** (`"true"` allows only SELECT queries, `"false"` allows all operations)
 - `MSSQL_WHITELIST_TABLES`: **Granular permissions** (comma-separated list of tables/views allowed for modification when `MSSQL_READ_ONLY=true`)
@@ -247,11 +253,22 @@ MSSQL_READ_ONLY=true
 MSSQL_MAX_QUERY_SIZE=2097152
 DEVELOPER_MODE=false
 
-# Windows Integrated Authentication (SSPI) - runs under the current OS account
-# Example (Windows, no user/password required):
+# Windows Integrated Authentication (SSPI) - runs under the current Windows user
+# Example 1: Connect to specific database
 MSSQL_AUTH=integrated
-MSSQL_SERVER=your-windows-server.company.local
+MSSQL_SERVER=localhost
 MSSQL_DATABASE=YourDatabase
+DEVELOPER_MODE=false
+
+# Example 2: Connect to default database (database name optional)
+MSSQL_AUTH=integrated
+MSSQL_SERVER=.
+DEVELOPER_MODE=true
+
+# Example 3: Remote server with domain authentication
+MSSQL_AUTH=integrated
+MSSQL_SERVER=SQL-SERVER.company.local
+MSSQL_DATABASE=ProductionDB
 DEVELOPER_MODE=false
 
 # AI-Safe Mode with Whitelist (RECOMMENDED for AI Assistants)
@@ -390,6 +407,7 @@ See [claude-code/README.md](claude-code/README.md) for detailed Claude Code inte
 
 ### For Users
 - **[AI Usage Guide](docs/AI_USAGE_GUIDE.md)** - How Claude/AI works with security restrictions
+- **[Windows Authentication Guide](docs/WINDOWS_AUTH_GUIDE.md)** - Setup and troubleshooting for Windows Integrated Auth (SSPI)
 - **[Whitelist Security](docs/WHITELIST_SECURITY.md)** - Configure granular table permissions
 - **[README (this file)](README.md)** - Installation and configuration
 
