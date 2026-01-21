@@ -1,41 +1,112 @@
-# Configuration files with sensitive data
-config.json
-*.config.json
+# =============================================================================
+# SENSITIVE DATA - NEVER COMMIT
+# =============================================================================
 
-# Build artifacts
-mcp-go-mssql
-mcp-go-mssql.exe
-mcp-go-mssql-secure
-mcp-go-mssql-secure.exe
-
-# Go build artifacts (go.sum should NOT be ignored - it's required for reproducible builds)
-*.test
-
-# Logs
-*.log
-security.log
-
-# Certificate files
-*.pem
-*.crt
-*.key
-
-# Environment files
+# Environment files with credentials
 .env
 .env.local
 .env.test
 .env.production
+.env.*.local
 
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
+# Configuration files with secrets
+config.json
+*.config.json
+claude_desktop_config.json
 
-# OS files
-.DS_Store
-Thumbs.db
+# Certificate/Key files
+*.pem
+*.crt
+*.key
+*.pfx
+*.p12
+
+# =============================================================================
+# BUILD ARTIFACTS
+# =============================================================================
+
+# Compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+mcp-go-mssql
+mcp-go-mssql-secure
+build/mcp-go-mssql.exe
+
+# Go build cache
+*.test
+
+# =============================================================================
+# DEPENDENCY AND VENDOR
+# =============================================================================
+
+# vendor/ directory (if used)
+vendor/
+
+# =============================================================================
+# LOGS AND TEMPORARY FILES
+# =============================================================================
+
+# Log files
+*.log
+security.log
+debug.log
 
 # Temporary files
 *.tmp
 *.bak
+*.swp
+*.swo
+*~
+*.DS_Store
+
+# =============================================================================
+# IDE AND EDITOR FILES
+# =============================================================================
+
+# Claude Code settings (user-specific)
+.claude/settings.local.json
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Other editors
+.vim/
+.emacs*
+
+# =============================================================================
+# OS-SPECIFIC FILES
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+
+# =============================================================================
+# PROJECT-SPECIFIC TEMPORARY FILES
+# =============================================================================
+
+# PowerShell test scripts (temporary, not part of core functionality)
+test-windows-auth-*.ps1
+final-test-windows-auth.ps1
+
+# Test executables
+test/*.exe
