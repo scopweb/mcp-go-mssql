@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 🔧 **New tools for database exploration**:
+  - `list_databases`: List all user databases on the SQL Server instance
+  - `get_indexes`: Get indexes for a specific table (with schema support)
+  - `get_foreign_keys`: Get foreign key relationships for a table (incoming and outgoing)
+  - `list_stored_procedures`: List all stored procedures (with optional schema filter)
+  - `execute_procedure`: Execute whitelisted stored procedures (requires `MSSQL_WHITELIST_PROCEDURES` env var)
+- 🔐 **Schema support for describe_table**: Now supports `schema.table` format and optional `schema` parameter (defaults to `dbo`)
+- ✅ **Safe system procedures in read-only mode**: Added whitelist of safe read-only system procedures (`sp_help`, `sp_helptext`, `sp_helpindex`, `sp_columns`, `sp_tables`, `sp_fkeys`, `sp_pkeys`, `sp_databases`, etc.) that are now allowed in read-only mode
+
+### Fixed
+- 🐛 **Schema detection in table extraction**: Fixed regex patterns to correctly detect `schema.table` and `[schema].[table]` formats in SQL queries for whitelist validation
+- 🐛 **describe_table schema filtering**: Now properly filters by both schema and table name to avoid returning columns from tables with same name in different schemas
+
+### Changed
+- 🔒 **Improved SP security filtering**: Instead of blocking all `sp_` and `xp_` prefixes, now uses a more granular approach with explicit dangerous/safe lists for system procedures
+
+### Security
+- Added `MSSQL_WHITELIST_PROCEDURES` environment variable for granular control over which stored procedures can be executed via `execute_procedure` tool
+- Dangerous system procedures (`xp_cmdshell`, `sp_configure`, `sp_executesql`, etc.) are explicitly blocked even if they bypass other checks
+
+---
+
+## [Previous Unreleased]
+
+### Added
 - 🔐 **Windows Integrated Authentication (SSPI) support**: Added `MSSQL_AUTH` environment variable to allow selection of authentication mode; supports `sql` (default) and `integrated`/`windows` (SSPI) for Windows-based integrated authentication. When `MSSQL_AUTH=integrated` the server will build a connection string with `integrated security=SSPI` and will not require `MSSQL_USER` or `MSSQL_PASSWORD`.
   - `MSSQL_DATABASE` is now **optional** with integrated authentication - if omitted, connects to the Windows user's default database
   - Supports local servers (`localhost`, `.`, `(local)`) and remote domain servers

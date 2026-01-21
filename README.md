@@ -388,8 +388,23 @@ go run debug-connection.go
 Use `main.go` as an MCP server with Claude Desktop:
 
 **Available Tools:**
-- `get_database_info`: Check connection status
-- `query_database`: Execute SQL queries securely
+| Tool | Description |
+|------|-------------|
+| `get_database_info` | Check connection status, encryption, and access mode |
+| `query_database` | Execute SQL queries securely (prepared statements) |
+| `list_tables` | List all tables and views in the database |
+| `describe_table` | Get column structure (supports `schema.table` format) |
+| `list_databases` | List all user databases on the server |
+| `get_indexes` | Get indexes for a specific table |
+| `get_foreign_keys` | Get FK relationships (incoming and outgoing) |
+| `list_stored_procedures` | List all stored procedures |
+| `execute_procedure` | Execute whitelisted stored procedures |
+
+**Environment Variables for New Features:**
+```bash
+# Whitelist stored procedures for execute_procedure tool
+MSSQL_WHITELIST_PROCEDURES="sp_GetCustomerOrders,sp_GenerateReport"
+```
 
 ### 💻 Claude Code (CLI Tool)  
 Use `claude-code/db-connector.go` directly with Claude Code:
