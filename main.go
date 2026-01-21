@@ -288,13 +288,52 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 			dangerousKeywords := []string{
 				"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
 				"TRUNCATE", "MERGE", "EXEC", "EXECUTE", "CALL",
-				"BULK", "BCP", "xp_", "sp_",
+				"BULK", "BCP",
+			}
+
+			// Dangerous system procedures (block these)
+			dangerousSPs := []string{
+				"XP_CMDSHELL", "XP_REGREAD", "XP_REGWRITE", "XP_FILEEXIST",
+				"XP_DIRTREE", "XP_FIXEDDRIVES", "XP_SERVICECONTROL",
+				"SP_CONFIGURE", "SP_ADDLOGIN", "SP_DROPLOGIN",
+				"SP_ADDSRVROLEMEMBER", "SP_DROPSRVROLEMEMBER",
+				"SP_ADDROLEMEMBER", "SP_DROPROLEMEMBER",
+				"SP_EXECUTESQL", "SP_OACREATE", "SP_OAMETHOD",
+			}
+
+			// Safe read-only system procedures (allow these)
+			safeSPs := []string{
+				"SP_HELP", "SP_HELPTEXT", "SP_HELPINDEX", "SP_HELPCONSTRAINT",
+				"SP_COLUMNS", "SP_TABLES", "SP_STORED_PROCEDURES",
+				"SP_FKEYS", "SP_PKEYS", "SP_STATISTICS",
+				"SP_DATABASES", "SP_HELPDB",
 			}
 
 			queryUpper := strings.ToUpper(query)
 			for _, keyword := range dangerousKeywords {
 				if strings.Contains(queryUpper, keyword) {
 					return fmt.Errorf("read-only mode: query contains forbidden operation '%s'", keyword)
+				}
+			}
+
+			// Check for dangerous SPs
+			for _, sp := range dangerousSPs {
+				if strings.Contains(queryUpper, sp) {
+					return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
+				}
+			}
+
+			// If query contains SP_ or XP_, verify it's in the safe list
+			if strings.Contains(queryUpper, "SP_") || strings.Contains(queryUpper, "XP_") {
+				isSafe := false
+				for _, safeSP := range safeSPs {
+					if strings.Contains(queryUpper, safeSP) {
+						isSafe = true
+						break
+					}
+				}
+				if !isSafe {
+					return fmt.Errorf("read-only mode: system procedure not in allowed list")
 				}
 			}
 
@@ -330,17 +369,17 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 	tablesFound := make(map[string]bool) // Use map to avoid duplicates
 
 	// Regex patterns to detect table names in various contexts
-	// Note: These are basic patterns and may not catch all edge cases
+	// Supports: table, [table], schema.table, [schema].[table]
 	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bFROM\s+(\[?[\w]+\]?)`),             // FROM table
-		regexp.MustCompile(`(?i)\bJOIN\s+(\[?[\w]+\]?)`),             // JOIN table
-		regexp.MustCompile(`(?i)\bINTO\s+(\[?[\w]+\]?)`),             // INSERT INTO table
-		regexp.MustCompile(`(?i)\bUPDATE\s+(\[?[\w]+\]?)`),           // UPDATE table
-		regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(\[?[\w]+\]?)`),    // DELETE FROM table
-		regexp.MustCompile(`(?i)\bDELETE\s+(\[?[\w]+\]?)\s+FROM`),    // DELETE table FROM (SQL Server syntax)
-		regexp.MustCompile(`(?i)\bTABLE\s+(\[?[\w]+\]?)`),            // CREATE/DROP TABLE
-		regexp.MustCompile(`(?i)\bVIEW\s+(\[?[\w]+\]?)`),             // CREATE/DROP VIEW
-		regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(\[?[\w]+\]?)`), // TRUNCATE TABLE
+		regexp.MustCompile(`(?i)\bFROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // FROM [schema.]table
+		regexp.MustCompile(`(?i)\bJOIN\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // JOIN [schema.]table
+		regexp.MustCompile(`(?i)\bINTO\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // INSERT INTO [schema.]table
+		regexp.MustCompile(`(?i)\bUPDATE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),           // UPDATE [schema.]table
+		regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),    // DELETE FROM [schema.]table
+		regexp.MustCompile(`(?i)\bDELETE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
+		regexp.MustCompile(`(?i)\bTABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),            // CREATE/DROP TABLE
+		regexp.MustCompile(`(?i)\bVIEW\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // CREATE/DROP VIEW
+		regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`), // TRUNCATE TABLE
 	}
 
 	for _, pattern := range patterns {
@@ -803,6 +842,22 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		}
 
+		// Parse schema.table format or use schema parameter
+		schemaName := "dbo" // default schema
+		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
+			schemaName = schema
+		}
+
+		// Check if table_name contains schema (e.g., "dbo.Clients" or "[dbo].[Clients]")
+		if strings.Contains(tableName, ".") {
+			parts := strings.Split(tableName, ".")
+			if len(parts) == 2 {
+				schemaName = strings.Trim(parts[0], "[]")
+				tableName = strings.Trim(parts[1], "[]")
+			}
+		}
+		tableName = strings.Trim(tableName, "[]")
+
 		query := `
 			SELECT
 				COLUMN_NAME as column_name,
@@ -812,7 +867,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				CHARACTER_MAXIMUM_LENGTH as max_length,
 				ORDINAL_POSITION as position
 			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_NAME = @p1
+			WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2
 			ORDER BY ORDINAL_POSITION
 		`
 
@@ -820,7 +875,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		results, err := s.executeSecureQuery(ctx, query, tableName)
+		results, err := s.executeSecureQuery(ctx, query, schemaName, tableName)
 		if err != nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
@@ -879,6 +934,581 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					{
 						Type: "text",
 						Text: fmt.Sprintf("Table structure for '%s':\n%s", tableName, string(resultBytes)),
+					},
+				},
+			},
+		}
+
+	case "list_databases":
+		if s.db == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		query := `
+			SELECT 
+				name as database_name,
+				database_id,
+				create_date,
+				state_desc as state
+			FROM sys.databases
+			WHERE database_id > 4
+			ORDER BY name
+		`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		results, err := s.executeSecureQuery(ctx, query)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error listing databases: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Databases found:\n%s", string(resultBytes)),
+					},
+				},
+			},
+		}
+
+	case "get_indexes":
+		if s.db == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		tableName, ok := params.Arguments["table_name"].(string)
+		if !ok {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Missing or invalid 'table_name' parameter",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		schemaName := "dbo"
+		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
+			schemaName = schema
+		}
+		if strings.Contains(tableName, ".") {
+			parts := strings.Split(tableName, ".")
+			if len(parts) == 2 {
+				schemaName = strings.Trim(parts[0], "[]")
+				tableName = strings.Trim(parts[1], "[]")
+			}
+		}
+		tableName = strings.Trim(tableName, "[]")
+
+		query := `
+			SELECT 
+				i.name as index_name,
+				i.type_desc as index_type,
+				i.is_unique,
+				i.is_primary_key,
+				STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) as columns
+			FROM sys.indexes i
+			INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+			INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+			INNER JOIN sys.tables t ON i.object_id = t.object_id
+			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+			WHERE t.name = @p1 AND s.name = @p2 AND i.name IS NOT NULL
+			GROUP BY i.name, i.type_desc, i.is_unique, i.is_primary_key
+			ORDER BY i.is_primary_key DESC, i.name
+		`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		results, err := s.executeSecureQuery(ctx, query, tableName, schemaName)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error getting indexes: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Indexes for '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
+					},
+				},
+			},
+		}
+
+	case "get_foreign_keys":
+		if s.db == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		tableName, ok := params.Arguments["table_name"].(string)
+		if !ok {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Missing or invalid 'table_name' parameter",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		schemaName := "dbo"
+		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
+			schemaName = schema
+		}
+		if strings.Contains(tableName, ".") {
+			parts := strings.Split(tableName, ".")
+			if len(parts) == 2 {
+				schemaName = strings.Trim(parts[0], "[]")
+				tableName = strings.Trim(parts[1], "[]")
+			}
+		}
+		tableName = strings.Trim(tableName, "[]")
+
+		query := `
+			SELECT 
+				fk.name as constraint_name,
+				OBJECT_SCHEMA_NAME(fk.parent_object_id) as from_schema,
+				OBJECT_NAME(fk.parent_object_id) as from_table,
+				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) as from_column,
+				OBJECT_SCHEMA_NAME(fk.referenced_object_id) as to_schema,
+				OBJECT_NAME(fk.referenced_object_id) as to_table,
+				COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) as to_column,
+				fk.delete_referential_action_desc as on_delete,
+				fk.update_referential_action_desc as on_update
+			FROM sys.foreign_keys fk
+			INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+			INNER JOIN sys.tables t ON fk.parent_object_id = t.object_id
+			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+			WHERE (t.name = @p1 AND s.name = @p2)
+			   OR (OBJECT_NAME(fk.referenced_object_id) = @p1 AND OBJECT_SCHEMA_NAME(fk.referenced_object_id) = @p2)
+			ORDER BY fk.name
+		`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		results, err := s.executeSecureQuery(ctx, query, tableName, schemaName)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error getting foreign keys: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Foreign keys for '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
+					},
+				},
+			},
+		}
+
+	case "list_stored_procedures":
+		if s.db == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		schemaFilter := ""
+		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
+			schemaFilter = schema
+		}
+
+		var query string
+		var results []map[string]interface{}
+		var err error
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if schemaFilter != "" {
+			query = `
+				SELECT 
+					SCHEMA_NAME(p.schema_id) as schema_name,
+					p.name as procedure_name,
+					p.create_date,
+					p.modify_date
+				FROM sys.procedures p
+				WHERE SCHEMA_NAME(p.schema_id) = @p1
+				ORDER BY schema_name, procedure_name
+			`
+			results, err = s.executeSecureQuery(ctx, query, schemaFilter)
+		} else {
+			query = `
+				SELECT 
+					SCHEMA_NAME(p.schema_id) as schema_name,
+					p.name as procedure_name,
+					p.create_date,
+					p.modify_date
+				FROM sys.procedures p
+				ORDER BY schema_name, procedure_name
+			`
+			results, err = s.executeSecureQuery(ctx, query)
+		}
+
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error listing stored procedures: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Stored procedures found:\n%s", string(resultBytes)),
+					},
+				},
+			},
+		}
+
+	case "execute_procedure":
+		if s.db == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		procName, ok := params.Arguments["procedure_name"].(string)
+		if !ok || procName == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Missing or invalid 'procedure_name' parameter",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Check whitelist
+		whitelistEnv := os.Getenv("MSSQL_WHITELIST_PROCEDURES")
+		if whitelistEnv == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: No stored procedures are whitelisted. Set MSSQL_WHITELIST_PROCEDURES environment variable.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		allowedProcs := strings.Split(whitelistEnv, ",")
+		procAllowed := false
+		procNameLower := strings.ToLower(strings.TrimSpace(procName))
+		for _, allowed := range allowedProcs {
+			if strings.ToLower(strings.TrimSpace(allowed)) == procNameLower {
+				procAllowed = true
+				break
+			}
+		}
+
+		if !procAllowed {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error: Stored procedure '%s' is not in the whitelist. Allowed: %s", procName, whitelistEnv),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Parse parameters if provided
+		var procParams map[string]interface{}
+		if paramsJSON, ok := params.Arguments["parameters"].(string); ok && paramsJSON != "" {
+			if err := json.Unmarshal([]byte(paramsJSON), &procParams); err != nil {
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{
+								Type: "text",
+								Text: fmt.Sprintf("Error: Invalid JSON in parameters: %v", err),
+							},
+						},
+						IsError: true,
+					},
+				}
+			}
+		}
+
+		// Build EXEC statement with parameters
+		var queryBuilder strings.Builder
+		queryBuilder.WriteString("EXEC ")
+		queryBuilder.WriteString(procName)
+
+		var args []interface{}
+		if len(procParams) > 0 {
+			queryBuilder.WriteString(" ")
+			paramStrings := make([]string, 0, len(procParams))
+			i := 1
+			for paramName, paramValue := range procParams {
+				paramStrings = append(paramStrings, fmt.Sprintf("@%s = @p%d", paramName, i))
+				args = append(args, paramValue)
+				i++
+			}
+			queryBuilder.WriteString(strings.Join(paramStrings, ", "))
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		results, err := s.executeSecureQuery(ctx, queryBuilder.String(), args...)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error executing procedure '%s': %v", procName, err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Procedure '%s' executed successfully:\n%s", procName, string(resultBytes)),
 					},
 				},
 			},
@@ -963,10 +1593,91 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Properties: map[string]Property{
 						"table_name": {
 							Type:        "string",
-							Description: "Name of the table to describe",
+							Description: "Name of the table to describe (can include schema: 'dbo.TableName' or just 'TableName')",
+						},
+						"schema": {
+							Type:        "string",
+							Description: "Schema name (optional, defaults to 'dbo')",
 						},
 					},
 					Required: []string{"table_name"},
+				},
+			},
+			{
+				Name:        "list_databases",
+				Description: "List all databases on the SQL Server instance",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+					Required:   []string{},
+				},
+			},
+			{
+				Name:        "get_indexes",
+				Description: "Get indexes for a specific table",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"table_name": {
+							Type:        "string",
+							Description: "Name of the table (can include schema: 'dbo.TableName')",
+						},
+						"schema": {
+							Type:        "string",
+							Description: "Schema name (optional, defaults to 'dbo')",
+						},
+					},
+					Required: []string{"table_name"},
+				},
+			},
+			{
+				Name:        "get_foreign_keys",
+				Description: "Get foreign key relationships for a specific table",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"table_name": {
+							Type:        "string",
+							Description: "Name of the table (can include schema: 'dbo.TableName')",
+						},
+						"schema": {
+							Type:        "string",
+							Description: "Schema name (optional, defaults to 'dbo')",
+						},
+					},
+					Required: []string{"table_name"},
+				},
+			},
+			{
+				Name:        "list_stored_procedures",
+				Description: "List all stored procedures in the database",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"schema": {
+							Type:        "string",
+							Description: "Filter by schema (optional)",
+						},
+					},
+					Required: []string{},
+				},
+			},
+			{
+				Name:        "execute_procedure",
+				Description: "Execute a whitelisted stored procedure (requires MSSQL_WHITELIST_PROCEDURES env var)",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"procedure_name": {
+							Type:        "string",
+							Description: "Name of the stored procedure to execute",
+						},
+						"parameters": {
+							Type:        "string",
+							Description: "JSON object with parameter names and values (optional)",
+						},
+					},
+					Required: []string{"procedure_name"},
 				},
 			},
 		}
