@@ -16,17 +16,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `execute_procedure`: Execute whitelisted stored procedures (requires `MSSQL_WHITELIST_PROCEDURES` env var)
 - 🔐 **Schema support for describe_table**: Now supports `schema.table` format and optional `schema` parameter (defaults to `dbo`)
 - ✅ **Safe system procedures in read-only mode**: Added whitelist of safe read-only system procedures (`sp_help`, `sp_helptext`, `sp_helpindex`, `sp_columns`, `sp_tables`, `sp_fkeys`, `sp_pkeys`, `sp_databases`, etc.) that are now allowed in read-only mode
+- 🧪 **New tests**: `TestProcedureNameValidation` for stored procedure name sanitization, `TestPerformanceOptimizations` now validates pre-compiled table extraction patterns, and read-only false positive regression tests (`created_at`, `update_count`, `deleted` columns)
 
 ### Fixed
 - 🐛 **Schema detection in table extraction**: Fixed regex patterns to correctly detect `schema.table` and `[schema].[table]` formats in SQL queries for whitelist validation
 - 🐛 **describe_table schema filtering**: Now properly filters by both schema and table name to avoid returning columns from tables with same name in different schemas
+- 🐛 **Test files in wrong directory**: Moved `test/main_test.go` to root package; deleted duplicate `test/main_permissions_test.go`. Tests now compile and run correctly
+- 🐛 **Wrong expected tools count in tests**: `TestMCPToolsList` now expects all 9 tools instead of the outdated count of 4
+- 🐛 **Read-only validation false positives**: `validateReadOnlyQuery` now uses word-boundary regex (`\bINSERT\b`, `\bUPDATE\b`, etc.) instead of `strings.Contains`. Queries like `SELECT created_at FROM t` or `SELECT update_count FROM t` are no longer incorrectly blocked
 
 ### Changed
 - 🔒 **Improved SP security filtering**: Instead of blocking all `sp_` and `xp_` prefixes, now uses a more granular approach with explicit dangerous/safe lists for system procedures
+- ⚡ **Pre-compiled table extraction regexes**: Moved 9 regex patterns from `extractAllTablesFromQuery` to package-level `tableExtractionPatterns` var, avoiding recompilation on every call
+- 🔒 **Reduced env var logging exposure**: Replaced blanket logging of all `MSSQL_*` environment variables with an explicit safe-list (`MSSQL_SERVER`, `MSSQL_DATABASE`, `MSSQL_PORT`, `MSSQL_AUTH`, `MSSQL_READ_ONLY`, `MSSQL_WHITELIST_TABLES`, `DEVELOPER_MODE`). `MSSQL_PASSWORD` and `MSSQL_CONNECTION_STRING` are no longer logged
 
 ### Security
 - Added `MSSQL_WHITELIST_PROCEDURES` environment variable for granular control over which stored procedures can be executed via `execute_procedure` tool
 - Dangerous system procedures (`xp_cmdshell`, `sp_configure`, `sp_executesql`, etc.) are explicitly blocked even if they bypass other checks
+- 🔒 **Race condition on `server.db` fixed**: Added `sync.RWMutex` to `MCPMSSQLServer` with `getDB()`/`setDB()` accessors. The database connection is now set from the background goroutine and read from request handlers without data races
+- 🔒 **Custom connection string validation**: `MSSQL_CONNECTION_STRING` is now validated — warns in production if `encrypt=false`, `encrypt` is missing, or `trustservercertificate=true`. Default timeouts (`connection timeout=30;command timeout=30`) are appended if absent
+- 🔒 **Procedure name sanitization**: `execute_procedure` now validates procedure names with regex `^[\w.\[\]]+$` before string concatenation into `EXEC` statement, rejecting names with semicolons, spaces, quotes, or other injection vectors
+- 🔧 **Go 1.24.11 recommended**: Addresses GO-2025-4175 and GO-2025-4155 (`crypto/x509` vulnerabilities in wildcard DNS name constraints and host certificate error printing)
 
 ---
 

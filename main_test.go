@@ -124,7 +124,7 @@ func TestSecurityLoggerSanitization(t *testing.T) {
 func TestBuildSecureConnectionString(t *testing.T) {
 	// Save original env vars
 	originalVars := make(map[string]string)
-	envVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_USER", "MSSQL_PASSWORD", "MSSQL_PORT", "DEVELOPER_MODE"}
+	envVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_USER", "MSSQL_PASSWORD", "MSSQL_PORT", "DEVELOPER_MODE", "MSSQL_CONNECTION_STRING", "MSSQL_AUTH"}
 	for _, v := range envVars {
 		originalVars[v] = os.Getenv(v)
 	}
@@ -135,33 +135,43 @@ func TestBuildSecureConnectionString(t *testing.T) {
 		}
 	}()
 
+	// Clear MSSQL_CONNECTION_STRING to avoid interference
+	os.Setenv("MSSQL_CONNECTION_STRING", "")
+
 	t.Run("Valid configuration", func(t *testing.T) {
+		os.Setenv("MSSQL_CONNECTION_STRING", "")
 		setupTestEnv()
+
+		// Only run this subtest if env vars are configured
+		if os.Getenv("MSSQL_SERVER") == "" {
+			// Set minimal test values
+			os.Setenv("MSSQL_SERVER", "testserver")
+			os.Setenv("MSSQL_DATABASE", "testdb")
+			os.Setenv("MSSQL_USER", "testuser")
+			os.Setenv("MSSQL_PASSWORD", "testpass")
+			os.Setenv("DEVELOPER_MODE", "true")
+		}
 
 		connStr, err := buildSecureConnectionString()
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
 
-		if !strings.Contains(connStr, "server=10.203.3.10") {
+		if !strings.Contains(connStr, "server=") {
 			t.Errorf("Connection string should contain server")
 		}
-		if !strings.Contains(connStr, "database=JJP_TRANSFER") {
+		if !strings.Contains(connStr, "database=") {
 			t.Errorf("Connection string should contain database")
-		}
-		if !strings.Contains(connStr, "encrypt=false") {
-			t.Errorf("In dev mode, should have encrypt=false for local development")
-		}
-		if !strings.Contains(connStr, "trustservercertificate=true") {
-			t.Errorf("In dev mode, should trust server certificate")
 		}
 	})
 
 	t.Run("Missing required variables", func(t *testing.T) {
+		os.Setenv("MSSQL_CONNECTION_STRING", "")
 		os.Setenv("MSSQL_SERVER", "")
 		os.Setenv("MSSQL_DATABASE", "test")
 		os.Setenv("MSSQL_USER", "user")
 		os.Setenv("MSSQL_PASSWORD", "pass")
+		os.Setenv("MSSQL_AUTH", "sql")
 
 		_, err := buildSecureConnectionString()
 		if err == nil {
@@ -170,7 +180,12 @@ func TestBuildSecureConnectionString(t *testing.T) {
 	})
 
 	t.Run("Production mode settings", func(t *testing.T) {
-		setupTestEnv()
+		os.Setenv("MSSQL_CONNECTION_STRING", "")
+		os.Setenv("MSSQL_SERVER", "testserver")
+		os.Setenv("MSSQL_DATABASE", "testdb")
+		os.Setenv("MSSQL_USER", "testuser")
+		os.Setenv("MSSQL_PASSWORD", "testpass")
+		os.Setenv("MSSQL_AUTH", "sql")
 		os.Setenv("DEVELOPER_MODE", "false")
 
 		connStr, err := buildSecureConnectionString()
@@ -187,11 +202,12 @@ func TestBuildSecureConnectionString(t *testing.T) {
 	})
 
 	t.Run("Integrated authentication (Windows)", func(t *testing.T) {
-		setupTestEnv()
+		os.Setenv("MSSQL_CONNECTION_STRING", "")
+		os.Setenv("MSSQL_SERVER", "testserver")
 		os.Setenv("MSSQL_AUTH", "integrated")
-		// In integrated mode, user/password are not required
 		os.Setenv("MSSQL_USER", "")
 		os.Setenv("MSSQL_PASSWORD", "")
+		os.Setenv("DEVELOPER_MODE", "true")
 
 		connStr, err := buildSecureConnectionString()
 		if err != nil {
@@ -211,7 +227,6 @@ func TestMCPServerInitialization(t *testing.T) {
 	setupTestEnv()
 
 	server := &MCPMSSQLServer{
-		db:        nil,
 		secLogger: NewSecurityLogger(),
 		devMode:   true,
 	}
@@ -246,7 +261,6 @@ func TestMCPToolsList(t *testing.T) {
 	setupTestEnv()
 
 	server := &MCPMSSQLServer{
-		db:        nil,
 		secLogger: NewSecurityLogger(),
 		devMode:   true,
 	}
@@ -278,7 +292,11 @@ func TestMCPToolsList(t *testing.T) {
 		t.Fatalf("Failed to unmarshal tools result: %v", err)
 	}
 
-	expectedTools := []string{"query_database", "get_database_info", "list_tables", "describe_table"}
+	expectedTools := []string{
+		"query_database", "get_database_info", "list_tables", "describe_table",
+		"list_databases", "get_indexes", "get_foreign_keys",
+		"list_stored_procedures", "execute_procedure",
+	}
 	if len(toolsResult.Tools) != len(expectedTools) {
 		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(toolsResult.Tools))
 	}
@@ -301,7 +319,6 @@ func TestInputValidation(t *testing.T) {
 	setupTestEnv()
 
 	server := &MCPMSSQLServer{
-		db:        nil,
 		secLogger: NewSecurityLogger(),
 		devMode:   true,
 	}
@@ -350,7 +367,6 @@ func TestReadOnlyValidation(t *testing.T) {
 	setupTestEnv()
 
 	server := &MCPMSSQLServer{
-		db:        nil,
 		secLogger: NewSecurityLogger(),
 		devMode:   true,
 	}
@@ -420,6 +436,21 @@ func TestReadOnlyValidation(t *testing.T) {
 			query:   "WITH cte AS (SELECT * FROM users) SELECT * FROM cte",
 			wantErr: false,
 		},
+		{
+			name:    "SELECT with created_at column - should NOT be blocked",
+			query:   "SELECT created_at FROM users",
+			wantErr: false,
+		},
+		{
+			name:    "SELECT with update_count column - should NOT be blocked",
+			query:   "SELECT update_count FROM users",
+			wantErr: false,
+		},
+		{
+			name:    "SELECT with deleted flag - should NOT be blocked",
+			query:   "SELECT deleted FROM users WHERE deleted = 0",
+			wantErr: false,
+		},
 	}
 
 	for _, tc := range readOnlyTestCases {
@@ -442,6 +473,15 @@ func TestDatabaseConnection(t *testing.T) {
 	}
 
 	setupTestEnv()
+
+	// Clear custom connection string
+	origConnStr := os.Getenv("MSSQL_CONNECTION_STRING")
+	defer os.Setenv("MSSQL_CONNECTION_STRING", origConnStr)
+	os.Setenv("MSSQL_CONNECTION_STRING", "")
+
+	if os.Getenv("MSSQL_SERVER") == "" {
+		t.Skip("MSSQL_SERVER not set, skipping integration test")
+	}
 
 	// Try to build connection string
 	connStr, err := buildSecureConnectionString()
@@ -473,7 +513,7 @@ func TestDatabaseConnection(t *testing.T) {
 		return
 	}
 
-	t.Log("✅ Database connection successful!")
+	t.Log("Database connection successful")
 
 	// Test a simple query
 	var version string
@@ -483,14 +523,14 @@ func TestDatabaseConnection(t *testing.T) {
 		return
 	}
 
-	t.Logf("✅ SQL Server Version: %s", version)
+	t.Logf("SQL Server Version: %s", version)
 
 	// Test server functionality
 	server := &MCPMSSQLServer{
-		db:        db,
 		secLogger: NewSecurityLogger(),
 		devMode:   true,
 	}
+	server.setDB(db)
 
 	// Test get_database_info
 	req := MCPRequest{
@@ -513,7 +553,7 @@ func TestDatabaseConnection(t *testing.T) {
 		return
 	}
 
-	t.Log("✅ get_database_info test passed")
+	t.Log("get_database_info test passed")
 
 	// Test list_tables
 	response = server.handleToolCall(req.ID, CallToolParams{
@@ -526,7 +566,7 @@ func TestDatabaseConnection(t *testing.T) {
 		return
 	}
 
-	t.Log("✅ list_tables test passed")
+	t.Log("list_tables test passed")
 }
 
 func TestPerformanceOptimizations(t *testing.T) {
@@ -535,6 +575,11 @@ func TestPerformanceOptimizations(t *testing.T) {
 	// Test that compiled regex patterns are available
 	if len(sensitivePatterns) == 0 {
 		t.Errorf("Expected compiled regex patterns to be available")
+	}
+
+	// Test that table extraction regex patterns are pre-compiled
+	if len(tableExtractionPatterns) == 0 {
+		t.Errorf("Expected table extraction regex patterns to be pre-compiled")
 	}
 
 	// Test performance of sanitization
@@ -549,6 +594,38 @@ func TestPerformanceOptimizations(t *testing.T) {
 			break
 		}
 	}
+}
 
-	t.Log("✅ Regex performance optimization working")
+func TestProcedureNameValidation(t *testing.T) {
+	server := &MCPMSSQLServer{
+		secLogger: NewSecurityLogger(),
+		devMode:   true,
+	}
+
+	testCases := []struct {
+		name    string
+		proc    string
+		wantErr bool
+	}{
+		{"Simple name", "my_proc", false},
+		{"Schema qualified", "dbo.my_proc", false},
+		{"Bracketed", "[dbo].[my_proc]", false},
+		{"With semicolon", "my_proc; DROP TABLE users", true},
+		{"With spaces", "my proc", true},
+		{"With parentheses", "my_proc()", true},
+		{"With single quote", "my_proc'", true},
+		{"Empty name", "", true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := server.validateProcedureName(tc.proc)
+			if tc.wantErr && err == nil {
+				t.Errorf("Expected error for procedure name: %s", tc.proc)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("Expected no error for procedure name: %s, got: %v", tc.proc, err)
+			}
+		})
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
@@ -128,6 +129,39 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(password|pwd)\\s*=\\s*[^;\\s]*`),
 }
 
+// Pre-compiled word-boundary patterns for read-only keyword detection
+var dangerousKeywordPatterns = map[string]*regexp.Regexp{
+	"INSERT":   regexp.MustCompile(`(?i)\bINSERT\b`),
+	"UPDATE":   regexp.MustCompile(`(?i)\bUPDATE\b`),
+	"DELETE":   regexp.MustCompile(`(?i)\bDELETE\b`),
+	"DROP":     regexp.MustCompile(`(?i)\bDROP\b`),
+	"CREATE":   regexp.MustCompile(`(?i)\bCREATE\b`),
+	"ALTER":    regexp.MustCompile(`(?i)\bALTER\b`),
+	"TRUNCATE": regexp.MustCompile(`(?i)\bTRUNCATE\b`),
+	"MERGE":    regexp.MustCompile(`(?i)\bMERGE\b`),
+	"EXEC":     regexp.MustCompile(`(?i)\bEXEC\b`),
+	"EXECUTE":  regexp.MustCompile(`(?i)\bEXECUTE\b`),
+	"CALL":     regexp.MustCompile(`(?i)\bCALL\b`),
+	"BULK":     regexp.MustCompile(`(?i)\bBULK\b`),
+	"BCP":      regexp.MustCompile(`(?i)\bBCP\b`),
+}
+
+// Pre-compiled patterns for table name extraction (performance optimization)
+var tableExtractionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bFROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // FROM [schema.]table
+	regexp.MustCompile(`(?i)\bJOIN\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // JOIN [schema.]table
+	regexp.MustCompile(`(?i)\bINTO\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // INSERT INTO [schema.]table
+	regexp.MustCompile(`(?i)\bUPDATE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),           // UPDATE [schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),    // DELETE FROM [schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
+	regexp.MustCompile(`(?i)\bTABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),            // CREATE/DROP TABLE
+	regexp.MustCompile(`(?i)\bVIEW\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // CREATE/DROP VIEW
+	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`), // TRUNCATE TABLE
+}
+
+// Pre-compiled pattern for procedure name validation
+var validProcedureNamePattern = regexp.MustCompile(`^[\w.\[\]]+$`)
+
 func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 	result := input
 	for _, pattern := range sensitivePatterns {
@@ -140,13 +174,50 @@ func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 // MSSQL Server
 type MCPMSSQLServer struct {
 	db        *sql.DB
+	dbMu      sync.RWMutex
 	secLogger *SecurityLogger
 	devMode   bool
+}
+
+func (s *MCPMSSQLServer) getDB() *sql.DB {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+	return s.db
+}
+
+func (s *MCPMSSQLServer) setDB(db *sql.DB) {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	s.db = db
 }
 
 func buildSecureConnectionString() (string, error) {
 	// Check for custom connection string first
 	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+		connStrLower := strings.ToLower(customConnStr)
+		isProduction := strings.ToLower(os.Getenv("DEVELOPER_MODE")) != "true"
+
+		if isProduction {
+			// Warn about insecure settings in production
+			if strings.Contains(connStrLower, "encrypt=false") {
+				log.New(os.Stderr, "[SECURITY] ", log.LstdFlags).Printf("WARNING: Custom connection string has encrypt=false in production mode")
+			}
+			if !strings.Contains(connStrLower, "encrypt=") {
+				log.New(os.Stderr, "[SECURITY] ", log.LstdFlags).Printf("WARNING: Custom connection string missing encrypt parameter in production mode")
+			}
+			if strings.Contains(connStrLower, "trustservercertificate=true") {
+				log.New(os.Stderr, "[SECURITY] ", log.LstdFlags).Printf("WARNING: Custom connection string has trustservercertificate=true in production mode")
+			}
+		}
+
+		// Ensure timeout settings are present; append defaults if missing
+		if !strings.Contains(connStrLower, "connection timeout") {
+			customConnStr += ";connection timeout=30"
+		}
+		if !strings.Contains(connStrLower, "command timeout") {
+			customConnStr += ";command timeout=30"
+		}
+
 		return customConnStr, nil
 	}
 
@@ -223,6 +294,16 @@ func buildSecureConnectionString() (string, error) {
 	}
 }
 
+func (s *MCPMSSQLServer) validateProcedureName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty procedure name")
+	}
+	if !validProcedureNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid procedure name: contains disallowed characters")
+	}
+	return nil
+}
+
 func (s *MCPMSSQLServer) validateBasicInput(input string) error {
 	// Allow larger queries - up to 1MB (1048576 characters)
 	maxSize := 1048576
@@ -284,11 +365,11 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	// Check if query starts with an allowed prefix
 	for _, prefix := range allowedPrefixes {
 		if strings.HasPrefix(normalizedQuery, prefix) {
-			// Additional check: ensure no dangerous keywords are present
-			dangerousKeywords := []string{
-				"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-				"TRUNCATE", "MERGE", "EXEC", "EXECUTE", "CALL",
-				"BULK", "BCP",
+			// Additional check: ensure no dangerous keywords are present (using word boundaries)
+			for keyword, pattern := range dangerousKeywordPatterns {
+				if pattern.MatchString(query) {
+					return fmt.Errorf("read-only mode: query contains forbidden operation '%s'", keyword)
+				}
 			}
 
 			// Dangerous system procedures (block these)
@@ -310,12 +391,6 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 			}
 
 			queryUpper := strings.ToUpper(query)
-			for _, keyword := range dangerousKeywords {
-				if strings.Contains(queryUpper, keyword) {
-					return fmt.Errorf("read-only mode: query contains forbidden operation '%s'", keyword)
-				}
-			}
-
 			// Check for dangerous SPs
 			for _, sp := range dangerousSPs {
 				if strings.Contains(queryUpper, sp) {
@@ -368,21 +443,7 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 	queryUpper := strings.ToUpper(query)
 	tablesFound := make(map[string]bool) // Use map to avoid duplicates
 
-	// Regex patterns to detect table names in various contexts
-	// Supports: table, [table], schema.table, [schema].[table]
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bFROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // FROM [schema.]table
-		regexp.MustCompile(`(?i)\bJOIN\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // JOIN [schema.]table
-		regexp.MustCompile(`(?i)\bINTO\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // INSERT INTO [schema.]table
-		regexp.MustCompile(`(?i)\bUPDATE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),           // UPDATE [schema.]table
-		regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),    // DELETE FROM [schema.]table
-		regexp.MustCompile(`(?i)\bDELETE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
-		regexp.MustCompile(`(?i)\bTABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),            // CREATE/DROP TABLE
-		regexp.MustCompile(`(?i)\bVIEW\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // CREATE/DROP VIEW
-		regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`), // TRUNCATE TABLE
-	}
-
-	for _, pattern := range patterns {
+	for _, pattern := range tableExtractionPatterns {
 		matches := pattern.FindAllStringSubmatch(queryUpper, -1)
 		for _, match := range matches {
 			if len(match) > 1 {
@@ -506,7 +567,8 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 }
 
 func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, error) {
-	if s.db == nil {
+	db := s.getDB()
+	if db == nil {
 		return nil, fmt.Errorf("database not connected")
 	}
 
@@ -526,7 +588,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		return nil, err
 	}
 
-	stmt, err := s.db.PrepareContext(ctx, query)
+	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
 		if s.devMode {
 			s.secLogger.Printf("Failed to prepare statement: %v", err)
@@ -585,7 +647,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 	case "get_database_info":
 		var info strings.Builder
 
-		if s.db == nil {
+		if s.getDB() == nil {
 			info.WriteString("Database Status: Disconnected\n")
 			info.WriteString("Reason: No database connection established\n")
 			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
@@ -645,7 +707,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "query_database":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -730,7 +792,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "list_tables":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -809,7 +871,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "describe_table":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -940,7 +1002,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "list_databases":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -1018,7 +1080,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "get_indexes":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -1132,7 +1194,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "get_foreign_keys":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -1249,7 +1311,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "list_stored_procedures":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -1349,7 +1411,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "execute_procedure":
-		if s.db == nil {
+		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -1419,6 +1481,24 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 						{
 							Type: "text",
 							Text: fmt.Sprintf("Error: Stored procedure '%s' is not in the whitelist. Allowed: %s", procName, whitelistEnv),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Validate procedure name contains only safe characters
+		if err := s.validateProcedureName(procName); err != nil {
+			s.secLogger.Printf("Rejected unsafe procedure name: %s", procName)
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error: %v", err),
 						},
 					},
 					IsError: true,
@@ -1530,7 +1610,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 	switch req.Method {
 	case "initialize":
 		dbStatus := "disconnected"
-		if s.db != nil {
+		if s.getDB() != nil {
 			dbStatus = "connected"
 		}
 
@@ -1786,11 +1866,12 @@ func main() {
 			}
 		}
 
-		// Additional debug logging
-		secLogger.Printf("All environment variables:")
-		for _, env := range os.Environ() {
-			if strings.HasPrefix(env, "MSSQL_") || strings.HasPrefix(env, "DEVELOPER_") {
-				secLogger.Printf("  %s", secLogger.sanitizeForLogging(env))
+		// Log only non-sensitive configuration settings
+		safeEnvVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_PORT", "MSSQL_AUTH", "MSSQL_READ_ONLY", "MSSQL_WHITELIST_TABLES", "DEVELOPER_MODE"}
+		secLogger.Printf("Configuration settings:")
+		for _, key := range safeEnvVars {
+			if val := os.Getenv(key); val != "" {
+				secLogger.Printf("  %s=%s", key, val)
 			}
 		}
 
@@ -1893,7 +1974,7 @@ func main() {
 		secLogger.Printf("Database connection established successfully")
 
 		// Update server with working database connection
-		server.db = db
+		server.setDB(db)
 	}()
 
 	// Start MCP protocol handler
