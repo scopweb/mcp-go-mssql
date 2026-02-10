@@ -110,3 +110,10 @@ final-test-windows-auth.ps1
 
 # Test executables
 test/*.exe
+
+# =============================================================================
+# WEBSITE (Astro Starlight)
+# =============================================================================
+website/node_modules/
+website/dist/
+website/.astro/

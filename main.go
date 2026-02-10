@@ -328,6 +328,56 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 		return nil // Read-only mode disabled, allow all queries
 	}
 
+	// If whitelist is configured, allow modifications to pass through to validateTablePermissions()
+	// This enables the use case: READ_ONLY=true + WHITELIST=table1,table2
+	// where only whitelisted tables can be modified
+	whitelist := s.getWhitelistedTables()
+	if len(whitelist) > 0 {
+		// Whitelist is configured - let validateTablePermissions() handle modification permissions
+		// We still need to block dangerous operations though
+		normalizedQuery := strings.TrimSpace(strings.ToUpper(query))
+
+		// Remove leading comments
+		for strings.HasPrefix(normalizedQuery, "--") || strings.HasPrefix(normalizedQuery, "/*") || strings.HasPrefix(normalizedQuery, " ") || strings.HasPrefix(normalizedQuery, "\t") || strings.HasPrefix(normalizedQuery, "\n") || strings.HasPrefix(normalizedQuery, "\r") {
+			if strings.HasPrefix(normalizedQuery, "--") {
+				if idx := strings.Index(normalizedQuery, "\n"); idx != -1 {
+					normalizedQuery = strings.TrimSpace(normalizedQuery[idx+1:])
+				} else {
+					break
+				}
+			} else if strings.HasPrefix(normalizedQuery, "/*") {
+				if idx := strings.Index(normalizedQuery, "*/"); idx != -1 {
+					normalizedQuery = strings.TrimSpace(normalizedQuery[idx+2:])
+				} else {
+					break
+				}
+			} else {
+				normalizedQuery = strings.TrimSpace(normalizedQuery[1:])
+			}
+		}
+
+		// Block dangerous system procedures even with whitelist
+		dangerousSPs := []string{
+			"XP_CMDSHELL", "XP_REGREAD", "XP_REGWRITE", "XP_FILEEXIST",
+			"XP_DIRTREE", "XP_FIXEDDRIVES", "XP_SERVICECONTROL",
+			"SP_CONFIGURE", "SP_ADDLOGIN", "SP_DROPLOGIN",
+			"SP_ADDSRVROLEMEMBER", "SP_DROPSRVROLEMEMBER",
+			"SP_ADDROLEMEMBER", "SP_DROPROLEMEMBER",
+			"SP_EXECUTESQL", "SP_OACREATE", "SP_OAMETHOD",
+		}
+
+		queryUpper := strings.ToUpper(query)
+		for _, sp := range dangerousSPs {
+			if strings.Contains(queryUpper, sp) {
+				return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
+			}
+		}
+
+		// Allow query to proceed to validateTablePermissions() for whitelist check
+		return nil
+	}
+
+	// No whitelist configured - enforce strict read-only mode
 	// Normalize query for checking
 	normalizedQuery := strings.TrimSpace(strings.ToUpper(query))
 
@@ -678,18 +728,25 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 			// Show read-only status and whitelist
 			if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true" {
-				info.WriteString("Access Mode: READ-ONLY (SELECT queries only)\n")
-
 				// Show whitelist if configured
 				whitelist := s.getWhitelistedTables()
 				if len(whitelist) > 0 {
+					info.WriteString("Access Mode: READ-ONLY with whitelist exceptions\n")
 					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
-					info.WriteString("Note: Only whitelisted tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP)\n")
+					info.WriteString("Note: SELECT allowed on all tables. Modifications (INSERT/UPDATE/DELETE/CREATE/DROP) only allowed on whitelisted tables.\n")
 				} else {
+					info.WriteString("Access Mode: READ-ONLY (SELECT queries only)\n")
 					info.WriteString("Whitelisted Tables: NONE (all modifications blocked)\n")
 				}
 			} else {
-				info.WriteString("Access Mode: Full access\n")
+				whitelist := s.getWhitelistedTables()
+				if len(whitelist) > 0 {
+					info.WriteString("Access Mode: Whitelist-protected (modifications restricted)\n")
+					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
+					info.WriteString("Note: Only whitelisted tables can be modified. All other tables are read-only.\n")
+				} else {
+					info.WriteString("Access Mode: Full access\n")
+				}
 			}
 		}
 
