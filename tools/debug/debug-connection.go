@@ -15,10 +15,10 @@ func main() {
 	fmt.Println("=== MCP Go MSSQL Connection Debug Tool ===")
 
 	// Read environment variables or use defaults for testing
-	server := getEnvOrDefault("MSSQL_SERVER", "SERVER-GDP")
-	database := getEnvOrDefault("MSSQL_DATABASE", "GDPA")
+	server := getEnvOrDefault("MSSQL_SERVER", "localhost")
+	database := getEnvOrDefault("MSSQL_DATABASE", "master")
 	user := getEnvOrDefault("MSSQL_USER", "sa")
-	password := getEnvOrDefault("MSSQL_PASSWORD", "aidima")
+	password := getEnvOrDefault("MSSQL_PASSWORD", "YourPassword")
 	auth := strings.ToLower(getEnvOrDefault("MSSQL_AUTH", "sql"))
 	port := getEnvOrDefault("MSSQL_PORT", "1433")
 	encrypt := getEnvOrDefault("MSSQL_ENCRYPT", "false")
