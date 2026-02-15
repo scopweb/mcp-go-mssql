@@ -41,7 +41,7 @@ func buildSecureConnectionString() (string, error) {
 ```json
 {
   "env": {
-    "MSSQL_CONNECTION_STRING": "sqlserver://sa:password@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true",
+    "MSSQL_CONNECTION_STRING": "sqlserver://sa:YourPassword@legacy-server:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true",
     "DEVELOPER_MODE": "true"
   }
 }

@@ -170,7 +170,7 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
       "command": "C:\\path\\to\\mcp-go-mssql.exe",
       "args": [],
       "env": {
-        "MSSQL_CONNECTION_STRING": "sqlserver://sa:password@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true",
+        "MSSQL_CONNECTION_STRING": "sqlserver://sa:YourPassword@legacy-server:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true",
         "DEVELOPER_MODE": "true"
       }
     }
@@ -208,7 +208,7 @@ All database connections use environment variables for security. See `.env.examp
   - Example: `"temp_ai,v_temp_ia"`
   - Enables AI to modify specific tables while protecting production data
   - Validates ALL tables in queries (including JOINs, subqueries, CTEs)
-  - See [WHITELIST_SECURITY.md](WHITELIST_SECURITY.md) for details
+  - See [WHITELIST_SECURITY.md](docs/WHITELIST_SECURITY.md) for details
 - `DEVELOPER_MODE`:
   - `"true"`: Development mode (detailed errors, allows self-signed certificates, disables encryption by default)
   - `"false"`: Production mode (generic errors, strict certificate validation, forces encryption)
@@ -241,7 +241,7 @@ MSSQL_ENCRYPT=true
 DEVELOPER_MODE=true
 
 # Legacy SQL Server (e.g., SQL Server 2008) - Custom Connection String
-MSSQL_CONNECTION_STRING=sqlserver://sa:password@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true
+MSSQL_CONNECTION_STRING=sqlserver://sa:YourPassword@legacy-server:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
 DEVELOPER_MODE=true
 
 # Read-Only Mode (Security Restricted)
@@ -444,6 +444,8 @@ mcp-go-mssql/
 │   ├── AI_USAGE_GUIDE.md           # How to use with Claude/AI ⭐
 │   ├── SECURITY_ANALYSIS.md        # Security assessment
 │   ├── SECURITY_AUDIT_REPORT.md    # Audit report
+│   ├── SECURITY_SUMMARY.md         # Security summary
+│   ├── UPDATE_GO.md                # Go version upgrade guide
 │   ├── WHITELIST_SECURITY.md       # Table whitelist guide
 │   └── ...                         # Other documentation
 ├── scripts/                         # Utility scripts
