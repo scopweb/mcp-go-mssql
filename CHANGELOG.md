@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 🔍 **New `explain_query` tool**: Shows the estimated SQL Server execution plan for a SELECT query **without executing it**. Uses `SET SHOWPLAN_TEXT ON` on a dedicated connection to isolate the session. Always enforces SELECT-only validation (`extractOperation`) regardless of `MSSQL_READ_ONLY` mode. Useful for query performance analysis with Claude.
+
 ### Changed
 - 📦 **Dependency update** (2026-03-06):
   - `github.com/microsoft/go-mssqldb` v1.9.4 → **v1.9.8** (bugfixes and driver improvements)

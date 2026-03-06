@@ -293,7 +293,7 @@ func TestMCPToolsList(t *testing.T) {
 	}
 
 	expectedTools := []string{
-		"query_database", "get_database_info", "explore", "inspect", "execute_procedure",
+		"query_database", "get_database_info", "explore", "inspect", "execute_procedure", "explain_query",
 	}
 	if len(toolsResult.Tools) != len(expectedTools) {
 		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(toolsResult.Tools))
@@ -591,6 +591,59 @@ func TestPerformanceOptimizations(t *testing.T) {
 			t.Errorf("Sanitization failed on iteration %d", i)
 			break
 		}
+	}
+}
+
+func TestExplainQueryValidation(t *testing.T) {
+	server := &MCPMSSQLServer{
+		secLogger: NewSecurityLogger(),
+		devMode:   true,
+	}
+
+	testCases := []struct {
+		name     string
+		query    string
+		wantSELECT bool
+	}{
+		{"Valid SELECT", "SELECT * FROM users", true},
+		{"Valid SELECT with JOIN", "SELECT u.name FROM users u JOIN orders o ON u.id = o.user_id", true},
+		{"INSERT blocked", "INSERT INTO users (name) VALUES ('x')", false},
+		{"UPDATE blocked", "UPDATE users SET name='x'", false},
+		{"DELETE blocked", "DELETE FROM users WHERE id=1", false},
+		{"DROP blocked", "DROP TABLE users", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// explain_query uses extractOperation to enforce SELECT-only
+			op := server.extractOperation(tc.query)
+			isSelect := op == "SELECT"
+			if isSelect != tc.wantSELECT {
+				t.Errorf("query %q: got op=%s (isSelect=%v), want isSelect=%v", tc.query, op, isSelect, tc.wantSELECT)
+			}
+		})
+	}
+
+	// Test that explain_query returns error when DB is not connected
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      "test-explain",
+		Method:  "tools/call",
+		Params:  map[string]interface{}{},
+	}
+	params := CallToolParams{
+		Name:      "explain_query",
+		Arguments: map[string]interface{}{"query": "SELECT 1"},
+	}
+	response := server.handleToolCall(req.ID, params)
+	if response == nil {
+		t.Fatal("Expected response, got nil")
+	}
+	resultBytes, _ := json.Marshal(response.Result)
+	var result CallToolResult
+	json.Unmarshal(resultBytes, &result)
+	if !result.IsError {
+		t.Error("Expected IsError=true when DB is disconnected")
 	}
 }
 
