@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 📦 **Dependency update** (2026-03-06):
+  - `github.com/microsoft/go-mssqldb` v1.9.4 → **v1.9.8** (bugfixes and driver improvements)
+  - `golang.org/x/crypto` v0.45.0 → **v0.48.0** (security patches)
+  - `golang.org/x/text` v0.31.0 → **v0.34.0**
+  - `github.com/golang-jwt/jwt/v5` v5.3.0 → **v5.3.1**
+  - Added `github.com/shopspring/decimal v1.4.0` (new transitive dep from go-mssqldb v1.9.8 for decimal precision)
+  - `govulncheck ./...` → **No vulnerabilities found** after update
+
+---
+
+### Changed
+- ♻️ **Tool API consolidated: 10 → 5 tools** (breaking change for MCP clients):
+  - New `explore` tool replaces `list_tables`, `list_databases`, `list_stored_procedures`, and `search_objects`. Uses `type` parameter: `tables` (default), `databases`, `procedures`, `search`
+  - New `inspect` tool replaces `describe_table`, `get_indexes`, and `get_foreign_keys`. Uses `detail` parameter: `columns` (default), `indexes`, `foreign_keys`, `all`
+  - Kept unchanged: `query_database`, `get_database_info`, `execute_procedure`
+  - Reduces cognitive overhead for LLMs — fewer tool choices, same coverage
+- 🔧 **Go 1.26 upgrade**: Updated `go.mod` from `go 1.24.0 / toolchain go1.24.7` to `go 1.26.0`
+
+### Documentation
+- 📚 **Versioned website docs**: Added collapsed "Versión anterior (v1)" sidebar section preserving old tool pages (`list_tables`, `describe_table`, `list_databases`, `get_indexes`, `get_foreign_keys`, `list_stored_procedures`)
+- Added deprecation banners on all v1 tool pages pointing to the new unified tools
+- New `explore` and `inspect` pages (ES + EN) with "Reemplaza a (v1)" tip notices
+- Updated tool overview/resumen pages (ES + EN) with 5-tool schema table
+
+---
+
 ### Added
+- 🔍 **New `search_objects` tool**: Search SQL objects (tables, views, stored procedures, functions) by name pattern OR by text inside their definition body. Two modes:
+  - `search_in=name` (default): searches `sys.objects` by name using a LIKE pattern — fast single-query alternative to `list_tables` + manual inspection
+  - `search_in=definition`: searches `sys.sql_modules` definition text — finds all procedures/functions/views that reference a specific table, column, or keyword in their source code
+- 🔎 **`filter` parameter for `list_tables`**: Optional name filter (case-insensitive LIKE) to return only tables/views whose name contains the given string (e.g. `filter="Pedido"`)
+
+### Fixed
+- 🐛 **Bug #4: Token overflow — "No se pudo generar completamente la respuesta de Claude"**: `executeSecureQuery` had no row limit, causing `list_tables` (and other tools) to return hundreds of rows as a massive JSON blob that exceeded Claude's context token limit on large databases. Fixed by adding a global `maxQueryRows = 500` constant: all queries are now capped at 500 rows. If truncated, the last result element contains a `_truncated` warning key instructing the LLM to narrow the query with `WHERE` or `TOP`. Documented in `docs/bugs/bug4.md`.
+
+### Changed
+- ⚡ **Global row limit on all queries**: `executeSecureQuery` now stops reading at 500 rows and appends a `_truncated` sentinel row if more were available, preventing token overflows on large result sets
 - 🔧 **New tools for database exploration**:
   - `list_databases`: List all user databases on the SQL Server instance
   - `get_indexes`: Get indexes for a specific table (with schema support)

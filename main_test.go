@@ -293,9 +293,7 @@ func TestMCPToolsList(t *testing.T) {
 	}
 
 	expectedTools := []string{
-		"query_database", "get_database_info", "list_tables", "describe_table",
-		"list_databases", "get_indexes", "get_foreign_keys",
-		"list_stored_procedures", "execute_procedure",
+		"query_database", "get_database_info", "explore", "inspect", "execute_procedure",
 	}
 	if len(toolsResult.Tools) != len(expectedTools) {
 		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(toolsResult.Tools))
@@ -555,18 +553,18 @@ func TestDatabaseConnection(t *testing.T) {
 
 	t.Log("get_database_info test passed")
 
-	// Test list_tables
+	// Test explore (replaces list_tables)
 	response = server.handleToolCall(req.ID, CallToolParams{
-		Name:      "list_tables",
+		Name:      "explore",
 		Arguments: map[string]interface{}{},
 	})
 
 	if response.Error != nil {
-		t.Errorf("list_tables failed: %v", response.Error)
+		t.Errorf("explore failed: %v", response.Error)
 		return
 	}
 
-	t.Log("list_tables test passed")
+	t.Log("explore test passed")
 }
 
 func TestPerformanceOptimizations(t *testing.T) {
