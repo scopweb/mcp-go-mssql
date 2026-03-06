@@ -7,6 +7,14 @@ Todos los cambios relevantes de este proyecto se documentan aquí.
 
 ## Último cambio
 
+### `explore` — nuevo `type=views`
+
+- Lista solo las **vistas** de la base de datos con metadatos enriquecidos: `schema_name`, `view_name`, `check_option`, `is_updatable`, `definition_preview` (300 chars)
+- Soporta parámetro `filter` para filtrar por nombre (LIKE)
+- Complementa `type=tables` que sigue devolviendo tablas y vistas mezcladas
+
+---
+
 ### Nueva herramienta: `explain_query`
 
 - Muestra el **plan de ejecución estimado** de un query SELECT sin ejecutarlo

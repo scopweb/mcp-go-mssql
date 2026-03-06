@@ -361,6 +361,51 @@ func TestInputValidation(t *testing.T) {
 	}
 }
 
+func TestExploreViewsType(t *testing.T) {
+	setupTestEnv()
+
+	server := &MCPMSSQLServer{
+		secLogger: NewSecurityLogger(),
+		devMode:   true,
+	}
+
+	// All explore types should return IsError=true when DB is disconnected
+	exploreTypes := []string{"tables", "views", "databases", "procedures"}
+	for _, exploreType := range exploreTypes {
+		t.Run("type="+exploreType+"_no_db", func(t *testing.T) {
+			params := CallToolParams{
+				Name:      "explore",
+				Arguments: map[string]interface{}{"type": exploreType},
+			}
+			resp := server.handleToolCall("test-id", params)
+			if resp == nil {
+				t.Fatal("Expected response, got nil")
+			}
+			resultBytes, _ := json.Marshal(resp.Result)
+			var result CallToolResult
+			json.Unmarshal(resultBytes, &result)
+			if !result.IsError {
+				t.Errorf("type=%s: expected IsError=true when DB disconnected", exploreType)
+			}
+		})
+	}
+
+	// type=search without pattern should return error even without DB
+	t.Run("type=search_missing_pattern", func(t *testing.T) {
+		params := CallToolParams{
+			Name:      "explore",
+			Arguments: map[string]interface{}{"type": "search"},
+		}
+		resp := server.handleToolCall("test-id", params)
+		resultBytes, _ := json.Marshal(resp.Result)
+		var result CallToolResult
+		json.Unmarshal(resultBytes, &result)
+		if !result.IsError {
+			t.Error("Expected IsError=true when pattern is missing for type=search")
+		}
+	})
+}
+
 func TestReadOnlyValidation(t *testing.T) {
 	setupTestEnv()
 
