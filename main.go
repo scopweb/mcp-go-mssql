@@ -616,6 +616,11 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	return nil
 }
 
+// maxQueryRows limits the number of rows returned by any query to prevent token overflow.
+const maxQueryRows = 500
+
+// executeSecureQuery runs a validated, prepared query and returns up to maxQueryRows rows.
+// If the result is truncated, the last element contains a "_truncated" warning key.
 func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, error) {
 	db := s.getDB()
 	if db == nil {
@@ -666,7 +671,13 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	}
 
 	var results []map[string]interface{}
+	rowCount := 0
+	truncated := false
 	for rows.Next() {
+		if rowCount >= maxQueryRows {
+			truncated = true
+			break
+		}
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
 		for i := range columns {
@@ -687,6 +698,13 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 			}
 		}
 		results = append(results, row)
+		rowCount++
+	}
+
+	if truncated {
+		results = append(results, map[string]interface{}{
+			"_truncated": fmt.Sprintf("Results limited to %d rows. Use WHERE or TOP to narrow the query.", maxQueryRows),
+		})
 	}
 
 	return results, nil
@@ -848,7 +866,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			},
 		}
 
-	case "list_tables":
+	case "explore":
 		if s.getDB() == nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
@@ -865,560 +883,160 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		}
 
-		query := `
-			SELECT
-				TABLE_SCHEMA as schema_name,
-				TABLE_NAME as table_name,
-				TABLE_TYPE as table_type
-			FROM INFORMATION_SCHEMA.TABLES
-			WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-			ORDER BY TABLE_SCHEMA, TABLE_NAME
-		`
+		exploreType := "tables"
+		if t, ok := params.Arguments["type"].(string); ok && t != "" {
+			exploreType = t
+		}
 
-		// Use shorter timeout for metadata queries (faster)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		results, err := s.executeSecureQuery(ctx, query)
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error listing tables: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Format results as JSON
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type: "text",
-						Text: fmt.Sprintf("Tables and views found:\n%s", string(resultBytes)),
-					},
-				},
-			},
-		}
-
-	case "describe_table":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		tableName, ok := params.Arguments["table_name"].(string)
-		if !ok {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Missing or invalid 'table_name' parameter",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Parse schema.table format or use schema parameter
-		schemaName := "dbo" // default schema
-		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
-			schemaName = schema
-		}
-
-		// Check if table_name contains schema (e.g., "dbo.Clients" or "[dbo].[Clients]")
-		if strings.Contains(tableName, ".") {
-			parts := strings.Split(tableName, ".")
-			if len(parts) == 2 {
-				schemaName = strings.Trim(parts[0], "[]")
-				tableName = strings.Trim(parts[1], "[]")
-			}
-		}
-		tableName = strings.Trim(tableName, "[]")
-
-		query := `
-			SELECT
-				COLUMN_NAME as column_name,
-				DATA_TYPE as data_type,
-				IS_NULLABLE as is_nullable,
-				COLUMN_DEFAULT as default_value,
-				CHARACTER_MAXIMUM_LENGTH as max_length,
-				ORDINAL_POSITION as position
-			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2
-			ORDER BY ORDINAL_POSITION
-		`
-
-		// Use shorter timeout for metadata queries (faster)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		results, err := s.executeSecureQuery(ctx, query, schemaName, tableName)
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error describing table '%s': %v", tableName, err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		if len(results) == 0 {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Table '%s' not found", tableName),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Format results as JSON
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type: "text",
-						Text: fmt.Sprintf("Table structure for '%s':\n%s", tableName, string(resultBytes)),
-					},
-				},
-			},
-		}
-
-	case "list_databases":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		query := `
-			SELECT 
-				name as database_name,
-				database_id,
-				create_date,
-				state_desc as state
-			FROM sys.databases
-			WHERE database_id > 4
-			ORDER BY name
-		`
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		results, err := s.executeSecureQuery(ctx, query)
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error listing databases: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type: "text",
-						Text: fmt.Sprintf("Databases found:\n%s", string(resultBytes)),
-					},
-				},
-			},
-		}
-
-	case "get_indexes":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		tableName, ok := params.Arguments["table_name"].(string)
-		if !ok {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Missing or invalid 'table_name' parameter",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		schemaName := "dbo"
-		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
-			schemaName = schema
-		}
-		if strings.Contains(tableName, ".") {
-			parts := strings.Split(tableName, ".")
-			if len(parts) == 2 {
-				schemaName = strings.Trim(parts[0], "[]")
-				tableName = strings.Trim(parts[1], "[]")
-			}
-		}
-		tableName = strings.Trim(tableName, "[]")
-
-		query := `
-			SELECT 
-				i.name as index_name,
-				i.type_desc as index_type,
-				i.is_unique,
-				i.is_primary_key,
-				STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) as columns
-			FROM sys.indexes i
-			INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-			INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-			INNER JOIN sys.tables t ON i.object_id = t.object_id
-			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-			WHERE t.name = @p1 AND s.name = @p2 AND i.name IS NOT NULL
-			GROUP BY i.name, i.type_desc, i.is_unique, i.is_primary_key
-			ORDER BY i.is_primary_key DESC, i.name
-		`
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		results, err := s.executeSecureQuery(ctx, query, tableName, schemaName)
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error getting indexes: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type: "text",
-						Text: fmt.Sprintf("Indexes for '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
-					},
-				},
-			},
-		}
-
-	case "get_foreign_keys":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		tableName, ok := params.Arguments["table_name"].(string)
-		if !ok {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Missing or invalid 'table_name' parameter",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		schemaName := "dbo"
-		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
-			schemaName = schema
-		}
-		if strings.Contains(tableName, ".") {
-			parts := strings.Split(tableName, ".")
-			if len(parts) == 2 {
-				schemaName = strings.Trim(parts[0], "[]")
-				tableName = strings.Trim(parts[1], "[]")
-			}
-		}
-		tableName = strings.Trim(tableName, "[]")
-
-		query := `
-			SELECT 
-				fk.name as constraint_name,
-				OBJECT_SCHEMA_NAME(fk.parent_object_id) as from_schema,
-				OBJECT_NAME(fk.parent_object_id) as from_table,
-				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) as from_column,
-				OBJECT_SCHEMA_NAME(fk.referenced_object_id) as to_schema,
-				OBJECT_NAME(fk.referenced_object_id) as to_table,
-				COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) as to_column,
-				fk.delete_referential_action_desc as on_delete,
-				fk.update_referential_action_desc as on_update
-			FROM sys.foreign_keys fk
-			INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
-			INNER JOIN sys.tables t ON fk.parent_object_id = t.object_id
-			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-			WHERE (t.name = @p1 AND s.name = @p2)
-			   OR (OBJECT_NAME(fk.referenced_object_id) = @p1 AND OBJECT_SCHEMA_NAME(fk.referenced_object_id) = @p2)
-			ORDER BY fk.name
-		`
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		results, err := s.executeSecureQuery(ctx, query, tableName, schemaName)
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error getting foreign keys: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type: "text",
-						Text: fmt.Sprintf("Foreign keys for '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
-					},
-				},
-			},
-		}
-
-	case "list_stored_procedures":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		schemaFilter := ""
-		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
-			schemaFilter = schema
-		}
-
-		var query string
 		var results []map[string]interface{}
 		var err error
+		var label string
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if schemaFilter != "" {
-			query = `
-				SELECT 
-					SCHEMA_NAME(p.schema_id) as schema_name,
-					p.name as procedure_name,
-					p.create_date,
-					p.modify_date
-				FROM sys.procedures p
-				WHERE SCHEMA_NAME(p.schema_id) = @p1
-				ORDER BY schema_name, procedure_name
-			`
-			results, err = s.executeSecureQuery(ctx, query, schemaFilter)
-		} else {
-			query = `
-				SELECT 
-					SCHEMA_NAME(p.schema_id) as schema_name,
-					p.name as procedure_name,
-					p.create_date,
-					p.modify_date
-				FROM sys.procedures p
-				ORDER BY schema_name, procedure_name
+		switch exploreType {
+		case "databases":
+			label = "Databases found"
+			query := `
+				SELECT
+					name as database_name,
+					database_id,
+					create_date,
+					state_desc as state
+				FROM sys.databases
+				WHERE database_id > 4
+				ORDER BY name
 			`
 			results, err = s.executeSecureQuery(ctx, query)
+
+		case "procedures":
+			label = "Stored procedures found"
+			schemaFilter, _ := params.Arguments["schema"].(string)
+			filterVal, _ := params.Arguments["filter"].(string)
+			if schemaFilter != "" && filterVal != "" {
+				query := `
+					SELECT
+						SCHEMA_NAME(p.schema_id) as schema_name,
+						p.name as procedure_name,
+						p.create_date,
+						p.modify_date
+					FROM sys.procedures p
+					WHERE SCHEMA_NAME(p.schema_id) = @p1 AND p.name LIKE @p2
+					ORDER BY schema_name, procedure_name
+				`
+				results, err = s.executeSecureQuery(ctx, query, schemaFilter, "%"+filterVal+"%")
+			} else if schemaFilter != "" {
+				query := `
+					SELECT
+						SCHEMA_NAME(p.schema_id) as schema_name,
+						p.name as procedure_name,
+						p.create_date,
+						p.modify_date
+					FROM sys.procedures p
+					WHERE SCHEMA_NAME(p.schema_id) = @p1
+					ORDER BY schema_name, procedure_name
+				`
+				results, err = s.executeSecureQuery(ctx, query, schemaFilter)
+			} else if filterVal != "" {
+				query := `
+					SELECT
+						SCHEMA_NAME(p.schema_id) as schema_name,
+						p.name as procedure_name,
+						p.create_date,
+						p.modify_date
+					FROM sys.procedures p
+					WHERE p.name LIKE @p1
+					ORDER BY schema_name, procedure_name
+				`
+				results, err = s.executeSecureQuery(ctx, query, "%"+filterVal+"%")
+			} else {
+				query := `
+					SELECT
+						SCHEMA_NAME(p.schema_id) as schema_name,
+						p.name as procedure_name,
+						p.create_date,
+						p.modify_date
+					FROM sys.procedures p
+					ORDER BY schema_name, procedure_name
+				`
+				results, err = s.executeSecureQuery(ctx, query)
+			}
+
+		case "search":
+			pattern, ok := params.Arguments["pattern"].(string)
+			if !ok || pattern == "" {
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{Type: "text", Text: "Error: 'pattern' is required when type=search"},
+						},
+						IsError: true,
+					},
+				}
+			}
+			searchIn, _ := params.Arguments["search_in"].(string)
+			likePattern := "%" + pattern + "%"
+			if searchIn == "definition" {
+				label = fmt.Sprintf("Objects matching '%s' in definition", pattern)
+				query := `
+					SELECT
+						o.type_desc      AS object_type,
+						SCHEMA_NAME(o.schema_id) AS schema_name,
+						o.name           AS object_name,
+						m.definition     AS definition_snippet
+					FROM sys.sql_modules m
+					JOIN sys.objects     o ON o.object_id = m.object_id
+					WHERE m.definition LIKE @p1
+					ORDER BY o.type_desc, o.name
+				`
+				results, err = s.executeSecureQuery(ctx, query, likePattern)
+			} else {
+				label = fmt.Sprintf("Objects matching '%s' in name", pattern)
+				query := `
+					SELECT
+						o.type_desc      AS object_type,
+						SCHEMA_NAME(o.schema_id) AS schema_name,
+						o.name           AS object_name,
+						o.create_date    AS created,
+						o.modify_date    AS modified
+					FROM sys.objects o
+					WHERE o.name LIKE @p1
+					  AND o.type IN ('U','V','P','FN','IF','TF')
+					ORDER BY o.type_desc, o.name
+				`
+				results, err = s.executeSecureQuery(ctx, query, likePattern)
+			}
+
+		default: // "tables"
+			label = "Tables and views found"
+			if filterVal, ok := params.Arguments["filter"].(string); ok && filterVal != "" {
+				filterPattern := "%" + filterVal + "%"
+				query := `
+					SELECT
+						TABLE_SCHEMA as schema_name,
+						TABLE_NAME as table_name,
+						TABLE_TYPE as table_type
+					FROM INFORMATION_SCHEMA.TABLES
+					WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+					  AND TABLE_NAME LIKE @p1
+					ORDER BY TABLE_SCHEMA, TABLE_NAME
+				`
+				results, err = s.executeSecureQuery(ctx, query, filterPattern)
+			} else {
+				query := `
+					SELECT
+						TABLE_SCHEMA as schema_name,
+						TABLE_NAME as table_name,
+						TABLE_TYPE as table_type
+					FROM INFORMATION_SCHEMA.TABLES
+					WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+					ORDER BY TABLE_SCHEMA, TABLE_NAME
+				`
+				results, err = s.executeSecureQuery(ctx, query)
+			}
 		}
 
 		if err != nil {
@@ -1429,7 +1047,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: fmt.Sprintf("Error listing stored procedures: %v", err),
+							Text: fmt.Sprintf("Error in explore: %v", err),
 						},
 					},
 					IsError: true,
@@ -1461,7 +1079,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Content: []ContentItem{
 					{
 						Type: "text",
-						Text: fmt.Sprintf("Stored procedures found:\n%s", string(resultBytes)),
+						Text: fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
 					},
 				},
 			},
@@ -1651,6 +1269,224 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			},
 		}
 
+	case "inspect":
+		if s.getDB() == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		tableName, ok := params.Arguments["table_name"].(string)
+		if !ok || tableName == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{Type: "text", Text: "Error: Missing or invalid 'table_name' parameter"},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		schemaName := "dbo"
+		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
+			schemaName = schema
+		}
+		if strings.Contains(tableName, ".") {
+			parts := strings.Split(tableName, ".")
+			if len(parts) == 2 {
+				schemaName = strings.Trim(parts[0], "[]")
+				tableName = strings.Trim(parts[1], "[]")
+			}
+		}
+		tableName = strings.Trim(tableName, "[]")
+
+		detail := "columns"
+		if d, ok := params.Arguments["detail"].(string); ok && d != "" {
+			detail = d
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		columnsQuery := `
+			SELECT
+				COLUMN_NAME as column_name,
+				DATA_TYPE as data_type,
+				IS_NULLABLE as is_nullable,
+				COLUMN_DEFAULT as default_value,
+				CHARACTER_MAXIMUM_LENGTH as max_length,
+				ORDINAL_POSITION as position
+			FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2
+			ORDER BY ORDINAL_POSITION
+		`
+		indexesQuery := `
+			SELECT
+				i.name as index_name,
+				i.type_desc as index_type,
+				i.is_unique,
+				i.is_primary_key,
+				STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) as columns
+			FROM sys.indexes i
+			INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+			INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+			INNER JOIN sys.tables t ON i.object_id = t.object_id
+			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+			WHERE t.name = @p1 AND s.name = @p2 AND i.name IS NOT NULL
+			GROUP BY i.name, i.type_desc, i.is_unique, i.is_primary_key
+			ORDER BY i.is_primary_key DESC, i.name
+		`
+		fkQuery := `
+			SELECT
+				fk.name as constraint_name,
+				OBJECT_SCHEMA_NAME(fk.parent_object_id) as from_schema,
+				OBJECT_NAME(fk.parent_object_id) as from_table,
+				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) as from_column,
+				OBJECT_SCHEMA_NAME(fk.referenced_object_id) as to_schema,
+				OBJECT_NAME(fk.referenced_object_id) as to_table,
+				COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) as to_column,
+				fk.delete_referential_action_desc as on_delete,
+				fk.update_referential_action_desc as on_update
+			FROM sys.foreign_keys fk
+			INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+			INNER JOIN sys.tables t ON fk.parent_object_id = t.object_id
+			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+			WHERE (t.name = @p1 AND s.name = @p2)
+			   OR (OBJECT_NAME(fk.referenced_object_id) = @p1 AND OBJECT_SCHEMA_NAME(fk.referenced_object_id) = @p2)
+			ORDER BY fk.name
+		`
+
+		if detail == "all" {
+			colResults, err := s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
+			if err != nil {
+				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting columns: %v", err)}}, IsError: true,
+				}}
+			}
+			idxResults, err := s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
+			if err != nil {
+				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err)}}, IsError: true,
+				}}
+			}
+			fkResults, err := s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
+			if err != nil {
+				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err)}}, IsError: true,
+				}}
+			}
+			combined := map[string]interface{}{
+				"columns":      colResults,
+				"indexes":      idxResults,
+				"foreign_keys": fkResults,
+			}
+			resultBytes, err := json.MarshalIndent(combined, "", "  ")
+			if err != nil {
+				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error formatting results: %v", err)}}, IsError: true,
+				}}
+			}
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Full inspection of '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
+						},
+					},
+				},
+			}
+		}
+
+		var results []map[string]interface{}
+		var err error
+		var label string
+
+		switch detail {
+		case "indexes":
+			label = fmt.Sprintf("Indexes for '%s.%s'", schemaName, tableName)
+			results, err = s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
+		case "foreign_keys":
+			label = fmt.Sprintf("Foreign keys for '%s.%s'", schemaName, tableName)
+			results, err = s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
+		default: // "columns"
+			label = fmt.Sprintf("Table structure for '%s'", tableName)
+			results, err = s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
+			if err == nil && len(results) == 0 {
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{Type: "text", Text: fmt.Sprintf("Table '%s' not found", tableName)},
+						},
+						IsError: true,
+					},
+				}
+			}
+		}
+
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error in inspect: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Error formatting results: %v", err),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
+					},
+				},
+			},
+		}
+
 	default:
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -1714,92 +1550,57 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 				},
 			},
 			{
-				Name:        "list_tables",
-				Description: "List all tables and views in the database",
-				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
-					Required:   []string{},
-				},
-			},
-			{
-				Name:        "describe_table",
-				Description: "Get the structure and schema information for a specific table",
+				Name:        "explore",
+				Description: "Explore database objects. type=tables (default) lists tables/views, type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"table_name": {
+						"type": {
 							Type:        "string",
-							Description: "Name of the table to describe (can include schema: 'dbo.TableName' or just 'TableName')",
+							Description: "What to explore: 'tables' (default), 'databases', 'procedures', 'search'",
+						},
+						"filter": {
+							Type:        "string",
+							Description: "Name filter for tables/procedures (LIKE match, e.g. 'Pedido')",
 						},
 						"schema": {
 							Type:        "string",
-							Description: "Schema name (optional, defaults to 'dbo')",
+							Description: "Schema filter for procedures (optional)",
 						},
-					},
-					Required: []string{"table_name"},
-				},
-			},
-			{
-				Name:        "list_databases",
-				Description: "List all databases on the SQL Server instance",
-				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
-					Required:   []string{},
-				},
-			},
-			{
-				Name:        "get_indexes",
-				Description: "Get indexes for a specific table",
-				InputSchema: InputSchema{
-					Type: "object",
-					Properties: map[string]Property{
-						"table_name": {
+						"pattern": {
 							Type:        "string",
-							Description: "Name of the table (can include schema: 'dbo.TableName')",
+							Description: "Search pattern. Required when type=search.",
 						},
-						"schema": {
+						"search_in": {
 							Type:        "string",
-							Description: "Schema name (optional, defaults to 'dbo')",
-						},
-					},
-					Required: []string{"table_name"},
-				},
-			},
-			{
-				Name:        "get_foreign_keys",
-				Description: "Get foreign key relationships for a specific table",
-				InputSchema: InputSchema{
-					Type: "object",
-					Properties: map[string]Property{
-						"table_name": {
-							Type:        "string",
-							Description: "Name of the table (can include schema: 'dbo.TableName')",
-						},
-						"schema": {
-							Type:        "string",
-							Description: "Schema name (optional, defaults to 'dbo')",
-						},
-					},
-					Required: []string{"table_name"},
-				},
-			},
-			{
-				Name:        "list_stored_procedures",
-				Description: "List all stored procedures in the database",
-				InputSchema: InputSchema{
-					Type: "object",
-					Properties: map[string]Property{
-						"schema": {
-							Type:        "string",
-							Description: "Filter by schema (optional)",
+							Description: "Where to search: 'name' (default) or 'definition' (inside procedure/view source code)",
 						},
 					},
 					Required: []string{},
 				},
 			},
 			{
+				Name:        "inspect",
+				Description: "Inspect a table's structure. detail=columns (default) returns column info, detail=indexes returns indexes, detail=foreign_keys returns FK relationships, detail=all returns everything in one call.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"table_name": {
+							Type:        "string",
+							Description: "Name of the table (can include schema: 'dbo.TableName')",
+						},
+						"schema": {
+							Type:        "string",
+							Description: "Schema name (optional, defaults to 'dbo')",
+						},
+						"detail": {
+							Type:        "string",
+							Description: "What to retrieve: 'columns' (default), 'indexes', 'foreign_keys', 'all'",
+						},
+					},
+					Required: []string{"table_name"},
+				},
+			},			{
 				Name:        "execute_procedure",
 				Description: "Execute a whitelisted stored procedure (requires MSSQL_WHITELIST_PROCEDURES env var)",
 				InputSchema: InputSchema{

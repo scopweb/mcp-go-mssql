@@ -1,0 +1,16 @@
+---
+// Override Head component — Google Fonts + dark mode default
+import type { Props } from '@astrojs/starlight/props';
+import Default from '@astrojs/starlight/components/Head.astro';
+---
+<Default {...Astro.props}><slot /></Default>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" />
+<script is:inline>
+  // Set dark mode as default (user can toggle to light)
+  if (!localStorage.getItem('starlight-theme')) {
+    document.documentElement.dataset.theme = 'dark';
+    localStorage.setItem('starlight-theme', 'dark');
+  }
+</script>

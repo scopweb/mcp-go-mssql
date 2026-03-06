@@ -1,0 +1,35 @@
+---
+title: MCP-Go-MSSQL
+description: Secure Go-based MCP server for Microsoft SQL Server
+template: splash
+hero:
+  image:
+    file: ../../../assets/scopweb.png
+  tagline: Your SQL Server database, right inside Claude. Query, analyze, and operate with the peace of mind of a hardened system.
+  actions:
+    - text: Get Started
+      link: /en/inicio/bienvenida/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/DavidSerrano-Rodriguez/mcp-go-mssql
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Secure by default" icon="shield">
+    Mandatory TLS, exclusive prepared statements, read-only mode, and table whitelist. Your production database is never at risk.
+  </Card>
+  <Card title="9 tools ready to go" icon="puzzle">
+    Queries, tables, indexes, foreign keys, stored procedures, and more. Everything you need to explore and operate your database from Claude.
+  </Card>
+  <Card title="Built for AI" icon="star">
+    AI-Safe mode: the AI reads everything but only writes to tables you authorize. Perfect for letting Claude work on production worry-free.
+  </Card>
+  <Card title="Claude Desktop + Claude Code" icon="laptop">
+    MCP server for Claude Desktop and CLI for Claude Code. Two paths, the same security guarantees.
+  </Card>
+</CardGrid>
