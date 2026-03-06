@@ -7,6 +7,14 @@ All relevant changes to this project are documented here.
 
 ## Latest changes
 
+### `explore` — new `type=views`
+
+- Lists only database **views** with rich metadata: `schema_name`, `view_name`, `check_option`, `is_updatable`, `definition_preview` (300 chars)
+- Supports `filter` parameter for name filtering (LIKE)
+- Complements `type=tables` which continues returning both tables and views
+
+---
+
 ### New tool: `explain_query`
 
 - Shows the **estimated execution plan** for a SELECT query without running it

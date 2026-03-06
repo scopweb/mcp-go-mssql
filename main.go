@@ -1010,6 +1010,17 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				results, err = s.executeSecureQuery(ctx, query, likePattern)
 			}
 
+		case "views":
+			label = "Views found"
+			viewFilter, _ := params.Arguments["filter"].(string)
+			if viewFilter != "" {
+				query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v WHERE v.TABLE_NAME LIKE @p1 ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
+				results, err = s.executeSecureQuery(ctx, query, "%"+viewFilter+"%")
+			} else {
+				query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
+				results, err = s.executeSecureQuery(ctx, query)
+			}
+
 		default: // "tables"
 			label = "Tables and views found"
 			if filterVal, ok := params.Arguments["filter"].(string); ok && filterVal != "" {
@@ -1668,13 +1679,13 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "explore",
-				Description: "Explore database objects. type=tables (default) lists tables/views, type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern).",
+				Description: "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"type": {
 							Type:        "string",
-							Description: "What to explore: 'tables' (default), 'databases', 'procedures', 'search'",
+							Description: "What to explore: 'tables' (default), 'views', 'databases', 'procedures', 'search'",
 						},
 						"filter": {
 							Type:        "string",
