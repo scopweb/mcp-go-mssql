@@ -7,6 +7,15 @@ All relevant changes to this project are documented here.
 
 ## Latest changes
 
+### New tool: `explain_query`
+
+- Shows the **estimated execution plan** for a SELECT query without running it
+- Uses `SET SHOWPLAN_TEXT ON` on a dedicated connection (isolated from pool)
+- Only accepts SELECT — validation always enforced, regardless of `MSSQL_READ_ONLY`
+- Useful for query performance analysis with Claude
+
+---
+
 ### Dependency update (2026-03-06)
 
 **Updated dependencies:**

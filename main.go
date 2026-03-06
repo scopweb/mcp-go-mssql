@@ -1487,6 +1487,123 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			},
 		}
 
+	case "explain_query":
+		if s.getDB() == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: Database not connected."}},
+					IsError: true,
+				},
+			}
+		}
+
+		query, ok := params.Arguments["query"].(string)
+		if !ok || strings.TrimSpace(query) == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: Missing or invalid 'query' parameter"}},
+					IsError: true,
+				},
+			}
+		}
+
+		// Only allow SELECT queries for safety (always enforced, regardless of MSSQL_READ_ONLY)
+		if op := s.extractOperation(query); op != "SELECT" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: explain_query only accepts SELECT queries, got: " + op}},
+					IsError: true,
+				},
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Use a dedicated connection so SET SHOWPLAN_TEXT applies only to this query
+		conn, err := s.getDB().Conn(ctx)
+		if err != nil {
+			connErrMsg := "Error acquiring connection"
+			if s.devMode {
+				connErrMsg += ": " + err.Error()
+			}
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: connErrMsg}},
+					IsError: true,
+				},
+			}
+		}
+		defer conn.Close()
+
+		// Enable showplan (does not execute the query, only returns the plan)
+		if _, err := conn.ExecContext(ctx, "SET SHOWPLAN_TEXT ON"); err != nil {
+			showplanErrMsg := "Error enabling SHOWPLAN"
+			if s.devMode {
+				showplanErrMsg += ": " + err.Error()
+			}
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: showplanErrMsg}},
+					IsError: true,
+				},
+			}
+		}
+
+		rows, err := conn.QueryContext(ctx, query)
+		if err != nil {
+			_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF")
+			planErrMsg := "Error getting execution plan"
+			if s.devMode {
+				planErrMsg += ": " + err.Error()
+			}
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: planErrMsg}},
+					IsError: true,
+				},
+			}
+		}
+		defer rows.Close()
+
+		var planLines []string
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err == nil {
+				planLines = append(planLines, line)
+			}
+		}
+		_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF")
+
+		if len(planLines) == 0 {
+			planLines = []string{"(no plan returned — query may be too simple or unsupported)"}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: "Execution plan:\n\n" + strings.Join(planLines, "\n"),
+					},
+				},
+			},
+		}
+
 	default:
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -1618,6 +1735,20 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Required: []string{"procedure_name"},
 				},
 			},
+		{
+			Name:        "explain_query",
+			Description: "Show the estimated execution plan for a SQL query without executing it. Useful for performance analysis and query optimization. Only SELECT queries are accepted.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"query": {
+						Type:        "string",
+						Description: "SELECT query to analyze (must be a read-only query)",
+					},
+				},
+				Required: []string{"query"},
+			},
+		},
 		}
 
 		return &MCPResponse{
