@@ -7,6 +7,16 @@ All relevant changes to this project are documented here.
 
 ## Latest changes
 
+### `inspect` — new `detail=dependencies`
+
+- Shows which SQL objects (views, procedures, functions) **depend on a given table**
+- Uses `sys.sql_expression_dependencies` for impact analysis
+- Returns: `referencing_schema`, `referencing_object`, `referencing_type`
+- Also included in `detail=all`
+- Useful for assessing impact before schema changes
+
+---
+
 ### `explore` — new `type=views`
 
 - Lists only database **views** with rich metadata: `schema_name`, `view_name`, `check_option`, `is_updatable`, `definition_preview` (300 chars)

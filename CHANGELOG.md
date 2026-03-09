@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - 👁️ **`explore` tool: new `type=views`**: Lists only database views with rich metadata — `schema_name`, `view_name`, `check_option`, `is_updatable`, and a 300-char `definition_preview`. Supports optional `filter` parameter (LIKE match on name). Complements `type=tables` which lists both tables and views.
+- 🔗 **`inspect` tool: new `detail=dependencies`**: Shows which SQL objects (views, procedures, functions) reference a given table using `sys.sql_expression_dependencies`. Returns `referencing_schema`, `referencing_object`, `referencing_type`, `is_caller_dependent`, `is_ambiguous`. Also included in `detail=all` output. Useful for impact analysis before schema changes.
 - 🔍 **New `explain_query` tool**: Shows the estimated SQL Server execution plan for a SELECT query **without executing it**. Uses `SET SHOWPLAN_TEXT ON` on a dedicated connection to isolate the session. Always enforces SELECT-only validation (`extractOperation`) regardless of `MSSQL_READ_ONLY` mode. Useful for query performance analysis with Claude.
 
 ### Changed

@@ -7,6 +7,16 @@ Todos los cambios relevantes de este proyecto se documentan aquí.
 
 ## Último cambio
 
+### `inspect` — nuevo `detail=dependencies`
+
+- Muestra qué objetos SQL (vistas, procedimientos, funciones) **dependen de una tabla** dada
+- Usa `sys.sql_expression_dependencies` para análisis de impacto
+- Devuelve: `referencing_schema`, `referencing_object`, `referencing_type`
+- También incluido en `detail=all`
+- Útil para evaluar el impacto antes de cambiar el esquema de una tabla
+
+---
+
 ### `explore` — nuevo `type=views`
 
 - Lista solo las **vistas** de la base de datos con metadatos enriquecidos: `schema_name`, `view_name`, `check_option`, `is_updatable`, `definition_preview` (300 chars)
