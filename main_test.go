@@ -361,6 +361,51 @@ func TestInputValidation(t *testing.T) {
 	}
 }
 
+func TestInspectDependencies(t *testing.T) {
+	setupTestEnv()
+
+	server := &MCPMSSQLServer{
+		secLogger: NewSecurityLogger(),
+		devMode:   true,
+	}
+
+	// All inspect detail types should return IsError=true when DB is disconnected
+	detailTypes := []string{"columns", "indexes", "foreign_keys", "dependencies", "all"}
+	for _, dt := range detailTypes {
+		t.Run("detail="+dt+"_no_db", func(t *testing.T) {
+			params := CallToolParams{
+				Name:      "inspect",
+				Arguments: map[string]interface{}{"table_name": "users", "detail": dt},
+			}
+			resp := server.handleToolCall("test-id", params)
+			if resp == nil {
+				t.Fatal("Expected response, got nil")
+			}
+			resultBytes, _ := json.Marshal(resp.Result)
+			var result CallToolResult
+			json.Unmarshal(resultBytes, &result)
+			if !result.IsError {
+				t.Errorf("detail=%s: expected IsError=true when DB disconnected", dt)
+			}
+		})
+	}
+
+	// Missing table_name should return error
+	t.Run("missing_table_name", func(t *testing.T) {
+		params := CallToolParams{
+			Name:      "inspect",
+			Arguments: map[string]interface{}{"detail": "dependencies"},
+		}
+		resp := server.handleToolCall("test-id", params)
+		resultBytes, _ := json.Marshal(resp.Result)
+		var result CallToolResult
+		json.Unmarshal(resultBytes, &result)
+		if !result.IsError {
+			t.Error("Expected IsError=true when table_name is missing")
+		}
+	})
+}
+
 func TestExploreViewsType(t *testing.T) {
 	setupTestEnv()
 

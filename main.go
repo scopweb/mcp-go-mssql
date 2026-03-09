@@ -1399,10 +1399,25 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err)}}, IsError: true,
 				}}
 			}
+			depsAllQuery := `
+				SELECT
+					SCHEMA_NAME(o.schema_id)  AS referencing_schema,
+					o.name                    AS referencing_object,
+					o.type_desc               AS referencing_type,
+					sed.is_caller_dependent,
+					sed.is_ambiguous
+				FROM sys.sql_expression_dependencies sed
+				JOIN sys.objects o ON o.object_id = sed.referencing_id
+				WHERE sed.referenced_entity_name = @p1
+				  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
+				ORDER BY o.type_desc, referencing_schema, referencing_object
+			`
+			depsResults, _ := s.executeSecureQuery(ctx, depsAllQuery, tableName, schemaName)
 			combined := map[string]interface{}{
 				"columns":      colResults,
 				"indexes":      idxResults,
 				"foreign_keys": fkResults,
+				"dependencies": depsResults,
 			}
 			resultBytes, err := json.MarshalIndent(combined, "", "  ")
 			if err != nil {
@@ -1435,6 +1450,22 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		case "foreign_keys":
 			label = fmt.Sprintf("Foreign keys for '%s.%s'", schemaName, tableName)
 			results, err = s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
+		case "dependencies":
+			label = fmt.Sprintf("Objects that depend on '%s.%s'", schemaName, tableName)
+			depsQuery := `
+				SELECT
+					SCHEMA_NAME(o.schema_id)  AS referencing_schema,
+					o.name                    AS referencing_object,
+					o.type_desc               AS referencing_type,
+					sed.is_caller_dependent,
+					sed.is_ambiguous
+				FROM sys.sql_expression_dependencies sed
+				JOIN sys.objects o ON o.object_id = sed.referencing_id
+				WHERE sed.referenced_entity_name = @p1
+				  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
+				ORDER BY o.type_desc, referencing_schema, referencing_object
+			`
+			results, err = s.executeSecureQuery(ctx, depsQuery, tableName, schemaName)
 		default: // "columns"
 			label = fmt.Sprintf("Table structure for '%s'", tableName)
 			results, err = s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
@@ -1709,7 +1740,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "inspect",
-				Description: "Inspect a table's structure. detail=columns (default) returns column info, detail=indexes returns indexes, detail=foreign_keys returns FK relationships, detail=all returns everything in one call.",
+				Description: "Inspect a table's structure. detail=columns (default) returns column info, detail=indexes returns indexes, detail=foreign_keys returns FK relationships, detail=dependencies returns objects (views, procedures, functions) that reference this table, detail=all returns everything in one call.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -1723,7 +1754,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 						},
 						"detail": {
 							Type:        "string",
-							Description: "What to retrieve: 'columns' (default), 'indexes', 'foreign_keys', 'all'",
+							Description: "What to retrieve: 'columns' (default), 'indexes', 'foreign_keys', 'dependencies', 'all'",
 						},
 					},
 					Required: []string{"table_name"},
