@@ -1412,7 +1412,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
 				ORDER BY o.type_desc, referencing_schema, referencing_object
 			`
-			depsResults, _ := s.executeSecureQuery(ctx, depsAllQuery, tableName, schemaName)
+			depsResults, _ := s.executeSecureQuery(ctx, depsAllQuery, tableName, schemaName) // #nosec G104 - dependencies query is optional, errors handled gracefully
 			combined := map[string]interface{}{
 				"columns":      colResults,
 				"indexes":      idxResults,
@@ -1604,7 +1604,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 		rows, err := conn.QueryContext(ctx, query)
 		if err != nil {
-			_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF")
+			_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF") // #nosec G104 - best-effort cleanup
 			planErrMsg := "Error getting execution plan"
 			if s.devMode {
 				planErrMsg += ": " + err.Error()
@@ -1627,7 +1627,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				planLines = append(planLines, line)
 			}
 		}
-		_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF")
+		_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF") // #nosec G104 - best-effort cleanup
 
 		if len(planLines) == 0 {
 			planLines = []string{"(no plan returned — query may be too simple or unsupported)"}
