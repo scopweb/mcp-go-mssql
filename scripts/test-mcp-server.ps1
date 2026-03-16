@@ -1,24 +1,32 @@
 # Test MCP Server with real database connection
 
 Write-Host "Testing MCP Server with database connection..." -ForegroundColor Green
-Write-Host "Server: your-server.local:1433"
-Write-Host "Database: MyDatabase"
-Write-Host ""
 
-# Set environment variables
-$env:MSSQL_SERVER = "your-server.local"
-$env:MSSQL_DATABASE = "MyDatabase" 
-$env:MSSQL_USER = "myUser"
-$env:MSSQL_PASSWORD = "YourPassword"
-$env:MSSQL_PORT = "1433"
-$env:DEVELOPER_MODE = "true"
+# Load environment from .env file
+$envFile = Join-Path $PSScriptRoot "..\.env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim())
+        }
+    }
+    Write-Host "Loaded environment from .env" -ForegroundColor Cyan
+} else {
+    Write-Host "WARNING: .env file not found at $envFile" -ForegroundColor Red
+    Write-Host "Copy .env.example to .env and configure your credentials" -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "Server: $env:MSSQL_SERVER:$env:MSSQL_PORT"
+Write-Host "Database: $env:MSSQL_DATABASE"
+Write-Host ""
 
 # Test 1: Initialize
 Write-Host "Test 1: Initialize MCP Server" -ForegroundColor Yellow
 '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test-client", "version": "1.0"}}}' | .\mcp-server-test.exe
 Write-Host ""
 
-# Test 2: List tools  
+# Test 2: List tools
 Write-Host "Test 2: List Available Tools" -ForegroundColor Yellow
 '{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}' | .\mcp-server-test.exe
 Write-Host ""

@@ -3,13 +3,20 @@
 Write-Host "Testing MCP Server with time for database connection..." -ForegroundColor Green
 Write-Host ""
 
-# Set environment variables  
-$env:MSSQL_SERVER = "your-server.local"
-$env:MSSQL_DATABASE = "MyDatabase"
-$env:MSSQL_USER = "myUser"
-$env:MSSQL_PASSWORD = "YourPassword"
-$env:MSSQL_PORT = "1433"
-$env:DEVELOPER_MODE = "true"
+# Load environment from .env file
+$envFile = Join-Path $PSScriptRoot "..\.env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim())
+        }
+    }
+    Write-Host "Loaded environment from .env" -ForegroundColor Cyan
+} else {
+    Write-Host "WARNING: .env file not found at $envFile" -ForegroundColor Red
+    Write-Host "Copy .env.example to .env and configure your credentials" -ForegroundColor Yellow
+    exit 1
+}
 
 # Start the server in background and send initialize
 Write-Host "Starting server..." -ForegroundColor Yellow
@@ -20,7 +27,7 @@ $serverProcess = Start-Process -FilePath ".\mcp-server-test.exe" -PassThru -NoNe
 
 Start-Sleep -Seconds 2
 
-# Send notifications/initialized 
+# Send notifications/initialized
 '{"jsonrpc": "2.0", "id": 2, "method": "notifications/initialized"}' | Out-File -FilePath "input.txt" -Append -Encoding UTF8
 
 Write-Host "Waiting for database connection to establish (5 seconds)..." -ForegroundColor Yellow
@@ -43,7 +50,7 @@ if (Test-Path "output.txt") {
 }
 
 Write-Host ""
-Write-Host "Errors:" -ForegroundColor Red  
+Write-Host "Errors:" -ForegroundColor Red
 if (Test-Path "error.txt") {
     Get-Content "error.txt"
 }

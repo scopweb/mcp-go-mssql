@@ -17,7 +17,7 @@ MCP connectors of type `mssql-*` are marked as **deferred tools** in Claude's sy
 
 - `mssql-MyDatabase`
 - `mssql-MyDatabase_LOCAL`
-- `mssql-SERVER-GDP`
+- `mssql-PROD-SERVER`
 - `mssql-SQL01`
 - `mssql-MyIdentityDB`
 
