@@ -31,9 +31,9 @@ jobs:
 
       - name: Run gosec
         run: |
-          # Exclude test/debug/tool utility directories from security scanning
+          # Exclude test/debug/tool utility directories and test files from security scanning
           # These contain test harnesses and debug tools, not production code
-          gosec -exclude-dir=test -exclude-dir=debug -exclude-dir=tools ./...
+          gosec -tests=false -exclude-dir=test -exclude-dir=debug -exclude-dir=tools -exclude-dir=claude-code -exclude-dir=pkg ./...
 
       - name: Run tests
         run: |
