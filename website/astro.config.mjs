@@ -56,19 +56,6 @@ export default defineConfig({
 						{ label: 'explore', slug: 'herramientas-mcp/explore' },
 						{ label: 'inspect', slug: 'herramientas-mcp/inspect' },
 						{ label: 'execute_procedure', slug: 'herramientas-mcp/execute-procedure' },
-						{
-							label: 'Versión anterior (v1)',
-							translations: { en: 'Previous version (v1)' },
-							collapsed: true,
-							items: [
-								{ label: 'list_tables', slug: 'herramientas-mcp/list-tables' },
-								{ label: 'describe_table', slug: 'herramientas-mcp/describe-table' },
-								{ label: 'list_databases', slug: 'herramientas-mcp/list-databases' },
-								{ label: 'get_indexes', slug: 'herramientas-mcp/get-indexes' },
-								{ label: 'get_foreign_keys', slug: 'herramientas-mcp/get-foreign-keys' },
-								{ label: 'list_stored_procedures', slug: 'herramientas-mcp/list-stored-procedures' },
-							],
-						},
 					],
 				},
 				{
