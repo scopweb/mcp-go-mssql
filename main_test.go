@@ -255,6 +255,45 @@ func TestMCPServerInitialization(t *testing.T) {
 	if response.ID != "test-1" {
 		t.Errorf("Expected ID test-1, got: %v", response.ID)
 	}
+
+	// Verify protocol version negotiation echoes client's version
+	resultBytes, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("Failed to marshal result: %v", err)
+	}
+	var initResult InitializeResult
+	if err := json.Unmarshal(resultBytes, &initResult); err != nil {
+		t.Fatalf("Failed to unmarshal init result: %v", err)
+	}
+	if initResult.ProtocolVersion != "2025-06-18" {
+		t.Errorf("Expected server to echo client protocolVersion '2025-06-18', got: %s", initResult.ProtocolVersion)
+	}
+}
+
+func TestMCPVersionNegotiation(t *testing.T) {
+	server := &MCPMSSQLServer{
+		secLogger: NewSecurityLogger(),
+		devMode:   true,
+	}
+
+	versions := []string{"2025-06-18", "2025-11-25", "2024-11-05"}
+	for _, ver := range versions {
+		t.Run("version="+ver, func(t *testing.T) {
+			req := MCPRequest{
+				JSONRPC: "2.0",
+				ID:      "test-ver",
+				Method:  "initialize",
+				Params:  InitializeParams{ProtocolVersion: ver},
+			}
+			response := server.handleRequest(req)
+			resultBytes, _ := json.Marshal(response.Result)
+			var initResult InitializeResult
+			json.Unmarshal(resultBytes, &initResult)
+			if initResult.ProtocolVersion != ver {
+				t.Errorf("Expected echoed version %s, got %s", ver, initResult.ProtocolVersion)
+			}
+		})
+	}
 }
 
 func TestMCPToolsList(t *testing.T) {

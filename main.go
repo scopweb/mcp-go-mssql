@@ -125,8 +125,8 @@ func (sl *SecurityLogger) LogConnectionAttempt(success bool) {
 
 // Compiled regex patterns for better performance
 var sensitivePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(password|pwd|secret|key|token)=[^;\\s]*`),
-	regexp.MustCompile(`(?i)(password|pwd)\\s*=\\s*[^;\\s]*`),
+	regexp.MustCompile(`(?i)(password|pwd|secret|key|token)=[^;\s]*`),
+	regexp.MustCompile(`(?i)(password|pwd)\s*=\s*[^;\s]*`),
 }
 
 // Pre-compiled word-boundary patterns for read-only keyword detection
@@ -1666,11 +1666,22 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			dbStatus = "connected"
 		}
 
+		// Extract client's protocolVersion and echo it back (spec MUST requirement)
+		clientVersion := "2025-11-25" // default to latest spec version
+		if req.Params != nil {
+			if paramBytes, err := json.Marshal(req.Params); err == nil {
+				var initParams InitializeParams
+				if err := json.Unmarshal(paramBytes, &initParams); err == nil && initParams.ProtocolVersion != "" {
+					clientVersion = initParams.ProtocolVersion
+				}
+			}
+		}
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
 			Result: InitializeResult{
-				ProtocolVersion: "2025-06-18",
+				ProtocolVersion: clientVersion,
 				Capabilities: Capabilities{
 					Tools: ToolsCapability{
 						ListChanged: false,
