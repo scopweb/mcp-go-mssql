@@ -38,7 +38,7 @@ SQL Server Version: Microsoft SQL Server 2019 (RTM) - 15.0.2000.5 (X64)
 **Conexión exitosa verificada:**
 - **Servidor:** your-server.local:1433
 - **Base de datos:** MyDatabase
-- **Usuario:** myUser  
+- **Usuario:** myUser
 - **Versión SQL Server:** Microsoft SQL Server 2019 (RTM)
 - **TLS:** Configurado correctamente
 - **Connection Pool:** Optimizado

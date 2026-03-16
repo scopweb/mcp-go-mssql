@@ -1,7 +1,7 @@
 # Bug: mssql MCP connectors require tool_search on every new session
 
 **Date:** 2026-03-02  
-**Reporter:** community  
+**Reporter:** Community
 **Severity:** Low (UX / token cost)  
 **Status:** Workaround applied
 
@@ -15,7 +15,7 @@ Los conectores MCP de tipo `mssql-*` están marcados como **deferred tools** en 
 
 - `mssql-MyDatabase`
 - `mssql-MyDatabase_LOCAL`
-- `mssql-SERVER-GDP`
+- `mssql-PROD-SERVER`
 - `mssql-SQL01`
 - `mssql-MyIdentityDB`
 

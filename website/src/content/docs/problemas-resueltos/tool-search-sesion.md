@@ -17,7 +17,7 @@ Los conectores MCP de tipo `mssql-*` están marcados como **deferred tools** en 
 
 - `mssql-MyDatabase`
 - `mssql-MyDatabase_LOCAL`
-- `mssql-SERVER-GDP`
+- `mssql-PROD-SERVER`
 - `mssql-SQL01`
 - `mssql-MyIdentityDB`
 

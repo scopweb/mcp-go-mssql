@@ -4,13 +4,20 @@ Write-Host "Testing MCP Server with persistent connection..." -ForegroundColor G
 Write-Host "This test will start the server and send multiple commands" -ForegroundColor Yellow
 Write-Host ""
 
-# Set environment variables  
-$env:MSSQL_SERVER = "your-server.local"
-$env:MSSQL_DATABASE = "MyDatabase"
-$env:MSSQL_USER = "myUser"
-$env:MSSQL_PASSWORD = "YourPassword"
-$env:MSSQL_PORT = "1433"
-$env:DEVELOPER_MODE = "true"
+# Load environment from .env file
+$envFile = Join-Path $PSScriptRoot "..\.env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim())
+        }
+    }
+    Write-Host "Loaded environment from .env" -ForegroundColor Cyan
+} else {
+    Write-Host "WARNING: .env file not found at $envFile" -ForegroundColor Red
+    Write-Host "Copy .env.example to .env and configure your credentials" -ForegroundColor Yellow
+    exit 1
+}
 
 # Create a test input file with MCP commands
 $testCommands = @"

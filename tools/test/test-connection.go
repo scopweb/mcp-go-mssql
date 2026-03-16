@@ -22,10 +22,10 @@ func getEnvOrDefault(key, defaultValue string) string {
 
 func main() {
 	// Load from .env file or environment variables
-	server := getEnvOrDefault("MSSQL_SERVER", "your-server.local")
-	database := getEnvOrDefault("MSSQL_DATABASE", "MyDatabase")
-	user := getEnvOrDefault("MSSQL_USER", "myUser")
-	password := getEnvOrDefault("MSSQL_PASSWORD", "YourPassword")
+	server := getEnvOrDefault("MSSQL_SERVER", "localhost")
+	database := getEnvOrDefault("MSSQL_DATABASE", "master")
+	user := getEnvOrDefault("MSSQL_USER", "sa")
+	password := getEnvOrDefault("MSSQL_PASSWORD", "")
 	auth := strings.ToLower(getEnvOrDefault("MSSQL_AUTH", "sql"))
 	port := getEnvOrDefault("MSSQL_PORT", "1433")
 

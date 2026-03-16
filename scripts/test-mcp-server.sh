@@ -2,25 +2,32 @@
 
 # Test MCP Server with real database connection
 
-echo "Testing MCP Server with database connection..."
-echo "Server: your-server.local:1433"
-echo "Database: MyDatabase"
-echo ""
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../.env"
 
-# Load environment variables
-export MSSQL_SERVER="your-server.local"
-export MSSQL_DATABASE="MyDatabase" 
-export MSSQL_USER="myUser"
-export MSSQL_PASSWORD="YourPassword"
-export MSSQL_PORT="1433"
-export DEVELOPER_MODE="true"
+# Load environment from .env file
+if [ -f "$ENV_FILE" ]; then
+    echo "Loading environment from .env..."
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo "WARNING: .env file not found at $ENV_FILE"
+    echo "Copy .env.example to .env and configure your credentials"
+    exit 1
+fi
+
+echo "Testing MCP Server with database connection..."
+echo "Server: $MSSQL_SERVER:$MSSQL_PORT"
+echo "Database: $MSSQL_DATABASE"
+echo ""
 
 # Test 1: Initialize
 echo "Test 1: Initialize MCP Server"
 echo '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test-client", "version": "1.0"}}}' | ./mcp-server-test.exe
 echo ""
 
-# Test 2: List tools  
+# Test 2: List tools
 echo "Test 2: List Available Tools"
 echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}' | ./mcp-server-test.exe
 echo ""
@@ -29,13 +36,13 @@ echo ""
 sleep 3
 
 # Test 3: Get database info
-echo "Test 3: Get Database Info"  
+echo "Test 3: Get Database Info"
 echo '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "get_database_info", "arguments": {}}}' | ./mcp-server-test.exe
 echo ""
 
 # Test 4: List tables
 echo "Test 4: List Tables"
-echo '{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "list_tables", "arguments": {}}}' | ./mcp-server-test.exe  
+echo '{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "list_tables", "arguments": {}}}' | ./mcp-server-test.exe
 echo ""
 
 # Test 5: Simple query

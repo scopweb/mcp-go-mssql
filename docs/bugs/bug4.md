@@ -1,7 +1,7 @@
 # Bug #4: Token overflow — "No se pudo generar completamente la respuesta de Claude"
 
 **Date:** 2026-03-03
-**Reporter:** community
+**Reporter:** Community
 **Severity:** High (blocks any exhaustive DB exploration on large databases)
 **Status:** ✅ RESUELTO
 
