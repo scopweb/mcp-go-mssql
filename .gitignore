@@ -32,7 +32,7 @@ claude_desktop_config.json
 *.dylib
 mcp-go-mssql
 mcp-go-mssql-secure
-build/mcp-go-mssql.exe
+build/
 
 # Go build cache
 *.test
@@ -65,8 +65,10 @@ debug.log
 # IDE AND EDITOR FILES
 # =============================================================================
 
-# Claude Code settings (user-specific)
-.claude/settings.local.json
+# Claude Code / AI agent directories
+.claude/
+.agent/
+.agents/
 
 # Visual Studio Code
 .vscode/
