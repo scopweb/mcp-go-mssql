@@ -31,8 +31,9 @@ jobs:
 
       - name: Run gosec
         run: |
-          # Use -fmt=json for machine-readable output if desired
-          gosec ./...
+          # Exclude test/debug/tool utility directories from security scanning
+          # These contain test harnesses and debug tools, not production code
+          gosec -exclude-dir=test -exclude-dir=debug -exclude-dir=tools ./...
 
       - name: Run tests
         run: |
