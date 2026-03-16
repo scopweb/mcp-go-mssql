@@ -15,7 +15,7 @@ import (
 
 // loadEnvFile loads environment variables from a file if it exists
 func loadEnvFile(filePath string) error {
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) // #nosec G304 - paths are hardcoded test fixtures
 	if err != nil {
 		// File doesn't exist, which is ok - environment vars may be set elsewhere
 		return nil

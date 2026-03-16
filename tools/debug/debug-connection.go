@@ -18,7 +18,7 @@ func main() {
 	server := getEnvOrDefault("MSSQL_SERVER", "localhost")
 	database := getEnvOrDefault("MSSQL_DATABASE", "master")
 	user := getEnvOrDefault("MSSQL_USER", "sa")
-	password := getEnvOrDefault("MSSQL_PASSWORD", "YourPassword")
+	password := getEnvOrDefault("MSSQL_PASSWORD", "") // #nosec G101 - no hardcoded credential, empty default
 	auth := strings.ToLower(getEnvOrDefault("MSSQL_AUTH", "sql"))
 	port := getEnvOrDefault("MSSQL_PORT", "1433")
 	encrypt := getEnvOrDefault("MSSQL_ENCRYPT", "false")

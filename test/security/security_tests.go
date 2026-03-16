@@ -11,7 +11,7 @@ import (
 
 // TestDependencyVersions verifies that all dependencies are up to date
 func TestDependencyVersions(t *testing.T) {
-	cmd := exec.Command("go", "list", "-u", "-m", "all")
+	cmd := exec.Command("go", "list", "-u", "-m", "all") // #nosec G204 - static args in test
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Failed to run go list: %v", err)
@@ -105,7 +105,7 @@ func TestMainDependencies(t *testing.T) {
 		"github.com/stretchr/testify":     "v1.11.1", // Testing framework
 	}
 
-	cmd := exec.Command("go", "list", "-m", "all")
+	cmd := exec.Command("go", "list", "-m", "all") // #nosec G204 - static args in test
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Failed to list modules: %v", err)
@@ -295,7 +295,7 @@ func TestGoVersion(t *testing.T) {
 // TestCommunitySecurityAdvisories checks for known vulnerable packages
 func TestCommunitySecurityAdvisories(t *testing.T) {
 	// This requires 'go list -json' to get detailed package info
-	cmd := exec.Command("go", "list", "-json", "...")
+	cmd := exec.Command("go", "list", "-json", "...") // #nosec G204 - static args in test
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
