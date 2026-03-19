@@ -22,17 +22,19 @@ import (
 
 // MCP Protocol structures
 type MCPRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      interface{}            `json:"id"`
+	Method  string                 `json:"method"`
+	Params  interface{}            `json:"params,omitempty"`
+	Meta    map[string]interface{} `json:"_meta,omitempty"`
 }
 
 type MCPResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *MCPError   `json:"error,omitempty"`
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      interface{}            `json:"id"`
+	Result  interface{}            `json:"result,omitempty"`
+	Error   *MCPError              `json:"error,omitempty"`
+	Meta    map[string]interface{} `json:"_meta,omitempty"`
 }
 
 type MCPError struct {
@@ -91,8 +93,9 @@ type CallToolParams struct {
 }
 
 type CallToolResult struct {
-	Content []ContentItem `json:"content"`
-	IsError bool          `json:"isError,omitempty"`
+	Content []ContentItem          `json:"content"`
+	IsError bool                   `json:"isError,omitempty"`
+	Meta    map[string]interface{} `json:"_meta,omitempty"`
 }
 
 type ContentItem struct {
@@ -174,10 +177,36 @@ func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 
 // MSSQL Server
 type MCPMSSQLServer struct {
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	secLogger *SecurityLogger
-	devMode   bool
+	db          *sql.DB
+	dbMu        sync.RWMutex
+	secLogger   *SecurityLogger
+	devMode     bool
+	rateLimiter struct {
+		mu        sync.Mutex
+		tokens    int
+		maxTokens int
+		lastReset time.Time
+		interval  time.Duration
+	}
+}
+
+// checkRateLimit implements a simple token-bucket rate limiter for tool invocations.
+// Returns true if the request is allowed, false if rate limited.
+func (s *MCPMSSQLServer) checkRateLimit() bool {
+	s.rateLimiter.mu.Lock()
+	defer s.rateLimiter.mu.Unlock()
+
+	now := time.Now()
+	if now.Sub(s.rateLimiter.lastReset) >= s.rateLimiter.interval {
+		s.rateLimiter.tokens = s.rateLimiter.maxTokens
+		s.rateLimiter.lastReset = now
+	}
+
+	if s.rateLimiter.tokens <= 0 {
+		return false
+	}
+	s.rateLimiter.tokens--
+	return true
 }
 
 func (s *MCPMSSQLServer) getDB() *sql.DB {
@@ -712,6 +741,19 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 }
 
 func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *MCPResponse {
+	// MCP spec MUST: rate limit tool invocations
+	if !s.checkRateLimit() {
+		s.secLogger.Printf("Rate limit exceeded for tool: %s", params.Name)
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{{Type: "text", Text: "Rate limit exceeded. Please wait before making more requests."}},
+				IsError: true,
+			},
+		}
+	}
+
 	switch params.Name {
 	case "get_database_info":
 		var info strings.Builder
@@ -1938,6 +1980,11 @@ func main() {
 		secLogger: secLogger,
 		devMode:   devMode,
 	}
+	// Initialize rate limiter: 60 tool calls per minute
+	server.rateLimiter.maxTokens = 60
+	server.rateLimiter.tokens = 60
+	server.rateLimiter.lastReset = time.Now()
+	server.rateLimiter.interval = time.Minute
 
 	// Try to establish database connection (non-fatal)
 	go func() {
@@ -2111,6 +2158,18 @@ func main() {
 		var req MCPRequest
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
 			secLogger.Printf("Invalid JSON received: %v", err)
+			// MCP spec MUST: respond with -32700 Parse error for invalid JSON
+			parseErrResp := &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      nil,
+				Error: &MCPError{
+					Code:    -32700,
+					Message: "Parse error",
+				},
+			}
+			if respBytes, err := json.Marshal(parseErrResp); err == nil {
+				fmt.Println(string(respBytes))
+			}
 			continue
 		}
 

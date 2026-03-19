@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 🛡️ **Rate limiter for MCP tool calls**: Token-bucket rate limiter (60 calls/minute) prevents resource exhaustion. Returns a tool execution error with `isError: true` when limit exceeded, as recommended by MCP spec 2025-11-25.
 - 🔧 **`MSSQL_ENCRYPT` environment variable**: New option to control TLS encryption independently in development mode. When `DEVELOPER_MODE=true`, encryption now defaults to `false` (previously defaulted to `true`). This is **required for SQL Server 2008/2012** which don't support TLS 1.2 — without this the Go driver fails the TLS handshake. In production mode (`DEVELOPER_MODE=false`), encryption is always enforced regardless of this setting.
 
 ### Changed
@@ -21,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🐛 **Hardcoded `encrypt=true` in `pkg/connector/db-connector.go`**: Windows Integrated Auth connection string had `encrypt=true` hardcoded, ignoring `DEVELOPER_MODE` and `MSSQL_ENCRYPT` settings. Now respects both variables consistently across all three connector files.
 - 🐛 **Wrong `encrypt` value in `claude-code/db-connector.go`**: The integrated auth branch used `trustCert` value for the `encrypt` parameter instead of a separate encrypt variable. Now correctly uses `MSSQL_ENCRYPT` override.
 - 🐛 **`MSSQL_DATABASE` required for integrated auth in `pkg/connector`**: Unlike `main.go` and `claude-code`, the pkg connector required `MSSQL_DATABASE` even for Windows Auth. Now optional, consistent with the other connectors.
+- 🐛 **JSON-RPC `-32700` Parse error**: Invalid JSON now returns a proper `-32700` Parse error response instead of silently ignoring malformed input, per JSON-RPC 2.0 spec.
+- 🐛 **`_meta` field support**: Added `_meta` field to `MCPRequest`, `MCPResponse`, and `CallToolResult` structs per MCP spec 2025-11-25. Allows clients and servers to pass protocol metadata (progress tokens, etc.).
 
 ### Changed
 - ⚡ **Consistent encryption defaults across all connectors**: All three files (`main.go`, `claude-code/db-connector.go`, `pkg/connector/db-connector.go`) now share the same logic: dev mode defaults `encrypt=false` and `trustservercertificate=true`, with `MSSQL_ENCRYPT` override available.
