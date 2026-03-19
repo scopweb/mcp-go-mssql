@@ -134,7 +134,7 @@ ALTER ROLE db_datawriter ADD MEMBER [DOMAIN\Username];
 Use the provided diagnostic script:
 
 ```powershell
-cd C:\MCPs\clone\mcp-go-mssql
+cd path/to/mcp-go-mssql
 .\scripts\test-integrated-auth.ps1
 ```
 
@@ -329,8 +329,8 @@ SQL Server 2008 and 2012 typically don't support TLS 1.2, which the Go driver re
       "command": "C:\\MCPs\\mcp-go-mssql\\build\\mcp-go-mssql.exe",
       "args": [],
       "env": {
-        "MSSQL_SERVER": "server-gdp",
-        "MSSQL_DATABASE": "gdpa",
+        "MSSQL_SERVER": "legacy-server",
+        "MSSQL_DATABASE": "LegacyDB",
         "MSSQL_AUTH": "integrated",
         "DEVELOPER_MODE": "true",
         "MSSQL_ENCRYPT": "false"

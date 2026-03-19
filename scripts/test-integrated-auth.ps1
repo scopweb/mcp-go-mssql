@@ -18,7 +18,7 @@ Write-Host "  DEVELOPER_MODE: $env:DEVELOPER_MODE"
 Write-Host ""
 
 # Get the executable path
-$exePath = "C:\MCPs\clone\mcp-go-mssql\build\mcp-go-mssql.exe"
+$exePath = Join-Path $PSScriptRoot "..\build\mcp-go-mssql.exe"
 
 if (-not (Test-Path $exePath)) {
     Write-Host "ERROR: Executable not found at: $exePath" -ForegroundColor Red

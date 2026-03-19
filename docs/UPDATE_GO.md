@@ -38,7 +38,7 @@ Se encontraron **7 vulnerabilidades** en la biblioteca estándar de Go 1.24.7:
 
 4. **Recompilar el proyecto:**
    ```powershell
-   cd C:\MCPs\clone\mcp-go-mssql
+   cd path/to/mcp-go-mssql
    go clean
    go build -o build\mcp-go-mssql.exe main.go
    ```
@@ -58,7 +58,7 @@ choco upgrade golang -y
 go version
 
 # Recompilar
-cd C:\MCPs\clone\mcp-go-mssql
+cd path/to/mcp-go-mssql
 go clean
 go build -o build\mcp-go-mssql.exe main.go
 ```
@@ -76,7 +76,7 @@ winget install --id GoLang.Go.1.24 -e
 go version
 
 # Recompilar
-cd C:\MCPs\clone\mcp-go-mssql
+cd path/to/mcp-go-mssql
 go clean
 go build -o build\mcp-go-mssql.exe main.go
 ```
@@ -95,7 +95,7 @@ Todas las dependencias están actualizadas. Solo necesitas actualizar Go.
 Una vez actualizado Go, ejecuta:
 
 ```powershell
-cd C:\MCPs\clone\mcp-go-mssql
+cd path/to/mcp-go-mssql
 
 # Limpiar cache y recompilar
 go clean -cache -modcache
