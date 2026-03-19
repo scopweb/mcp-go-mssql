@@ -56,20 +56,30 @@ type InitializeResult struct {
 	ProtocolVersion string       `json:"protocolVersion"`
 	Capabilities    Capabilities `json:"capabilities"`
 	ServerInfo      ServerInfo   `json:"serverInfo"`
+	Instructions    string       `json:"instructions,omitempty"`
 }
 
 type Capabilities struct {
-	Tools ToolsCapability `json:"tools,omitempty"`
+	Tools   ToolsCapability        `json:"tools,omitempty"`
+	Logging map[string]interface{} `json:"logging"`
 }
 
 type ToolsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
 }
 
+type ToolAnnotations struct {
+	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool `json:"openWorldHint,omitempty"`
+}
+
 type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	InputSchema InputSchema `json:"inputSchema"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema InputSchema     `json:"inputSchema"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
 }
 
 type InputSchema struct {
@@ -84,7 +94,8 @@ type Property struct {
 }
 
 type ToolsListResult struct {
-	Tools []Tool `json:"tools"`
+	Tools      []Tool `json:"tools"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type CallToolParams struct {
@@ -105,8 +116,12 @@ type ContentItem struct {
 
 type ServerInfo struct {
 	Name    string `json:"name"`
+	Title   string `json:"title,omitempty"`
 	Version string `json:"version"`
 }
+
+// boolPtr is a helper to create *bool for tool annotations.
+func boolPtr(b bool) *bool { return &b }
 
 // Security Logger — structured logging via log/slog (stdlib Go 1.21+)
 type SecurityLogger struct {
@@ -1789,13 +1804,39 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Tools: ToolsCapability{
 						ListChanged: false,
 					},
+					Logging: map[string]interface{}{},
 				},
 				ServerInfo: ServerInfo{
 					Name:    fmt.Sprintf("mcp-go-mssql (%s)", dbStatus),
+					Title:   "MSSQL Database Connector",
 					Version: "1.0.0",
 				},
+				Instructions: "This server provides secure access to a Microsoft SQL Server database. Use get_database_info to check connection status, explore to discover tables/views/procedures, inspect to examine table structure, query_database to run SQL queries, execute_procedure to call whitelisted stored procedures, and explain_query to analyze query execution plans.",
 			},
 		}
+
+	case "ping":
+		// MCP spec MUST: respond promptly to ping with empty result
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  map[string]interface{}{},
+		}
+
+	case "logging/setLevel":
+		// MCP spec: acknowledge logging level changes
+		// We log to stderr via slog; client-requested level is acknowledged but
+		// server-side level stays at Info (internal decision).
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  map[string]interface{}{},
+		}
+
+	case "notifications/cancelled":
+		// MCP spec: cancellation notification — no response needed
+		// Future: could cancel in-flight query contexts
+		return nil
 
 	case "tools/list":
 		tools := []Tool{
@@ -1812,6 +1853,12 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					},
 					Required: []string{"query"},
 				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(false),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(false),
+					OpenWorldHint:   boolPtr(false),
+				},
 			},
 			{
 				Name:        "get_database_info",
@@ -1820,6 +1867,12 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Type:       "object",
 					Properties: map[string]Property{},
 					Required:   []string{},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(true),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
 				},
 			},
 			{
@@ -1851,6 +1904,12 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					},
 					Required: []string{},
 				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(true),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
+				},
 			},
 			{
 				Name:        "inspect",
@@ -1873,7 +1932,14 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					},
 					Required: []string{"table_name"},
 				},
-			},			{
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(true),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
+				},
+			},
+			{
 				Name:        "execute_procedure",
 				Description: "Execute a whitelisted stored procedure (requires MSSQL_WHITELIST_PROCEDURES env var)",
 				InputSchema: InputSchema{
@@ -1890,21 +1956,33 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					},
 					Required: []string{"procedure_name"},
 				},
-			},
-		{
-			Name:        "explain_query",
-			Description: "Show the estimated execution plan for a SQL query without executing it. Useful for performance analysis and query optimization. Only SELECT queries are accepted.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]Property{
-					"query": {
-						Type:        "string",
-						Description: "SELECT query to analyze (must be a read-only query)",
-					},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(false),
+					DestructiveHint: boolPtr(true),
+					IdempotentHint:  boolPtr(false),
+					OpenWorldHint:   boolPtr(false),
 				},
-				Required: []string{"query"},
 			},
-		},
+			{
+				Name:        "explain_query",
+				Description: "Show the estimated execution plan for a SQL query without executing it. Useful for performance analysis and query optimization. Only SELECT queries are accepted.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"query": {
+							Type:        "string",
+							Description: "SELECT query to analyze (must be a read-only query)",
+						},
+					},
+					Required: []string{"query"},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(true),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
+				},
+			},
 		}
 
 		return &MCPResponse{
@@ -1915,9 +1993,26 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 
 	case "tools/call":
 		var params CallToolParams
-		if paramBytes, err := json.Marshal(req.Params); err == nil {
-			if err2 := json.Unmarshal(paramBytes, &params); err2 != nil {
-				s.secLogger.Printf("Failed to unmarshal call params: %v", err2)
+		paramBytes, err := json.Marshal(req.Params)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &MCPError{
+					Code:    -32602,
+					Message: "Invalid params: failed to parse request parameters",
+				},
+			}
+		}
+		if err2 := json.Unmarshal(paramBytes, &params); err2 != nil {
+			s.secLogger.Printf("Failed to unmarshal call params: %v", err2)
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &MCPError{
+					Code:    -32602,
+					Message: "Invalid params: " + err2.Error(),
+				},
 			}
 		}
 
