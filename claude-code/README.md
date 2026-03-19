@@ -146,7 +146,7 @@ This tool complements the main MCP server:
 
 Same as main project:
 - `github.com/denisenkom/go-mssqldb` - SQL Server driver
-- Go 1.20+ with standard library
+- Go 1.26+ with standard library
 
 ## 🚀 Advanced Usage
 

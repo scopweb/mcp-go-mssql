@@ -306,7 +306,7 @@ DEVELOPER_MODE=false
 
 ## Requirements
 
-- Go 1.24+
+- Go 1.26+
 - Microsoft SQL Server with TLS support
 - Network access to SQL Server (port 1433)
 

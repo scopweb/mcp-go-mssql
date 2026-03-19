@@ -25,7 +25,7 @@ The CLI is ideal for:
 
 ### Requirements
 
-- Go 1.21 or higher
+- Go 1.26 or higher
 - Configured environment variables (see [Environment Variables](/en/configuracion/variables-entorno))
 - Network access to SQL Server
 

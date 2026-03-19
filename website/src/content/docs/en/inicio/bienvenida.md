@@ -38,7 +38,7 @@ It's not an add-on module you enable separately. Security is embedded in every l
 
 ## Requirements
 
-- **Go 1.24+** ([download](https://go.dev/dl/))
+- **Go 1.26+** ([download](https://go.dev/dl/))
 - **Microsoft SQL Server** with TLS support (2012 or later recommended)
 - Network access to the SQL Server port (1433 by default)
 

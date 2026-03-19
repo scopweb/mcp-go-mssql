@@ -38,7 +38,7 @@ No es un módulo adicional que activas por separado. La seguridad está integrad
 
 ## Requisitos
 
-- **Go 1.24+** ([descargar](https://go.dev/dl/))
+- **Go 1.26+** ([descargar](https://go.dev/dl/))
 - **Microsoft SQL Server** con soporte TLS (2012 o superior recomendado)
 - Acceso de red al puerto de SQL Server (1433 por defecto)
 

@@ -5,7 +5,7 @@ description: Guía para actualizar la versión de Go en MCP-Go-MSSQL
 
 ## Versión requerida
 
-MCP-Go-MSSQL requiere Go 1.25.0 o superior.
+MCP-Go-MSSQL requiere Go 1.26.0 o superior.
 
 ## Verificar versión actual
 
@@ -56,4 +56,4 @@ go test ./...
 
 - El archivo `go.mod` especifica la versión mínima de Go
 - Las dependencias se gestionan automáticamente con Go modules
-- El driver `go-mssqldb` es compatible con Go 1.21+
+- El driver `go-mssqldb` es compatible con Go 1.26+
