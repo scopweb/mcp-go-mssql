@@ -11,6 +11,7 @@ import (
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
+	_ "github.com/microsoft/go-mssqldb/integratedauth/winsspi"
 )
 
 // DatabaseConfig holds connection configuration
@@ -122,8 +123,15 @@ func loadConfig() (*DatabaseConfig, error) {
 
 func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 	trustCert := "false"
+	encrypt := "true"
 	if config.DevMode {
 		trustCert = "true"
+		// In development mode, allow disabling encryption for older SQL Server instances
+		if envEncrypt := os.Getenv("MSSQL_ENCRYPT"); envEncrypt != "" {
+			encrypt = strings.ToLower(envEncrypt)
+		} else {
+			encrypt = "false"
+		}
 	}
 
 	// Check if a complete custom connection string is provided
@@ -140,21 +148,17 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 	switch strings.ToLower(config.Auth) {
 	case "integrated", "windows":
 		// Windows Integrated Authentication (SSPI) — only works on Windows.
-		// Use Named Pipes (no port required) which doesn't need TCP to be enabled
-		// Named Pipes format: server=.\INSTANCENAME or server=HOSTNAME\INSTANCENAME
-		// For default instance: server=. or server=HOSTNAME
-		// If no database specified, connects without selecting a specific database
 		if config.Database != "" {
-			connStr = fmt.Sprintf("server=%s;database=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
-				config.Server, config.Database, trustCert, trustCert)
+			connStr = fmt.Sprintf("server=%s;port=%s;database=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
+				config.Server, config.Port, config.Database, encrypt, trustCert)
 		} else {
-			connStr = fmt.Sprintf("server=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
-				config.Server, trustCert, trustCert)
+			connStr = fmt.Sprintf("server=%s;port=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
+				config.Server, config.Port, encrypt, trustCert)
 		}
 	default:
 		// Default to SQL Server authentication (user/password)
-		connStr = fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
-			config.Server, config.Database, config.User, config.Password, config.Port, trustCert, trustCert)
+		connStr = fmt.Sprintf("server=%s;port=%s;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			config.Server, config.Port, config.Database, config.User, config.Password, encrypt, trustCert)
 	}
 
 	db, err := sql.Open("sqlserver", connStr)

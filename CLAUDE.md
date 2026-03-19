@@ -115,6 +115,10 @@ The server reads database connection from these environment variables. See `.env
 - `MSSQL_READ_ONLY`: Enable read-only mode with optional whitelist (security feature)
   - `"true"`: Only SELECT queries allowed (except for whitelisted tables)
   - `"false"`: Full access mode (default)
+- `MSSQL_ENCRYPT`: Override TLS encryption setting (only effective when `DEVELOPER_MODE=true`)
+  - `"false"`: Disable encryption — **required for SQL Server 2008/2012** which don't support TLS 1.2
+  - `"true"`: Force encryption even in dev mode
+  - If not set: defaults to `"false"` in dev mode, always `"true"` in production mode
 - `MSSQL_WHITELIST_TABLES`: Comma-separated list of tables/views allowed for modification in read-only mode
   - Example: `"temp_ai,v_temp_ia"`
   - Only these tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP) when `MSSQL_READ_ONLY=true`
@@ -150,6 +154,15 @@ MSSQL_PASSWORD=dev_password
 DEVELOPER_MODE=true
 MSSQL_READ_ONLY=false
 # Full access for development
+
+# Legacy SQL Server 2008/2012 with Windows Integrated Auth
+MSSQL_SERVER=legacy-server
+MSSQL_DATABASE=LegacyDB
+MSSQL_AUTH=integrated
+DEVELOPER_MODE=true
+MSSQL_ENCRYPT=false
+# No user/password needed — uses Windows credentials
+# MSSQL_ENCRYPT=false is required because SQL 2008 doesn't support TLS 1.2
 ```
 
 ### TLS Certificate Handling

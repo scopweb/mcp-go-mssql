@@ -71,7 +71,10 @@ Windows Integrated Authentication allows SQL Server to use Windows credentials (
 **Not needed with integrated auth:**
 - `MSSQL_USER` - ❌ Not used
 - `MSSQL_PASSWORD` - ❌ Not used
-- `MSSQL_PORT` - ❌ Not needed (SSPI can use Named Pipes)
+
+**For legacy SQL Server (2008/2012):**
+- `MSSQL_PORT` - Port number (defaults to 1433, now included in integrated auth connection strings)
+- `MSSQL_ENCRYPT` - Set to `"false"` to disable TLS encryption. **Required for SQL Server 2008/2012** which don't support TLS 1.2. Only effective when `DEVELOPER_MODE=true`
 
 ### Server Name Options
 
@@ -314,6 +317,44 @@ The enhanced logs will show:
   }
 }
 ```
+
+### Example 5: Legacy SQL Server 2008/2012
+
+SQL Server 2008 and 2012 typically don't support TLS 1.2, which the Go driver requires by default. Use `MSSQL_ENCRYPT=false` to disable encryption for these versions.
+
+```json
+{
+  "mcpServers": {
+    "legacy-db": {
+      "command": "C:\\MCPs\\mcp-go-mssql\\build\\mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "server-gdp",
+        "MSSQL_DATABASE": "gdpa",
+        "MSSQL_AUTH": "integrated",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_ENCRYPT": "false"
+      }
+    }
+  }
+}
+```
+
+> ⚠️ **Note:** `MSSQL_ENCRYPT=false` disables TLS encryption for the database connection. Only use this for legacy servers that cannot be upgraded. For SQL Server 2016+ and Azure SQL, always keep encryption enabled.
+
+## Troubleshooting Legacy SQL Server
+
+### Error: "TLS handshake failed" or "certificate signed by unknown authority"
+
+**Cause:** SQL Server 2008/2012 doesn't support TLS 1.2 which the Go driver requires.
+
+**Solution:** Set `MSSQL_ENCRYPT=false` and `DEVELOPER_MODE=true` in your configuration.
+
+### Error: Connection timeout with legacy server
+
+**Cause:** Port not included in the connection string for integrated auth.
+
+**Solution:** Ensure `MSSQL_PORT` is set (defaults to 1433). This was a bug fixed in the latest version — the port is now correctly included in integrated auth connection strings.
 
 ## Additional Resources
 
