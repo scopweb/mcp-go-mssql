@@ -17,6 +17,7 @@ import (
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
+	_ "github.com/microsoft/go-mssqldb/integratedauth/winsspi"
 )
 
 // MCP Protocol structures
@@ -273,13 +274,13 @@ func buildSecureConnectionString() (string, error) {
 		// Database is optional - if not specified, connects to default database
 		var connStr string
 		if database != "" {
-			connStr = fmt.Sprintf("server=%s;database=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
-				server, database, encrypt, trustCert,
+			connStr = fmt.Sprintf("server=%s;port=%s;database=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+				server, port, database, encrypt, trustCert,
 			)
 		} else {
 			// No database specified - connect to master or default database
-			connStr = fmt.Sprintf("server=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
-				server, encrypt, trustCert,
+			connStr = fmt.Sprintf("server=%s;port=%s;integrated security=SSPI;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+				server, port, encrypt, trustCert,
 			)
 		}
 		return connStr, nil
@@ -650,7 +651,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 			return nil, fmt.Errorf("query preparation failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to prepare statement: query preparation error")
-		return nil, fmt.Errorf("query preparation failed")
+		return nil, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
 	}
 	defer stmt.Close()
 
@@ -661,7 +662,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 			return nil, fmt.Errorf("query execution failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to execute query: execution error")
-		return nil, fmt.Errorf("query execution failed")
+		return nil, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
 	}
 	defer rows.Close()
 
@@ -716,12 +717,92 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		var info strings.Builder
 
 		if s.getDB() == nil {
-			info.WriteString("Database Status: Disconnected\n")
-			info.WriteString("Reason: No database connection established\n")
+			info.WriteString("Database Status: DISCONNECTED\n\n")
+
+			// Show current configuration so Claude can diagnose
+			info.WriteString("=== Current Configuration ===\n")
 			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
-				info.WriteString("Configuration: Using custom connection string\n")
-			} else if os.Getenv("MSSQL_SERVER") == "" {
-				info.WriteString("Configuration: Missing MSSQL_SERVER environment variable\n")
+				info.WriteString("Connection: Custom connection string (MSSQL_CONNECTION_STRING)\n")
+			} else {
+				server := os.Getenv("MSSQL_SERVER")
+				if server == "" {
+					info.WriteString("MSSQL_SERVER: NOT SET (required)\n")
+				} else {
+					info.WriteString("MSSQL_SERVER: " + server + "\n")
+				}
+				database := os.Getenv("MSSQL_DATABASE")
+				if database != "" {
+					info.WriteString("MSSQL_DATABASE: " + database + "\n")
+				} else {
+					info.WriteString("MSSQL_DATABASE: not set\n")
+				}
+				auth := strings.ToLower(os.Getenv("MSSQL_AUTH"))
+				if auth == "" {
+					auth = "sql"
+				}
+				info.WriteString("MSSQL_AUTH: " + auth + "\n")
+				if auth == "sql" {
+					if os.Getenv("MSSQL_USER") == "" {
+						info.WriteString("MSSQL_USER: NOT SET (required for SQL auth)\n")
+					} else {
+						info.WriteString("MSSQL_USER: " + os.Getenv("MSSQL_USER") + "\n")
+					}
+					if os.Getenv("MSSQL_PASSWORD") == "" {
+						info.WriteString("MSSQL_PASSWORD: NOT SET (required for SQL auth)\n")
+					} else {
+						info.WriteString("MSSQL_PASSWORD: ***\n")
+					}
+				} else if auth == "integrated" || auth == "windows" {
+					if u, err := osuser.Current(); err == nil {
+						info.WriteString("Windows User: " + u.Username + "\n")
+					}
+				}
+				port := os.Getenv("MSSQL_PORT")
+				if port == "" {
+					port = "1433"
+				}
+				info.WriteString("MSSQL_PORT: " + port + "\n")
+				info.WriteString("DEVELOPER_MODE: " + os.Getenv("DEVELOPER_MODE") + "\n")
+				encryptVal := os.Getenv("MSSQL_ENCRYPT")
+				if encryptVal != "" {
+					info.WriteString("MSSQL_ENCRYPT: " + encryptVal + "\n")
+				}
+			}
+
+			// Diagnostic hints for Claude to suggest fixes
+			info.WriteString("\n=== Possible Causes ===\n")
+			if os.Getenv("MSSQL_SERVER") == "" && os.Getenv("MSSQL_CONNECTION_STRING") == "" {
+				info.WriteString("- MSSQL_SERVER environment variable is not set\n")
+			} else {
+				auth := strings.ToLower(os.Getenv("MSSQL_AUTH"))
+				devMode := strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
+				encrypt := "true"
+				if devMode {
+					if envEncrypt := os.Getenv("MSSQL_ENCRYPT"); envEncrypt != "" {
+						encrypt = strings.ToLower(envEncrypt)
+					} else {
+						encrypt = "false"
+					}
+				}
+
+				if auth == "sql" || auth == "" {
+					if os.Getenv("MSSQL_USER") == "" || os.Getenv("MSSQL_PASSWORD") == "" {
+						info.WriteString("- Missing MSSQL_USER or MSSQL_PASSWORD for SQL authentication\n")
+					}
+				}
+				if encrypt == "true" {
+					info.WriteString("- TLS encryption is ENABLED. If the server is SQL Server 2008/2012 or doesn't have TLS certificates, set MSSQL_ENCRYPT=false with DEVELOPER_MODE=true\n")
+				}
+				if !devMode {
+					info.WriteString("- Production mode requires valid TLS certificates. For internal/dev servers, set DEVELOPER_MODE=true\n")
+				}
+				if auth == "integrated" || auth == "windows" {
+					info.WriteString("- Windows Integrated Auth: verify the Windows user has SQL Server login permissions\n")
+					info.WriteString("- Check that SQL Server allows Windows Authentication mode\n")
+					info.WriteString("- For remote servers, verify Active Directory connectivity\n")
+				}
+				info.WriteString("- Verify the server is reachable and SQL Server service is running\n")
+				info.WriteString("- Check firewall rules allow connections on the configured port\n")
 			}
 		} else {
 			info.WriteString("Database Status: Connected\n")
@@ -790,7 +871,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 						},
 					},
 					IsError: true,
@@ -875,7 +956,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 						},
 					},
 					IsError: true,
@@ -1105,7 +1186,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 						},
 					},
 					IsError: true,
@@ -1289,7 +1370,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Use get_database_info to check connection status.",
+							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 						},
 					},
 					IsError: true,
@@ -1535,7 +1616,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: Database not connected."}},
+					Content: []ContentItem{{Type: "text", Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps."}},
 					IsError: true,
 				},
 			}

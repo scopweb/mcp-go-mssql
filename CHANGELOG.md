@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 🔧 **`MSSQL_ENCRYPT` environment variable**: New option to control TLS encryption independently in development mode. When `DEVELOPER_MODE=true`, encryption now defaults to `false` (previously defaulted to `true`). This is **required for SQL Server 2008/2012** which don't support TLS 1.2 — without this the Go driver fails the TLS handshake. In production mode (`DEVELOPER_MODE=false`), encryption is always enforced regardless of this setting.
+
+### Changed
+- 🤖 **Improved error messages for AI/LLM interpretation**: All error responses are now designed to help Claude (and other LLMs) diagnose and resolve issues autonomously:
+  - **`get_database_info` when disconnected**: Now shows full configuration dump (server, database, auth mode, encrypt, port, Windows user) plus a "Possible Causes" diagnostic section with specific fixes (missing env vars, TLS incompatibility, auth mode issues, firewall)
+  - **"Database not connected" errors**: All tools now instruct Claude to call `get_database_info` for diagnosis instead of showing a generic message
+  - **Production query errors**: Instead of bare "query preparation failed", now include actionable hints ("check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
+
+### Fixed
+- 🐛 **Missing `port` in Windows Integrated Auth connection string** (`main.go`): The `buildSecureConnectionString()` function omitted the `port` parameter when building connection strings for `MSSQL_AUTH=integrated`, causing connections to fail if the server uses a non-default port.
+- 🐛 **Hardcoded `encrypt=true` in `pkg/connector/db-connector.go`**: Windows Integrated Auth connection string had `encrypt=true` hardcoded, ignoring `DEVELOPER_MODE` and `MSSQL_ENCRYPT` settings. Now respects both variables consistently across all three connector files.
+- 🐛 **Wrong `encrypt` value in `claude-code/db-connector.go`**: The integrated auth branch used `trustCert` value for the `encrypt` parameter instead of a separate encrypt variable. Now correctly uses `MSSQL_ENCRYPT` override.
+- 🐛 **`MSSQL_DATABASE` required for integrated auth in `pkg/connector`**: Unlike `main.go` and `claude-code`, the pkg connector required `MSSQL_DATABASE` even for Windows Auth. Now optional, consistent with the other connectors.
+
+### Changed
+- ⚡ **Consistent encryption defaults across all connectors**: All three files (`main.go`, `claude-code/db-connector.go`, `pkg/connector/db-connector.go`) now share the same logic: dev mode defaults `encrypt=false` and `trustservercertificate=true`, with `MSSQL_ENCRYPT` override available.
+
+### Documentation
+- 📚 **`MSSQL_ENCRYPT`** documented in `CLAUDE.md` optional variables section
+- 📚 **Legacy SQL Server example** added to `CLAUDE.md` configuration examples (SQL 2008/2012 + Windows Auth)
+- 📚 **`.env.example`** updated with legacy SQL Server example and `MSSQL_ENCRYPT` documentation
+
+---
+
+### Added
 - 👁️ **`explore` tool: new `type=views`**: Lists only database views with rich metadata — `schema_name`, `view_name`, `check_option`, `is_updatable`, and a 300-char `definition_preview`. Supports optional `filter` parameter (LIKE match on name). Complements `type=tables` which lists both tables and views.
 - 🔗 **`inspect` tool: new `detail=dependencies`**: Shows which SQL objects (views, procedures, functions) reference a given table using `sys.sql_expression_dependencies`. Returns `referencing_schema`, `referencing_object`, `referencing_type`, `is_caller_dependent`, `is_ambiguous`. Also included in `detail=all` output. Useful for impact analysis before schema changes.
 - 🔍 **New `explain_query` tool**: Shows the estimated SQL Server execution plan for a SELECT query **without executing it**. Uses `SET SHOWPLAN_TEXT ON` on a dedicated connection to isolate the session. Always enforces SELECT-only validation (`extractOperation`) regardless of `MSSQL_READ_ONLY` mode. Useful for query performance analysis with Claude.
