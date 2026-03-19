@@ -59,5 +59,12 @@ server=localhost;database=DevDB;encrypt=true;trustservercertificate=true
 - **Solution:** Set `DEVELOPER_MODE=true` to disable local encryption
 
 ### "TLS Handshake failed"
-- **Cause:** Legacy SQL Server (2008/2012) with incompatible TLS protocol
-- **Solution:** Use a custom connection string with URL format
+- **Cause:** Legacy SQL Server (2008/2012) doesn't support TLS 1.2, which is the minimum required by the Go driver
+- **Solution:** Set `MSSQL_ENCRYPT=false` together with `DEVELOPER_MODE=true`
+
+```bash
+DEVELOPER_MODE=true
+MSSQL_ENCRYPT=false
+```
+
+> This disables TLS on the connection. Only use for legacy servers that cannot be upgraded. For SQL Server 2016+ and Azure SQL, always keep encryption enabled.

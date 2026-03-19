@@ -23,6 +23,7 @@ Todas las credenciales y opciones de configuración se gestionan mediante variab
 | `MSSQL_READ_ONLY` | `false` | Bloquea operaciones de escritura |
 | `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación en modo read-only |
 | `MSSQL_AUTH` | `sql` | Modo de autenticación: `sql`, `integrated`, `azure` |
+| `MSSQL_ENCRYPT` | _(auto)_ | Control de cifrado TLS. Solo efectivo con `DEVELOPER_MODE=true`. `false` = desactivar cifrado (**necesario para SQL Server 2008/2012**). Si no se define: `false` en dev, siempre `true` en producción |
 | `MSSQL_CONNECTION_STRING` | _(vacío)_ | Connection string personalizado (anula otras variables) |
 
 ## Plantilla .env

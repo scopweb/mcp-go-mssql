@@ -7,6 +7,25 @@ All relevant changes to this project are documented here.
 
 ## Latest changes
 
+### SQL Server 2008/2012 support and improved diagnostics
+
+**New variable:** `MSSQL_ENCRYPT`
+- Controls TLS encryption independently in development mode
+- `MSSQL_ENCRYPT=false` is **required for SQL Server 2008/2012** which don't support TLS 1.2
+- Only effective with `DEVELOPER_MODE=true`. In production, encryption is always enforced
+
+**Connection fixes:**
+- Added `port` to integrated auth connection string (was previously omitted)
+- Fixed hardcoded `encrypt=true` in CLI and pkg connectors
+- `MSSQL_DATABASE` is now optional for integrated auth across all connectors
+
+**Improved diagnostics for Claude:**
+- `get_database_info` when disconnected now shows: full configuration + possible causes + specific solutions
+- All "Database not connected" errors guide Claude to use `get_database_info` for diagnosis
+- Production query errors include actionable hints (check syntax, permissions, use `explore`)
+
+---
+
 ### `inspect` — new `detail=dependencies`
 
 - Shows which SQL objects (views, procedures, functions) **depend on a given table**
