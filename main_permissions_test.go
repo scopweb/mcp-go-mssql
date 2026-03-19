@@ -1,16 +1,12 @@
 package main
 
 import (
-	"os"
 	"testing"
 )
 
 // TestExtractAllTablesFromQuery tests table extraction from various SQL queries
 func TestExtractAllTablesFromQuery(t *testing.T) {
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	tests := []struct {
 		name     string
@@ -89,18 +85,7 @@ func TestExtractAllTablesFromQuery(t *testing.T) {
 
 // TestValidateTablePermissions tests the whitelist validation logic
 func TestValidateTablePermissions(t *testing.T) {
-	// Save and restore original env vars
-	originalReadOnly := os.Getenv("MSSQL_READ_ONLY")
-	originalWhitelist := os.Getenv("MSSQL_WHITELIST_TABLES")
-	defer func() {
-		os.Setenv("MSSQL_READ_ONLY", originalReadOnly)
-		os.Setenv("MSSQL_WHITELIST_TABLES", originalWhitelist)
-	}()
-
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	tests := []struct {
 		name          string
@@ -186,9 +171,9 @@ func TestValidateTablePermissions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set environment variables for this test
-			os.Setenv("MSSQL_READ_ONLY", tt.readOnly)
-			os.Setenv("MSSQL_WHITELIST_TABLES", tt.whitelist)
+			// Update cached config for this test case
+			server.config.readOnly = tt.readOnly == "true"
+			server.config.whitelistTables = parseWhitelistTables(tt.whitelist)
 
 			err := server.validateTablePermissions(tt.query)
 
@@ -207,14 +192,7 @@ func TestValidateTablePermissions(t *testing.T) {
 
 // TestGetWhitelistedTables tests whitelist parsing
 func TestGetWhitelistedTables(t *testing.T) {
-	// Save and restore original env var
-	originalWhitelist := os.Getenv("MSSQL_WHITELIST_TABLES")
-	defer os.Setenv("MSSQL_WHITELIST_TABLES", originalWhitelist)
-
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	tests := []struct {
 		name       string
@@ -256,7 +234,8 @@ func TestGetWhitelistedTables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Setenv("MSSQL_WHITELIST_TABLES", tt.whitelist)
+			// Update cached config for this test case
+			server.config.whitelistTables = parseWhitelistTables(tt.whitelist)
 
 			tables := server.getWhitelistedTables()
 
@@ -286,10 +265,7 @@ func TestGetWhitelistedTables(t *testing.T) {
 
 // TestExtractOperation tests SQL operation extraction
 func TestExtractOperation(t *testing.T) {
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	tests := []struct {
 		name     string

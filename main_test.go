@@ -68,6 +68,19 @@ func setupTestEnv() {
 	}
 }
 
+// newTestMCPServer creates an MCPMSSQLServer with rate limiter initialized for testing.
+func newTestMCPServer() *MCPMSSQLServer {
+	s := &MCPMSSQLServer{
+		secLogger: NewSecurityLogger(),
+		devMode:   true,
+	}
+	s.rateLimiter.maxTokens = 1000
+	s.rateLimiter.tokens = 1000
+	s.rateLimiter.lastReset = time.Now()
+	s.rateLimiter.interval = time.Minute
+	return s
+}
+
 func TestSecurityLoggerSanitization(t *testing.T) {
 	logger := NewSecurityLogger()
 
@@ -122,35 +135,15 @@ func TestSecurityLoggerSanitization(t *testing.T) {
 }
 
 func TestBuildSecureConnectionString(t *testing.T) {
-	// Save original env vars
-	originalVars := make(map[string]string)
-	envVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_USER", "MSSQL_PASSWORD", "MSSQL_PORT", "DEVELOPER_MODE", "MSSQL_CONNECTION_STRING", "MSSQL_AUTH"}
-	for _, v := range envVars {
-		originalVars[v] = os.Getenv(v)
-	}
-	defer func() {
-		// Restore original env vars
-		for k, v := range originalVars {
-			os.Setenv(k, v)
-		}
-	}()
-
-	// Clear MSSQL_CONNECTION_STRING to avoid interference
-	os.Setenv("MSSQL_CONNECTION_STRING", "")
-
 	t.Run("Valid configuration", func(t *testing.T) {
-		os.Setenv("MSSQL_CONNECTION_STRING", "")
-		setupTestEnv()
-
-		// Only run this subtest if env vars are configured
-		if os.Getenv("MSSQL_SERVER") == "" {
-			// Set minimal test values
-			os.Setenv("MSSQL_SERVER", "testserver")
-			os.Setenv("MSSQL_DATABASE", "testdb")
-			os.Setenv("MSSQL_USER", "testuser")
-			os.Setenv("MSSQL_PASSWORD", "testpass")
-			os.Setenv("DEVELOPER_MODE", "true")
-		}
+		t.Setenv("MSSQL_CONNECTION_STRING", "")
+		t.Setenv("MSSQL_SERVER", "testserver")
+		t.Setenv("MSSQL_DATABASE", "testdb")
+		t.Setenv("MSSQL_USER", "testuser")
+		t.Setenv("MSSQL_PASSWORD", "testpass")
+		t.Setenv("MSSQL_PORT", "1433")
+		t.Setenv("MSSQL_AUTH", "sql")
+		t.Setenv("DEVELOPER_MODE", "true")
 
 		connStr, err := buildSecureConnectionString()
 		if err != nil {
@@ -166,12 +159,12 @@ func TestBuildSecureConnectionString(t *testing.T) {
 	})
 
 	t.Run("Missing required variables", func(t *testing.T) {
-		os.Setenv("MSSQL_CONNECTION_STRING", "")
-		os.Setenv("MSSQL_SERVER", "")
-		os.Setenv("MSSQL_DATABASE", "test")
-		os.Setenv("MSSQL_USER", "user")
-		os.Setenv("MSSQL_PASSWORD", "pass")
-		os.Setenv("MSSQL_AUTH", "sql")
+		t.Setenv("MSSQL_CONNECTION_STRING", "")
+		t.Setenv("MSSQL_SERVER", "")
+		t.Setenv("MSSQL_DATABASE", "test")
+		t.Setenv("MSSQL_USER", "user")
+		t.Setenv("MSSQL_PASSWORD", "pass")
+		t.Setenv("MSSQL_AUTH", "sql")
 
 		_, err := buildSecureConnectionString()
 		if err == nil {
@@ -180,13 +173,13 @@ func TestBuildSecureConnectionString(t *testing.T) {
 	})
 
 	t.Run("Production mode settings", func(t *testing.T) {
-		os.Setenv("MSSQL_CONNECTION_STRING", "")
-		os.Setenv("MSSQL_SERVER", "testserver")
-		os.Setenv("MSSQL_DATABASE", "testdb")
-		os.Setenv("MSSQL_USER", "testuser")
-		os.Setenv("MSSQL_PASSWORD", "testpass")
-		os.Setenv("MSSQL_AUTH", "sql")
-		os.Setenv("DEVELOPER_MODE", "false")
+		t.Setenv("MSSQL_CONNECTION_STRING", "")
+		t.Setenv("MSSQL_SERVER", "testserver")
+		t.Setenv("MSSQL_DATABASE", "testdb")
+		t.Setenv("MSSQL_USER", "testuser")
+		t.Setenv("MSSQL_PASSWORD", "testpass")
+		t.Setenv("MSSQL_AUTH", "sql")
+		t.Setenv("DEVELOPER_MODE", "false")
 
 		connStr, err := buildSecureConnectionString()
 		if err != nil {
@@ -202,12 +195,12 @@ func TestBuildSecureConnectionString(t *testing.T) {
 	})
 
 	t.Run("Integrated authentication (Windows)", func(t *testing.T) {
-		os.Setenv("MSSQL_CONNECTION_STRING", "")
-		os.Setenv("MSSQL_SERVER", "testserver")
-		os.Setenv("MSSQL_AUTH", "integrated")
-		os.Setenv("MSSQL_USER", "")
-		os.Setenv("MSSQL_PASSWORD", "")
-		os.Setenv("DEVELOPER_MODE", "true")
+		t.Setenv("MSSQL_CONNECTION_STRING", "")
+		t.Setenv("MSSQL_SERVER", "testserver")
+		t.Setenv("MSSQL_AUTH", "integrated")
+		t.Setenv("MSSQL_USER", "")
+		t.Setenv("MSSQL_PASSWORD", "")
+		t.Setenv("DEVELOPER_MODE", "true")
 
 		connStr, err := buildSecureConnectionString()
 		if err != nil {
@@ -226,10 +219,7 @@ func TestBuildSecureConnectionString(t *testing.T) {
 func TestMCPServerInitialization(t *testing.T) {
 	setupTestEnv()
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	// Test initialize request
 	req := MCPRequest{
@@ -271,10 +261,7 @@ func TestMCPServerInitialization(t *testing.T) {
 }
 
 func TestMCPVersionNegotiation(t *testing.T) {
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	versions := []string{"2025-06-18", "2025-11-25", "2024-11-05"}
 	for _, ver := range versions {
@@ -299,10 +286,7 @@ func TestMCPVersionNegotiation(t *testing.T) {
 func TestMCPToolsList(t *testing.T) {
 	setupTestEnv()
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	req := MCPRequest{
 		JSONRPC: "2.0",
@@ -355,10 +339,7 @@ func TestMCPToolsList(t *testing.T) {
 func TestInputValidation(t *testing.T) {
 	setupTestEnv()
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	testCases := []struct {
 		name    string
@@ -403,10 +384,7 @@ func TestInputValidation(t *testing.T) {
 func TestInspectDependencies(t *testing.T) {
 	setupTestEnv()
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	// All inspect detail types should return IsError=true when DB is disconnected
 	detailTypes := []string{"columns", "indexes", "foreign_keys", "dependencies", "all"}
@@ -448,10 +426,7 @@ func TestInspectDependencies(t *testing.T) {
 func TestExploreViewsType(t *testing.T) {
 	setupTestEnv()
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	// All explore types should return IsError=true when DB is disconnected
 	exploreTypes := []string{"tables", "views", "databases", "procedures"}
@@ -493,13 +468,10 @@ func TestExploreViewsType(t *testing.T) {
 func TestReadOnlyValidation(t *testing.T) {
 	setupTestEnv()
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
-	// Test with read-only mode disabled
-	os.Setenv("MSSQL_READ_ONLY", "false")
+	// Test with read-only mode disabled (cached config)
+	server.config.readOnly = false
 
 	testCases := []struct {
 		name    string
@@ -530,8 +502,8 @@ func TestReadOnlyValidation(t *testing.T) {
 		})
 	}
 
-	// Test with read-only mode enabled
-	os.Setenv("MSSQL_READ_ONLY", "true")
+	// Test with read-only mode enabled (cached config)
+	server.config.readOnly = true
 
 	readOnlyTestCases := []struct {
 		name    string
@@ -602,9 +574,7 @@ func TestDatabaseConnection(t *testing.T) {
 	setupTestEnv()
 
 	// Clear custom connection string
-	origConnStr := os.Getenv("MSSQL_CONNECTION_STRING")
-	defer os.Setenv("MSSQL_CONNECTION_STRING", origConnStr)
-	os.Setenv("MSSQL_CONNECTION_STRING", "")
+	t.Setenv("MSSQL_CONNECTION_STRING", "")
 
 	if os.Getenv("MSSQL_SERVER") == "" {
 		t.Skip("MSSQL_SERVER not set, skipping integration test")
@@ -653,10 +623,7 @@ func TestDatabaseConnection(t *testing.T) {
 	t.Logf("SQL Server Version: %s", version)
 
 	// Test server functionality
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 	server.setDB(db)
 
 	// Test get_database_info
@@ -724,10 +691,7 @@ func TestPerformanceOptimizations(t *testing.T) {
 }
 
 func TestExplainQueryValidation(t *testing.T) {
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	testCases := []struct {
 		name     string
@@ -777,10 +741,7 @@ func TestExplainQueryValidation(t *testing.T) {
 }
 
 func TestProcedureNameValidation(t *testing.T) {
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
+	server := newTestMCPServer()
 
 	testCases := []struct {
 		name    string

@@ -9,9 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - 🛡️ **Rate limiter for MCP tool calls**: Token-bucket rate limiter (60 calls/minute) prevents resource exhaustion. Returns a tool execution error with `isError: true` when limit exceeded, as recommended by MCP spec 2025-11-25.
+- 🧪 **Rate limiter tests**: Basic, reset, concurrent (atomic + goroutines), and tool-call integration tests for the rate limiter.
+- 🧪 **Fuzzing tests**: 7 fuzz functions covering `validateBasicInput`, `validateReadOnlyQuery`, `sanitizeForLogging`, `stripLeadingComments`, `extractOperation`, `extractAllTablesFromQuery`, `validateTablePermissions`.
 - 🔧 **`MSSQL_ENCRYPT` environment variable**: New option to control TLS encryption independently in development mode. When `DEVELOPER_MODE=true`, encryption now defaults to `false` (previously defaulted to `true`). This is **required for SQL Server 2008/2012** which don't support TLS 1.2 — without this the Go driver fails the TLS handshake. In production mode (`DEVELOPER_MODE=false`), encryption is always enforced regardless of this setting.
 
 ### Changed
+- 🏗️ **Migrated `SecurityLogger` to `log/slog`**: Structured JSON logging via stdlib `log/slog` (Go 1.21+) replaces the old `log.Logger` wrapper. Logs now include `component`, `success` fields for machine-parseable audit trails.
+- ⚡ **Cached server config at startup**: `MSSQL_READ_ONLY`, `MSSQL_WHITELIST_TABLES`, `MSSQL_WHITELIST_PROCEDURES` are now read once at startup and cached in `serverConfig` struct — eliminates `os.Getenv()` calls on every request.
+- 🔒 **Goroutine lifecycle management**: DB connection goroutine now uses `context.Context` for cancellation and `sync.WaitGroup` for clean shutdown.
+- 📏 **Scanner buffer limit**: stdin scanner now has an explicit 4MB buffer limit to prevent DoS via oversized lines.
+- 🔧 **Extracted `stripLeadingComments` helper**: Deduplicated SQL comment-stripping logic from 3 locations into a single reusable function.
+- 🔧 **Error wrapping with `%w`**: All `fmt.Errorf("...: %v", err)` in claude-code and pkg connectors now use `%w` for proper error chain propagation.
+- 🔧 **Custom connection string timeout enforcement**: `claude-code/` and `pkg/connector/` now append `connection timeout=30;command timeout=30` to custom connection strings if missing (matching main.go behavior).
+- 🧪 **Test improvements**: Migrated `os.Setenv` to `t.Setenv()` (Go 1.17+), tests use cached `serverConfig` instead of env vars, cleaned up informational-only security tests into real assertions.
 - 🤖 **Improved error messages for AI/LLM interpretation**: All error responses are now designed to help Claude (and other LLMs) diagnose and resolve issues autonomously:
   - **`get_database_info` when disconnected**: Now shows full configuration dump (server, database, auth mode, encrypt, port, Windows user) plus a "Possible Causes" diagnostic section with specific fixes (missing env vars, TLS incompatibility, auth mode issues, firewall)
   - **"Database not connected" errors**: All tools now instruct Claude to call `get_database_info` for diagnosis instead of showing a generic message
