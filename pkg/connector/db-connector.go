@@ -136,9 +136,16 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 
 	// Check for a complete custom connection string
 	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+		connStrLower := strings.ToLower(customConnStr)
+		if !strings.Contains(connStrLower, "connection timeout") {
+			customConnStr += ";connection timeout=30"
+		}
+		if !strings.Contains(connStrLower, "command timeout") {
+			customConnStr += ";command timeout=30"
+		}
 		db, err := sql.Open("sqlserver", customConnStr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open connection: %v", err)
+			return nil, fmt.Errorf("failed to open connection: %w", err)
 		}
 		return db, nil
 	}
@@ -163,7 +170,7 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 
 	db, err := sql.Open("sqlserver", connStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open connection: %v", err)
+		return nil, fmt.Errorf("failed to open connection: %w", err)
 	}
 
 	// Configure connection pool
@@ -180,7 +187,7 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 		if cerr := db.Close(); cerr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to close db after ping failure: %v\n", cerr)
 		}
-		return nil, fmt.Errorf("failed to ping database: %v", err)
+		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	return db, nil

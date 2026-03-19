@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	osuser "os/user"
 	"regexp"
@@ -108,23 +108,29 @@ type ServerInfo struct {
 	Version string `json:"version"`
 }
 
-// Security Logger
+// Security Logger — structured logging via log/slog (stdlib Go 1.21+)
 type SecurityLogger struct {
-	*log.Logger
+	logger *slog.Logger
 }
 
 func NewSecurityLogger() *SecurityLogger {
+	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
 	return &SecurityLogger{
-		Logger: log.New(os.Stderr, "[SECURITY] ", log.LstdFlags|log.Lshortfile),
+		logger: slog.New(handler).With(slog.String("component", "security")),
 	}
 }
 
+// Printf provides backward-compatible formatted logging.
+func (sl *SecurityLogger) Printf(format string, args ...interface{}) {
+	sl.logger.Info(fmt.Sprintf(format, args...))
+}
+
 func (sl *SecurityLogger) LogConnectionAttempt(success bool) {
-	status := "SUCCESS"
-	if !success {
-		status = "FAILED"
-	}
-	sl.Printf("Database connection attempt: %s", status)
+	sl.logger.Info("database connection attempt",
+		slog.Bool("success", success),
+	)
 }
 
 // Compiled regex patterns for better performance
@@ -175,12 +181,20 @@ func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 	return result
 }
 
+// serverConfig holds cached configuration read once at startup.
+type serverConfig struct {
+	readOnly        bool
+	whitelistTables []string
+	whitelistProcs  string
+}
+
 // MSSQL Server
 type MCPMSSQLServer struct {
 	db          *sql.DB
 	dbMu        sync.RWMutex
 	secLogger   *SecurityLogger
 	devMode     bool
+	config      serverConfig
 	rateLimiter struct {
 		mu        sync.Mutex
 		tokens    int
@@ -230,13 +244,13 @@ func buildSecureConnectionString() (string, error) {
 		if isProduction {
 			// Warn about insecure settings in production
 			if strings.Contains(connStrLower, "encrypt=false") {
-				log.New(os.Stderr, "[SECURITY] ", log.LstdFlags).Printf("WARNING: Custom connection string has encrypt=false in production mode")
+				slog.Warn("custom connection string has encrypt=false in production mode")
 			}
 			if !strings.Contains(connStrLower, "encrypt=") {
-				log.New(os.Stderr, "[SECURITY] ", log.LstdFlags).Printf("WARNING: Custom connection string missing encrypt parameter in production mode")
+				slog.Warn("custom connection string missing encrypt parameter in production mode")
 			}
 			if strings.Contains(connStrLower, "trustservercertificate=true") {
-				log.New(os.Stderr, "[SECURITY] ", log.LstdFlags).Printf("WARNING: Custom connection string has trustservercertificate=true in production mode")
+				slog.Warn("custom connection string has trustservercertificate=true in production mode")
 			}
 		}
 
@@ -352,9 +366,32 @@ func (s *MCPMSSQLServer) validateBasicInput(input string) error {
 	return nil
 }
 
+// stripLeadingComments removes SQL comments and whitespace from the beginning of a query.
+func stripLeadingComments(query string) string {
+	q := strings.TrimSpace(strings.ToUpper(query))
+	for strings.HasPrefix(q, "--") || strings.HasPrefix(q, "/*") || strings.HasPrefix(q, " ") || strings.HasPrefix(q, "\t") || strings.HasPrefix(q, "\n") || strings.HasPrefix(q, "\r") {
+		if strings.HasPrefix(q, "--") {
+			if idx := strings.Index(q, "\n"); idx != -1 {
+				q = strings.TrimSpace(q[idx+1:])
+			} else {
+				return q
+			}
+		} else if strings.HasPrefix(q, "/*") {
+			if idx := strings.Index(q, "*/"); idx != -1 {
+				q = strings.TrimSpace(q[idx+2:])
+			} else {
+				return q
+			}
+		} else {
+			q = strings.TrimSpace(q[1:])
+		}
+	}
+	return q
+}
+
 func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
-	// Check if read-only mode is enabled
-	if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) != "true" {
+	// Check if read-only mode is enabled (cached at startup)
+	if !s.config.readOnly {
 		return nil // Read-only mode disabled, allow all queries
 	}
 
@@ -365,26 +402,8 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	if len(whitelist) > 0 {
 		// Whitelist is configured - let validateTablePermissions() handle modification permissions
 		// We still need to block dangerous operations though
-		normalizedQuery := strings.TrimSpace(strings.ToUpper(query))
-
-		// Remove leading comments
-		for strings.HasPrefix(normalizedQuery, "--") || strings.HasPrefix(normalizedQuery, "/*") || strings.HasPrefix(normalizedQuery, " ") || strings.HasPrefix(normalizedQuery, "\t") || strings.HasPrefix(normalizedQuery, "\n") || strings.HasPrefix(normalizedQuery, "\r") {
-			if strings.HasPrefix(normalizedQuery, "--") {
-				if idx := strings.Index(normalizedQuery, "\n"); idx != -1 {
-					normalizedQuery = strings.TrimSpace(normalizedQuery[idx+1:])
-				} else {
-					break
-				}
-			} else if strings.HasPrefix(normalizedQuery, "/*") {
-				if idx := strings.Index(normalizedQuery, "*/"); idx != -1 {
-					normalizedQuery = strings.TrimSpace(normalizedQuery[idx+2:])
-				} else {
-					break
-				}
-			} else {
-				normalizedQuery = strings.TrimSpace(normalizedQuery[1:])
-			}
-		}
+		normalizedQuery := stripLeadingComments(query)
+		_ = normalizedQuery // used for future pattern matching if needed
 
 		// Block dangerous system procedures even with whitelist
 		dangerousSPs := []string{
@@ -408,29 +427,7 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	}
 
 	// No whitelist configured - enforce strict read-only mode
-	// Normalize query for checking
-	normalizedQuery := strings.TrimSpace(strings.ToUpper(query))
-
-	// Remove leading comments and whitespace
-	for strings.HasPrefix(normalizedQuery, "--") || strings.HasPrefix(normalizedQuery, "/*") || strings.HasPrefix(normalizedQuery, " ") || strings.HasPrefix(normalizedQuery, "\t") || strings.HasPrefix(normalizedQuery, "\n") || strings.HasPrefix(normalizedQuery, "\r") {
-		if strings.HasPrefix(normalizedQuery, "--") {
-			// Skip until end of line
-			if idx := strings.Index(normalizedQuery, "\n"); idx != -1 {
-				normalizedQuery = strings.TrimSpace(normalizedQuery[idx+1:])
-			} else {
-				return fmt.Errorf("read-only mode: only SELECT queries are allowed")
-			}
-		} else if strings.HasPrefix(normalizedQuery, "/*") {
-			// Skip until end of block comment
-			if idx := strings.Index(normalizedQuery, "*/"); idx != -1 {
-				normalizedQuery = strings.TrimSpace(normalizedQuery[idx+2:])
-			} else {
-				return fmt.Errorf("read-only mode: only SELECT queries are allowed")
-			}
-		} else {
-			normalizedQuery = strings.TrimSpace(normalizedQuery[1:])
-		}
-	}
+	normalizedQuery := stripLeadingComments(query)
 
 	// List of allowed read-only operations
 	allowedPrefixes := []string{
@@ -499,15 +496,17 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	return fmt.Errorf("read-only mode: only SELECT and read operations are allowed")
 }
 
-// getWhitelistedTables returns the list of tables/views allowed for modification
+// getWhitelistedTables returns the cached list of tables/views allowed for modification.
 func (s *MCPMSSQLServer) getWhitelistedTables() []string {
-	whitelistEnv := os.Getenv("MSSQL_WHITELIST_TABLES")
-	if whitelistEnv == "" {
-		return []string{} // Empty whitelist means no tables allowed for modification
-	}
+	return s.config.whitelistTables
+}
 
-	// Parse comma-separated list and normalize to lowercase
-	tables := strings.Split(whitelistEnv, ",")
+// parseWhitelistTables parses a comma-separated whitelist into normalized lowercase slice.
+func parseWhitelistTables(env string) []string {
+	if env == "" {
+		return nil
+	}
+	tables := strings.Split(env, ",")
 	var normalized []string
 	for _, table := range tables {
 		table = strings.TrimSpace(table)
@@ -548,24 +547,7 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 
 // extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
 func (s *MCPMSSQLServer) extractOperation(query string) string {
-	queryUpper := strings.ToUpper(strings.TrimSpace(query))
-
-	// Remove leading comments
-	for strings.HasPrefix(queryUpper, "--") || strings.HasPrefix(queryUpper, "/*") {
-		if strings.HasPrefix(queryUpper, "--") {
-			if idx := strings.Index(queryUpper, "\n"); idx != -1 {
-				queryUpper = strings.TrimSpace(queryUpper[idx+1:])
-			} else {
-				break
-			}
-		} else if strings.HasPrefix(queryUpper, "/*") {
-			if idx := strings.Index(queryUpper, "*/"); idx != -1 {
-				queryUpper = strings.TrimSpace(queryUpper[idx+2:])
-			} else {
-				break
-			}
-		}
-	}
+	queryUpper := stripLeadingComments(query)
 
 	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
 	for _, op := range modifyOps {
@@ -588,8 +570,8 @@ func (s *MCPMSSQLServer) extractOperation(query string) string {
 
 // validateTablePermissions validates that all tables in a modify operation are whitelisted
 func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
-	// Only validate if read-only mode is enabled
-	if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) != "true" {
+	// Only validate if read-only mode is enabled (cached at startup)
+	if !s.config.readOnly {
 		return nil // Whitelist mode disabled, allow all operations
 	}
 
@@ -867,10 +849,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				info.WriteString("Encryption: " + encrypt + "\n")
 			}
 
-			// Show read-only status and whitelist
-			if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true" {
-				// Show whitelist if configured
-				whitelist := s.getWhitelistedTables()
+			// Show read-only status and whitelist (cached config)
+			whitelist := s.getWhitelistedTables()
+			if s.config.readOnly {
 				if len(whitelist) > 0 {
 					info.WriteString("Access Mode: READ-ONLY with whitelist exceptions\n")
 					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
@@ -880,7 +861,6 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					info.WriteString("Whitelisted Tables: NONE (all modifications blocked)\n")
 				}
 			} else {
-				whitelist := s.getWhitelistedTables()
 				if len(whitelist) > 0 {
 					info.WriteString("Access Mode: Whitelist-protected (modifications restricted)\n")
 					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
@@ -1253,8 +1233,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		}
 
-		// Check whitelist
-		whitelistEnv := os.Getenv("MSSQL_WHITELIST_PROCEDURES")
+		// Check whitelist (cached at startup)
+		whitelistEnv := s.config.whitelistProcs
 		if whitelistEnv == "" {
 			return &MCPResponse{
 				JSONRPC: "2.0",
@@ -1974,11 +1954,19 @@ func main() {
 		secLogger.Printf("DEVELOPER MODE ENABLED - Detailed errors will be shown")
 	}
 
+	// Cache configuration once at startup (avoid os.Getenv on every request)
+	cfg := serverConfig{
+		readOnly:        strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
+		whitelistTables: parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
+		whitelistProcs:  os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
+	}
+
 	// Create MCP server without database initially
 	server := &MCPMSSQLServer{
 		db:        nil,
 		secLogger: secLogger,
 		devMode:   devMode,
+		config:    cfg,
 	}
 	// Initialize rate limiter: 60 tool calls per minute
 	server.rateLimiter.maxTokens = 60
@@ -1987,9 +1975,18 @@ func main() {
 	server.rateLimiter.interval = time.Minute
 
 	// Try to establish database connection (non-fatal)
+	// Use context for cancellation and WaitGroup for clean shutdown
+	connCtx, connCancel := context.WithCancel(context.Background())
+	var connWg sync.WaitGroup
+	connWg.Add(1)
 	go func() {
+		defer connWg.Done()
 		// Give MCP protocol time to initialize
-		time.Sleep(2 * time.Second)
+		select {
+		case <-time.After(2 * time.Second):
+		case <-connCtx.Done():
+			return
+		}
 
 		// Check if we have required environment variables
 		serverHost := os.Getenv("MSSQL_SERVER")
@@ -2045,8 +2042,8 @@ func main() {
 			}
 		}
 
-		// Log security settings
-		if strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true" {
+		// Log security settings (using cached config)
+		if server.config.readOnly {
 			secLogger.Printf("READ-ONLY MODE ENABLED - Only SELECT queries allowed")
 		} else {
 			secLogger.Printf("Full access mode enabled")
@@ -2149,6 +2146,9 @@ func main() {
 
 	// Start MCP protocol handler
 	scanner := bufio.NewScanner(os.Stdin)
+	// Set explicit buffer limit (4MB) to prevent silent truncation and limit memory usage
+	const maxScanBuf = 4 * 1024 * 1024
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScanBuf)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -2193,4 +2193,8 @@ func main() {
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		secLogger.Printf("Scanner error: %v", err)
 	}
+
+	// Clean shutdown: cancel connection goroutine and wait for it
+	connCancel()
+	connWg.Wait()
 }
