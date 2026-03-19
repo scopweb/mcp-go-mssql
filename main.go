@@ -76,9 +76,10 @@ type ToolAnnotations struct {
 }
 
 type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema InputSchema     `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Title       string           `json:"title,omitempty"`
+	Description string           `json:"description"`
+	InputSchema InputSchema      `json:"inputSchema"`
 	Annotations *ToolAnnotations `json:"annotations,omitempty"`
 }
 
@@ -125,15 +126,19 @@ func boolPtr(b bool) *bool { return &b }
 
 // Security Logger — structured logging via log/slog (stdlib Go 1.21+)
 type SecurityLogger struct {
-	logger *slog.Logger
+	logger   *slog.Logger
+	levelVar *slog.LevelVar // dynamic level controlled by MCP logging/setLevel
 }
 
 func NewSecurityLogger() *SecurityLogger {
+	lvl := &slog.LevelVar{}
+	lvl.Set(slog.LevelInfo)
 	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: lvl,
 	})
 	return &SecurityLogger{
-		logger: slog.New(handler).With(slog.String("component", "security")),
+		logger:   slog.New(handler).With(slog.String("component", "security")),
+		levelVar: lvl,
 	}
 }
 
@@ -1824,9 +1829,31 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 		}
 
 	case "logging/setLevel":
-		// MCP spec: acknowledge logging level changes
-		// We log to stderr via slog; client-requested level is acknowledged but
-		// server-side level stays at Info (internal decision).
+		// MCP spec SHOULD: respect the minimum log level set by client
+		if req.Params != nil {
+			if paramBytes, err := json.Marshal(req.Params); err == nil {
+				var levelParams struct {
+					Level string `json:"level"`
+				}
+				if err := json.Unmarshal(paramBytes, &levelParams); err == nil {
+					mcpLevel := strings.ToLower(levelParams.Level)
+					var slogLevel slog.Level
+					switch mcpLevel {
+					case "debug":
+						slogLevel = slog.LevelDebug
+					case "info", "notice":
+						slogLevel = slog.LevelInfo
+					case "warning":
+						slogLevel = slog.LevelWarn
+					case "error", "critical", "alert", "emergency":
+						slogLevel = slog.LevelError
+					default:
+						slogLevel = slog.LevelInfo
+					}
+					s.secLogger.levelVar.Set(slogLevel)
+				}
+			}
+		}
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -1842,6 +1869,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 		tools := []Tool{
 			{
 				Name:        "query_database",
+				Title:       "Query Database",
 				Description: "Execute a secure SQL query against the MSSQL database",
 				InputSchema: InputSchema{
 					Type: "object",
@@ -1862,6 +1890,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "get_database_info",
+				Title:       "Get Database Info",
 				Description: "Get database connection status and basic information",
 				InputSchema: InputSchema{
 					Type:       "object",
@@ -1877,6 +1906,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "explore",
+				Title:       "Explore Database",
 				Description: "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern).",
 				InputSchema: InputSchema{
 					Type: "object",
@@ -1913,6 +1943,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "inspect",
+				Title:       "Inspect Table",
 				Description: "Inspect a table's structure. detail=columns (default) returns column info, detail=indexes returns indexes, detail=foreign_keys returns FK relationships, detail=dependencies returns objects (views, procedures, functions) that reference this table, detail=all returns everything in one call.",
 				InputSchema: InputSchema{
 					Type: "object",
@@ -1941,6 +1972,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "execute_procedure",
+				Title:       "Execute Procedure",
 				Description: "Execute a whitelisted stored procedure (requires MSSQL_WHITELIST_PROCEDURES env var)",
 				InputSchema: InputSchema{
 					Type: "object",
@@ -1965,6 +1997,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "explain_query",
+				Title:       "Explain Query",
 				Description: "Show the estimated execution plan for a SQL query without executing it. Useful for performance analysis and query optimization. Only SELECT queries are accepted.",
 				InputSchema: InputSchema{
 					Type: "object",
@@ -2263,6 +2296,22 @@ func main() {
 				},
 			}
 			if respBytes, err := json.Marshal(parseErrResp); err == nil {
+				fmt.Println(string(respBytes))
+			}
+			continue
+		}
+
+		// MCP spec: all messages MUST be JSON-RPC 2.0
+		if req.JSONRPC != "2.0" {
+			invalidResp := &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &MCPError{
+					Code:    -32600,
+					Message: "Invalid Request: missing or incorrect jsonrpc version, must be \"2.0\"",
+				},
+			}
+			if respBytes, err := json.Marshal(invalidResp); err == nil {
 				fmt.Println(string(respBytes))
 			}
 			continue
