@@ -12,13 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`ping` handler** (MUST): Server now responds to `ping` with empty `{}` result as required by spec.
   - **Tool annotations**: All 6 tools now declare `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` annotations to help clients decide when to prompt for confirmation.
   - **`logging` capability**: Server declares `logging: {}` capability in initialize response.
-  - **`logging/setLevel` handler**: Accepts client log level requests (acknowledged, server-side level stays at Info).
+  - **`logging/setLevel` handler**: Accepts client log level requests and applies them to the slog logger via dynamic `slog.LevelVar`.
   - **`notifications/cancelled` handler**: Gracefully handles cancellation notifications from clients.
   - **`instructions` field**: Initialize response now includes usage instructions for LLMs.
   - **`ServerInfo.title`**: Human-readable display name ("MSSQL Database Connector") for client UIs.
   - **`ToolsListResult.nextCursor`**: Pagination support for `tools/list` responses.
   - **`tools/call` error handling**: Invalid params now return `-32602 Invalid params` instead of silently proceeding with empty params.
-  - **MCP spec compliance tests**: 11 new tests covering ping, capabilities, annotations, logging, cancellation, and error handling.
+  - **`-32600 Invalid Request` validation**: Messages with missing or incorrect `jsonrpc` field now return proper JSON-RPC error.
+  - **Tool `title` field**: All 6 tools now include human-readable titles for client UI display.
+  - **MCP spec compliance tests**: 14 new tests covering ping, capabilities, annotations, logging level changes, tool titles, cancellation, and error handling.
 - 🛡️ **Rate limiter for MCP tool calls**: Token-bucket rate limiter (60 calls/minute) prevents resource exhaustion. Returns a tool execution error with `isError: true` when limit exceeded, as recommended by MCP spec 2025-11-25.
 - 🧪 **Rate limiter tests**: Basic, reset, concurrent (atomic + goroutines), and tool-call integration tests for the rate limiter.
 - 🧪 **Fuzzing tests**: 7 fuzz functions covering `validateBasicInput`, `validateReadOnlyQuery`, `sanitizeForLogging`, `stripLeadingComments`, `extractOperation`, `extractAllTablesFromQuery`, `validateTablePermissions`.
