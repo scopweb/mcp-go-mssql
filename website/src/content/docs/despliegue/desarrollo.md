@@ -5,7 +5,7 @@ description: Configuración del entorno de desarrollo para MCP-Go-MSSQL
 
 ## Requisitos
 
-- Go 1.25.0 o superior
+- Go 1.26.0 o superior
 - Microsoft SQL Server (local o remoto)
 - Git
 

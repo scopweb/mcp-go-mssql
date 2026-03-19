@@ -147,7 +147,7 @@ This feature implements **defense in depth** - it complements (not replaces) dat
 
 **Environment**:
 - SQL Server 2019+
-- Go 1.21+
+- Go 1.26+
 - MCP Protocol 2024-11-05
 
 **Labels**: `enhancement`, `security`, `ai-safety`

@@ -25,7 +25,7 @@ El CLI es ideal para:
 
 ### Requisitos
 
-- Go 1.21 o superior
+- Go 1.26 o superior
 - Variables de entorno configuradas (ver [Variables de entorno](/configuracion/variables-entorno))
 - Acceso de red al servidor SQL Server
 

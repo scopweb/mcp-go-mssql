@@ -5,7 +5,7 @@ description: How to install MCP-Go-MSSQL
 
 ## Prerequisites
 
-- **Go 1.24+** installed ([download](https://go.dev/dl/))
+- **Go 1.26+** installed ([download](https://go.dev/dl/))
 - **Microsoft SQL Server** accessible on the network
 - **Git** to clone the repository
 

@@ -72,7 +72,7 @@ MCP Go MSSQL is a **secure** Go-based Model Context Protocol (MCP) server that p
 
 ### Prerequisites
 
-- **Go 1.20+** (for building from source)
+- **Go 1.26+** (for building from source)
 - **SQL Server** (any version 2008+) or Azure SQL Database
 - **Claude Desktop** (for MCP integration)
 

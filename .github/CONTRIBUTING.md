@@ -12,7 +12,7 @@ This project aims to provide a secure, production-ready Microsoft SQL Server con
 ## 🔧 Development Setup
 
 ### Prerequisites
-- **Go 1.24+** installed
+- **Go 1.26+** installed
 - **Access to SQL Server** (any version 2008+) for testing
 - **Git** for version control
 
