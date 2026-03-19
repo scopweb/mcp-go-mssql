@@ -7,6 +7,25 @@ Todos los cambios relevantes de este proyecto se documentan aquí.
 
 ## Último cambio
 
+### Soporte SQL Server 2008/2012 y diagnóstico mejorado
+
+**Nueva variable:** `MSSQL_ENCRYPT`
+- Controla el cifrado TLS de forma independiente en modo desarrollo
+- `MSSQL_ENCRYPT=false` es **necesario para SQL Server 2008/2012** que no soportan TLS 1.2
+- Solo efectivo con `DEVELOPER_MODE=true`. En producción el cifrado es siempre obligatorio
+
+**Correcciones de conexión:**
+- Añadido `port` a la connection string de autenticación integrada (antes se omitía)
+- Corregido `encrypt=true` hardcodeado en los conectores CLI y pkg
+- `MSSQL_DATABASE` ahora es opcional para autenticación integrada en todos los conectores
+
+**Diagnóstico mejorado para Claude:**
+- `get_database_info` cuando no hay conexión muestra: configuración completa + causas posibles + soluciones específicas
+- Todos los errores "Database not connected" guían a Claude a usar `get_database_info` para diagnóstico
+- Errores de query en producción incluyen sugerencias de acción (verificar sintaxis, permisos, usar `explore`)
+
+---
+
 ### `inspect` — nuevo `detail=dependencies`
 
 - Muestra qué objetos SQL (vistas, procedimientos, funciones) **dependen de una tabla** dada

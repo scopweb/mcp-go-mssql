@@ -23,6 +23,7 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_READ_ONLY` | `false` | Blocks write operations |
 | `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode |
 | `MSSQL_AUTH` | `sql` | Authentication mode: `sql`, `integrated`, `azure` |
+| `MSSQL_ENCRYPT` | _(auto)_ | TLS encryption control. Only effective with `DEVELOPER_MODE=true`. `false` = disable encryption (**required for SQL Server 2008/2012**). If not set: `false` in dev, always `true` in production |
 | `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables) |
 
 ## .env template

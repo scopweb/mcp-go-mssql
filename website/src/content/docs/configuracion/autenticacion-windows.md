@@ -24,10 +24,14 @@ No es necesario definir `MSSQL_USER` ni `MSSQL_PASSWORD`.
 ## Connection string generado
 
 ```
-server=your-server;database=YourDatabase;integrated security=sspi;encrypt=true
+server=your-server;port=1433;database=YourDatabase;integrated security=SSPI;encrypt=false;trustservercertificate=true
 ```
 
+> El valor de `encrypt` y `trustservercertificate` depende de `DEVELOPER_MODE` y `MSSQL_ENCRYPT`.
+
 ## Claude Desktop
+
+### Servidor moderno (SQL Server 2016+)
 
 ```json
 {
@@ -44,8 +48,31 @@ server=your-server;database=YourDatabase;integrated security=sspi;encrypt=true
 }
 ```
 
+### Servidor legacy (SQL Server 2008/2012)
+
+SQL Server 2008/2012 no soporta TLS 1.2, que es el mínimo requerido por el driver Go. Es necesario desactivar el cifrado.
+
+```json
+{
+  "mssql-legacy": {
+    "command": "mcp-go-mssql.exe",
+    "env": {
+      "MSSQL_SERVER": "legacy-server",
+      "MSSQL_DATABASE": "LegacyDB",
+      "MSSQL_AUTH": "integrated",
+      "DEVELOPER_MODE": "true",
+      "MSSQL_ENCRYPT": "false"
+    }
+  }
+}
+```
+
+> `MSSQL_ENCRYPT=false` solo funciona con `DEVELOPER_MODE=true`. En producción el cifrado es obligatorio.
+
 ## Solución de problemas
 
 - **Login failed**: Verifica que el usuario de Windows tiene un login en SQL Server
 - **SSPI handshake failed**: Verifica que SQL Server acepta Windows Authentication en su configuración
 - **Cannot generate SSPI context**: Puede indicar problemas de DNS o Kerberos en el dominio
+- **TLS handshake failed**: SQL Server 2008/2012 no soporta TLS 1.2. Configura `MSSQL_ENCRYPT=false` con `DEVELOPER_MODE=true`
+- **Connection timeout**: Verifica que el puerto está correctamente configurado (`MSSQL_PORT`, default 1433)

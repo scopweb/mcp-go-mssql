@@ -19,6 +19,13 @@ echo "User: $MSSQL_USER"
 
 **Development:** Set `DEVELOPER_MODE=true` to accept self-signed certificates.
 
+**SQL Server 2008/2012:** These servers don't support TLS 1.2. Add `MSSQL_ENCRYPT=false` together with `DEVELOPER_MODE=true`.
+
+```bash
+DEVELOPER_MODE=true
+MSSQL_ENCRYPT=false
+```
+
 **Production:** Install valid SSL certificates on SQL Server or configure the CA on the system.
 
 ### "Login failed for user"
@@ -46,6 +53,16 @@ The table referenced in a write operation is not in `MSSQL_WHITELIST_TABLES`. Ch
 ### "SSPI handshake failed"
 
 Verify that SQL Server accepts Windows authentication and that the Windows user has a configured login.
+
+## Improved diagnostics with Claude
+
+When Claude receives a "Database not connected" error, it can now automatically call `get_database_info` to obtain:
+
+- **Current configuration**: server, database, authentication mode, encryption, port
+- **Possible causes**: missing variables, TLS incompatibility, permission issues
+- **Specific solutions**: based on the detected scenario (SQL 2008, integrated auth, etc.)
+
+This allows Claude to diagnose and resolve connection issues without manual intervention.
 
 ## Verify the connection
 
