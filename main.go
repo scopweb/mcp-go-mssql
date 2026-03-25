@@ -203,15 +203,22 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 
 // Pre-compiled patterns for table name extraction (performance optimization)
 var tableExtractionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bFROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // FROM [schema.]table
-	regexp.MustCompile(`(?i)\bJOIN\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // JOIN [schema.]table
-	regexp.MustCompile(`(?i)\bINTO\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // INSERT INTO [schema.]table
-	regexp.MustCompile(`(?i)\bUPDATE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),           // UPDATE [schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),    // DELETE FROM [schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
-	regexp.MustCompile(`(?i)\bTABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),            // CREATE/DROP TABLE
-	regexp.MustCompile(`(?i)\bVIEW\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // CREATE/DROP VIEW
-	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`), // TRUNCATE TABLE
+	regexp.MustCompile(`(?i)\bFROM\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // FROM [schema.]table
+	regexp.MustCompile(`(?i)\bJOIN\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // JOIN [schema.]table
+	regexp.MustCompile(`(?i)\bINTO\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // INSERT INTO [schema.]table
+	regexp.MustCompile(`(?i)\bUPDATE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),           // UPDATE [schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),    // DELETE FROM [schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
+	regexp.MustCompile(`(?i)\bTABLE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),            // CREATE/DROP TABLE
+	regexp.MustCompile(`(?i)\bVIEW\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // CREATE/DROP VIEW
+	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`), // TRUNCATE TABLE
+}
+
+// systemSchemas contains SQL Server system schemas whose objects should be
+// excluded from user-table validation (e.g. INFORMATION_SCHEMA.COLUMNS).
+var systemSchemas = map[string]bool{
+	"information_schema": true,
+	"sys":               true,
 }
 
 // Pre-compiled pattern for procedure name validation
@@ -570,8 +577,13 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 	for _, pattern := range tableExtractionPatterns {
 		matches := pattern.FindAllStringSubmatch(queryUpper, -1)
 		for _, match := range matches {
-			if len(match) > 1 {
-				tableName := match[1]
+			if len(match) > 2 {
+				// match[1] = schema prefix (e.g. "INFORMATION_SCHEMA."), match[2] = table name
+				schemaPrefix := strings.Trim(match[1], ".[]\t ")
+				if systemSchemas[strings.ToLower(schemaPrefix)] {
+					continue // skip system schema objects like INFORMATION_SCHEMA.COLUMNS
+				}
+				tableName := match[2]
 				// Remove brackets if present [tablename] -> tablename
 				tableName = strings.Trim(tableName, "[]")
 				tableName = strings.ToLower(strings.TrimSpace(tableName))
