@@ -590,6 +590,179 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 	return tables
 }
 
+// validateTablesExist performs best-effort validation that tables referenced in a query
+// actually exist in the database. If INFORMATION_SCHEMA is not accessible (permissions),
+// it silently skips validation. Returns nil if all tables exist or validation was skipped,
+// or an error message with suggestions if unknown tables are found.
+func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) *string {
+	tables := s.extractAllTablesFromQuery(query)
+	if len(tables) == 0 {
+		return nil
+	}
+
+	// Build a single query to check all tables at once
+	// Using INFORMATION_SCHEMA which is standard and usually accessible
+	existingTables := make(map[string]bool)
+	checkQuery := `SELECT LOWER(TABLE_NAME) AS table_name FROM INFORMATION_SCHEMA.TABLES`
+	results, err := s.executeSecureQuery(ctx, checkQuery)
+	if err != nil {
+		// No permissions to read schema — skip validation silently
+		return nil
+	}
+
+	for _, row := range results {
+		if name, ok := row["table_name"].(string); ok {
+			existingTables[strings.ToLower(name)] = true
+		}
+	}
+
+	// Check which referenced tables don't exist
+	var missing []string
+	for _, table := range tables {
+		if !existingTables[table] {
+			missing = append(missing, table)
+		}
+	}
+
+	if len(missing) == 0 {
+		return nil
+	}
+
+	// Build suggestions for each missing table using string similarity
+	var parts []string
+	for _, m := range missing {
+		suggestions := findSimilarNames(m, existingTables)
+		if len(suggestions) > 0 {
+			parts = append(parts, fmt.Sprintf("'%s' not found. Did you mean: %s?", m, strings.Join(suggestions, ", ")))
+		} else {
+			parts = append(parts, fmt.Sprintf("'%s' not found (no similar tables found)", m))
+		}
+	}
+
+	msg := "Schema validation error — the following tables/views do not exist:\n" + strings.Join(parts, "\n") +
+		"\n\nUse the 'explore' tool to list available tables, or 'inspect' to see column details."
+	return &msg
+}
+
+// findSimilarNames returns up to 3 existing table names similar to the target.
+// Uses Levenshtein-like prefix/substring matching for practical suggestions.
+func findSimilarNames(target string, existing map[string]bool) []string {
+	var scored []struct {
+		name  string
+		score int
+	}
+
+	for name := range existing {
+		score := similarityScore(target, name)
+		if score > 0 {
+			scored = append(scored, struct {
+				name  string
+				score int
+			}{name, score})
+		}
+	}
+
+	// Sort by score descending
+	for i := 0; i < len(scored); i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].score > scored[i].score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+
+	var suggestions []string
+	limit := 3
+	if len(scored) < limit {
+		limit = len(scored)
+	}
+	for i := 0; i < limit; i++ {
+		suggestions = append(suggestions, "'"+scored[i].name+"'")
+	}
+	return suggestions
+}
+
+// similarityScore returns a score > 0 if two table names are similar enough to suggest.
+// Higher score = better match. Returns 0 if not similar enough.
+func similarityScore(target, candidate string) int {
+	// Exact prefix match (strongest signal)
+	if strings.HasPrefix(candidate, target) || strings.HasPrefix(target, candidate) {
+		return 100
+	}
+
+	// Substring match
+	if strings.Contains(candidate, target) || strings.Contains(target, candidate) {
+		return 80
+	}
+
+	// Levenshtein distance for short names
+	dist := levenshtein(target, candidate)
+	maxLen := len(target)
+	if len(candidate) > maxLen {
+		maxLen = len(candidate)
+	}
+	if maxLen == 0 {
+		return 0
+	}
+
+	// Allow distance up to ~30% of the longer name
+	threshold := maxLen * 30 / 100
+	if threshold < 2 {
+		threshold = 2
+	}
+	if dist <= threshold {
+		return 60 - dist
+	}
+
+	return 0
+}
+
+// levenshtein computes the edit distance between two strings (lowercase comparison).
+func levenshtein(a, b string) int {
+	a = strings.ToLower(a)
+	b = strings.ToLower(b)
+
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+
+	// Use single-row optimization
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = min3(curr[j-1]+1, prev[j]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
+}
+
+func min3(a, b, c int) int {
+	if a < b {
+		if a < c {
+			return a
+		}
+		return c
+	}
+	if b < c {
+		return b
+	}
+	return c
+}
+
 // extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
 func (s *MCPMSSQLServer) extractOperation(query string) string {
 	queryUpper := stripLeadingComments(query)
@@ -973,6 +1146,25 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+
+		// Best-effort schema validation: check that referenced tables exist.
+		// If INFORMATION_SCHEMA is not accessible (permissions), validation is silently skipped.
+		if validationErr := s.validateTablesExist(ctx, query); validationErr != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        *validationErr,
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
 
 		results, err := s.executeSecureQuery(ctx, query)
 		if err != nil {

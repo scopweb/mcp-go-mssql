@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 🛡️ **Best-effort schema validation for `query_database`**:
+  - Before executing a query, the server validates that all referenced tables/views actually exist in the database
+  - If a table doesn't exist, returns an error with "Did you mean?" suggestions using Levenshtein distance + prefix/substring matching
+  - **Graceful degradation**: if the connection lacks `INFORMATION_SCHEMA` permissions, validation is silently skipped and the query executes normally
+  - Prevents AI clients from inventing table/column names — a common issue where LLMs fabricate plausible-sounding names instead of checking the real schema
+  - Zero overhead for AI clients: validation is server-side within the same tool call, no extra tokens consumed
+  - Error messages guide the AI to use `explore`/`inspect` tools for schema discovery
+
+### Added
 - 📋 **Content annotations** (MCP spec 2025-11-25 SHOULD):
   - All `ContentItem` responses now include `annotations` with `audience` and `priority` fields
   - `audience` controls who sees content: `["assistant"]` for LLM-only diagnostics, `["user", "assistant"]` for shared results
