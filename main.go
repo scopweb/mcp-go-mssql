@@ -1184,6 +1184,24 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		}
 
+		// DDL/DML with no result set (ALTER, CREATE, DROP, INSERT, UPDATE, DELETE, etc.)
+		if results == nil || len(results) == 0 {
+			op := strings.ToUpper(strings.Fields(strings.TrimSpace(query))[0])
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        fmt.Sprintf("%s executed successfully. No rows returned.", op),
+							Annotations: annBothQuery,
+						},
+					},
+				},
+			}
+		}
+
 		// Format results as JSON
 		resultBytes, err := json.MarshalIndent(results, "", "  ")
 		if err != nil {
@@ -1210,7 +1228,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Content: []ContentItem{
 					{
 						Type:        "text",
-						Text:        fmt.Sprintf("Query executed successfully. Results:\n%s", string(resultBytes)),
+						Text:        fmt.Sprintf("Query executed successfully. %d rows returned:\n%s", len(results), string(resultBytes)),
 						Annotations: annBothQuery,
 					},
 				},
