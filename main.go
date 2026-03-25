@@ -22,19 +22,17 @@ import (
 
 // MCP Protocol structures
 type MCPRequest struct {
-	JSONRPC string                 `json:"jsonrpc"`
-	ID      interface{}            `json:"id"`
-	Method  string                 `json:"method"`
-	Params  interface{}            `json:"params,omitempty"`
-	Meta    map[string]interface{} `json:"_meta,omitempty"`
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
 }
 
 type MCPResponse struct {
-	JSONRPC string                 `json:"jsonrpc"`
-	ID      interface{}            `json:"id"`
-	Result  interface{}            `json:"result,omitempty"`
-	Error   *MCPError              `json:"error,omitempty"`
-	Meta    map[string]interface{} `json:"_meta,omitempty"`
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   *MCPError   `json:"error,omitempty"`
 }
 
 type MCPError struct {
@@ -110,9 +108,15 @@ type CallToolResult struct {
 	Meta    map[string]interface{} `json:"_meta,omitempty"`
 }
 
+type ContentAnnotations struct {
+	Audience []string `json:"audience,omitempty"` // "user", "assistant", or both
+	Priority float64  `json:"priority,omitempty"` // 0.0 (least) to 1.0 (most important)
+}
+
 type ContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type        string              `json:"type"`
+	Text        string              `json:"text"`
+	Annotations *ContentAnnotations `json:"annotations,omitempty"`
 }
 
 type ServerInfo struct {
@@ -123,6 +127,27 @@ type ServerInfo struct {
 
 // boolPtr is a helper to create *bool for tool annotations.
 func boolPtr(b bool) *bool { return &b }
+
+// Content annotation presets for MCP content items.
+// Priority scale: 0.0 (least) → 1.0 (most important / effectively required).
+var (
+	// annAssistantLow marks low-priority content for the LLM (status checks, reference info).
+	annAssistantLow = &ContentAnnotations{Audience: []string{"assistant"}, Priority: 0.3}
+	// annAssistantHigh marks high-priority content for the LLM (critical diagnostics).
+	annAssistantHigh = &ContentAnnotations{Audience: []string{"assistant"}, Priority: 1.0}
+	// annBothExplore marks explore results — discovery context, lower priority.
+	annBothExplore = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.4}
+	// annBothInspect marks inspect results — structural reference.
+	annBothInspect = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.5}
+	// annBothQuery marks query results — directly requested data.
+	annBothQuery = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.7}
+	// annBothProcedure marks procedure results — action with side effects.
+	annBothProcedure = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.8}
+	// annBothExplain marks explain results — secondary analysis.
+	annBothExplain = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.3}
+	// annBothHigh marks high-priority content for both audiences (errors).
+	annBothHigh = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 1.0}
+)
 
 // Security Logger — structured logging via log/slog (stdlib Go 1.21+)
 type SecurityLogger struct {
@@ -750,7 +775,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			JSONRPC: "2.0",
 			ID:      id,
 			Result: CallToolResult{
-				Content: []ContentItem{{Type: "text", Text: "Rate limit exceeded. Please wait before making more requests."}},
+				Content: []ContentItem{{Type: "text", Text: "Rate limit exceeded. Please wait before making more requests.", Annotations: annBothHigh}},
 				IsError: true,
 			},
 		}
@@ -891,14 +916,20 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		}
 
+		// Annotation: diagnostics for the LLM; high priority when disconnected
+		ann := annAssistantLow
+		if s.getDB() == nil {
+			ann = annAssistantHigh
+		}
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
 			Result: CallToolResult{
 				Content: []ContentItem{
 					{
-						Type: "text",
-						Text: info.String(),
+						Type:        "text",
+						Text:        info.String(),
+						Annotations: ann,
 					},
 				},
 			},
@@ -913,7 +944,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Annotations: annAssistantHigh,
 						},
 					},
 					IsError: true,
@@ -929,8 +961,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: "Error: Missing or invalid 'query' parameter",
+							Type:        "text",
+							Text:        "Error: Missing or invalid 'query' parameter",
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -949,8 +982,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Query Error: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Query Error: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -967,8 +1001,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error formatting results: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -982,8 +1017,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			Result: CallToolResult{
 				Content: []ContentItem{
 					{
-						Type: "text",
-						Text: fmt.Sprintf("Query executed successfully. Results:\n%s", string(resultBytes)),
+						Type:        "text",
+						Text:        fmt.Sprintf("Query executed successfully. Results:\n%s", string(resultBytes)),
+						Annotations: annBothQuery,
 					},
 				},
 			},
@@ -998,7 +1034,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Annotations: annAssistantHigh,
 						},
 					},
 					IsError: true,
@@ -1094,7 +1131,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					ID:      id,
 					Result: CallToolResult{
 						Content: []ContentItem{
-							{Type: "text", Text: "Error: 'pattern' is required when type=search"},
+							{Type: "text", Text: "Error: 'pattern' is required when type=search", Annotations: annBothHigh},
 						},
 						IsError: true,
 					},
@@ -1180,8 +1217,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error in explore: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error in explore: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1197,8 +1235,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error formatting results: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1212,8 +1251,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			Result: CallToolResult{
 				Content: []ContentItem{
 					{
-						Type: "text",
-						Text: fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
+						Type:        "text",
+						Text:        fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
+						Annotations: annBothExplore,
 					},
 				},
 			},
@@ -1228,7 +1268,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Annotations: annAssistantHigh,
 						},
 					},
 					IsError: true,
@@ -1244,8 +1285,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: "Error: Missing or invalid 'procedure_name' parameter",
+							Type:        "text",
+							Text:        "Error: Missing or invalid 'procedure_name' parameter",
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1262,8 +1304,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: "Error: No stored procedures are whitelisted. Set MSSQL_WHITELIST_PROCEDURES environment variable.",
+							Type:        "text",
+							Text:        "Error: No stored procedures are whitelisted. Set MSSQL_WHITELIST_PROCEDURES environment variable.",
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1289,7 +1332,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: fmt.Sprintf("Error: Stored procedure '%s' is not in the whitelist. Allowed: %s", procName, whitelistEnv),
+							Text:        fmt.Sprintf("Error: Stored procedure '%s' is not in the whitelist. Allowed: %s", procName, whitelistEnv),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1306,8 +1350,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1325,8 +1370,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Result: CallToolResult{
 						Content: []ContentItem{
 							{
-								Type: "text",
-								Text: fmt.Sprintf("Error: Invalid JSON in parameters: %v", err),
+								Type:        "text",
+								Text:        fmt.Sprintf("Error: Invalid JSON in parameters: %v", err),
+								Annotations: annBothHigh,
 							},
 						},
 						IsError: true,
@@ -1364,8 +1410,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error executing procedure '%s': %v", procName, err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error executing procedure '%s': %v", procName, err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1381,8 +1428,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error formatting results: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1396,8 +1444,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			Result: CallToolResult{
 				Content: []ContentItem{
 					{
-						Type: "text",
-						Text: fmt.Sprintf("Procedure '%s' executed successfully:\n%s", procName, string(resultBytes)),
+						Type:        "text",
+						Text:        fmt.Sprintf("Procedure '%s' executed successfully:\n%s", procName, string(resultBytes)),
+						Annotations: annBothProcedure,
 					},
 				},
 			},
@@ -1412,7 +1461,8 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					Content: []ContentItem{
 						{
 							Type: "text",
-							Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+							Annotations: annAssistantHigh,
 						},
 					},
 					IsError: true,
@@ -1427,7 +1477,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				ID:      id,
 				Result: CallToolResult{
 					Content: []ContentItem{
-						{Type: "text", Text: "Error: Missing or invalid 'table_name' parameter"},
+						{Type: "text", Text: "Error: Missing or invalid 'table_name' parameter", Annotations: annBothHigh},
 					},
 					IsError: true,
 				},
@@ -1507,19 +1557,19 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			colResults, err := s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
 			if err != nil {
 				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting columns: %v", err)}}, IsError: true,
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting columns: %v", err), Annotations: annBothHigh}}, IsError: true,
 				}}
 			}
 			idxResults, err := s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
 			if err != nil {
 				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err)}}, IsError: true,
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err), Annotations: annBothHigh}}, IsError: true,
 				}}
 			}
 			fkResults, err := s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
 			if err != nil {
 				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err)}}, IsError: true,
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err), Annotations: annBothHigh}}, IsError: true,
 				}}
 			}
 			depsAllQuery := `
@@ -1545,7 +1595,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			resultBytes, err := json.MarshalIndent(combined, "", "  ")
 			if err != nil {
 				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error formatting results: %v", err)}}, IsError: true,
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error formatting results: %v", err), Annotations: annBothHigh}}, IsError: true,
 				}}
 			}
 			return &MCPResponse{
@@ -1554,8 +1604,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Full inspection of '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
+							Type:        "text",
+							Text:        fmt.Sprintf("Full inspection of '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
+							Annotations: annBothInspect,
 						},
 					},
 				},
@@ -1598,7 +1649,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					ID:      id,
 					Result: CallToolResult{
 						Content: []ContentItem{
-							{Type: "text", Text: fmt.Sprintf("Table '%s' not found", tableName)},
+							{Type: "text", Text: fmt.Sprintf("Table '%s' not found", tableName), Annotations: annBothHigh},
 						},
 						IsError: true,
 					},
@@ -1613,8 +1664,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error in inspect: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error in inspect: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1630,8 +1682,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
-							Text: fmt.Sprintf("Error formatting results: %v", err),
+							Type:        "text",
+							Text:        fmt.Sprintf("Error formatting results: %v", err),
+							Annotations: annBothHigh,
 						},
 					},
 					IsError: true,
@@ -1645,8 +1698,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			Result: CallToolResult{
 				Content: []ContentItem{
 					{
-						Type: "text",
-						Text: fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
+						Type:        "text",
+						Text:        fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
+						Annotations: annBothInspect,
 					},
 				},
 			},
@@ -1658,7 +1712,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps."}},
+					Content: []ContentItem{{Type: "text", Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.", Annotations: annAssistantHigh}},
 					IsError: true,
 				},
 			}
@@ -1670,7 +1724,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: Missing or invalid 'query' parameter"}},
+					Content: []ContentItem{{Type: "text", Text: "Error: Missing or invalid 'query' parameter", Annotations: annBothHigh}},
 					IsError: true,
 				},
 			}
@@ -1682,7 +1736,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: explain_query only accepts SELECT queries, got: " + op}},
+					Content: []ContentItem{{Type: "text", Text: "Error: explain_query only accepts SELECT queries, got: " + op, Annotations: annBothHigh}},
 					IsError: true,
 				},
 			}
@@ -1702,7 +1756,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: connErrMsg}},
+					Content: []ContentItem{{Type: "text", Text: connErrMsg, Annotations: annBothHigh}},
 					IsError: true,
 				},
 			}
@@ -1719,7 +1773,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: showplanErrMsg}},
+					Content: []ContentItem{{Type: "text", Text: showplanErrMsg, Annotations: annBothHigh}},
 					IsError: true,
 				},
 			}
@@ -1736,7 +1790,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: planErrMsg}},
+					Content: []ContentItem{{Type: "text", Text: planErrMsg, Annotations: annBothHigh}},
 					IsError: true,
 				},
 			}
@@ -1762,8 +1816,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			Result: CallToolResult{
 				Content: []ContentItem{
 					{
-						Type: "text",
-						Text: "Execution plan:\n\n" + strings.Join(planLines, "\n"),
+						Type:        "text",
+						Text:        "Execution plan:\n\n" + strings.Join(planLines, "\n"),
+						Annotations: annBothExplain,
 					},
 				},
 			},
@@ -1784,11 +1839,6 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 	switch req.Method {
 	case "initialize":
-		dbStatus := "disconnected"
-		if s.getDB() != nil {
-			dbStatus = "connected"
-		}
-
 		// Extract client's protocolVersion and echo it back (spec MUST requirement)
 		clientVersion := "2025-11-25" // default to latest spec version
 		if req.Params != nil {
@@ -1812,7 +1862,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Logging: map[string]interface{}{},
 				},
 				ServerInfo: ServerInfo{
-					Name:    fmt.Sprintf("mcp-go-mssql (%s)", dbStatus),
+					Name:    "mcp-go-mssql",
 					Title:   "MSSQL Database Connector",
 					Version: "1.0.0",
 				},
@@ -1862,7 +1912,14 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 
 	case "notifications/cancelled":
 		// MCP spec: cancellation notification — no response needed
-		// Future: could cancel in-flight query contexts
+		// JSON-RPC 2.0: if message has an ID it's a request and MUST get a response
+		if req.ID != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  map[string]interface{}{},
+			}
+		}
 		return nil
 
 	case "tools/list":
@@ -2053,6 +2110,14 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 
 	case "notifications/initialized":
 		// Notifications don't need a response
+		// JSON-RPC 2.0: if message has an ID it's a request and MUST get a response
+		if req.ID != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  map[string]interface{}{},
+			}
+		}
 		return nil
 
 	default:
@@ -2341,4 +2406,13 @@ func main() {
 	// Clean shutdown: cancel connection goroutine and wait for it
 	connCancel()
 	connWg.Wait()
+
+	// Close database connection if it was established
+	if db := server.getDB(); db != nil {
+		if err := db.Close(); err != nil {
+			secLogger.Printf("Error closing database connection: %v", err)
+		} else {
+			secLogger.Printf("Database connection closed")
+		}
+	}
 }

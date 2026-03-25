@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 📋 **Content annotations** (MCP spec 2025-11-25 SHOULD):
+  - All `ContentItem` responses now include `annotations` with `audience` and `priority` fields
+  - `audience` controls who sees content: `["assistant"]` for LLM-only diagnostics, `["user", "assistant"]` for shared results
+  - `priority` differentiated per tool: `execute_procedure` (0.8) > `query_database` (0.7) > `inspect` (0.5) > `explore` (0.4) > `explain_query`/`get_database_info` (0.3) > errors (1.0)
+  - Enables Claude Desktop to filter content visibility between user and LLM
+  - 7 reusable annotation presets: `annAssistantLow`, `annAssistantHigh`, `annBothExplore`, `annBothInspect`, `annBothQuery`, `annBothProcedure`, `annBothExplain`, `annBothHigh`
+
+### Fixed
+- 🐛 **JSON-RPC 2.0: notifications with ID now get a response**: `notifications/cancelled` and `notifications/initialized` with an `id` field (technically a request per JSON-RPC 2.0) now return a response instead of being silently dropped
+- 🐛 **DB connection closed on shutdown**: `server.db` is now explicitly closed when the stdio loop ends, preventing resource leaks
+- 🐛 **`ServerInfo.Name` is now stable**: Changed from dynamic `"mcp-go-mssql (connected)"` / `"mcp-go-mssql (disconnected)"` to fixed `"mcp-go-mssql"` — clients can now reliably use the name for server identification
+- 🐛 **Removed top-level `_meta` from JSON-RPC messages**: `_meta` was incorrectly placed at the message level in `MCPRequest`/`MCPResponse` structs; per spec it belongs inside `params`/`result`. Removed from top level (was unused). `CallToolResult._meta` remains correct
+
+### Changed
+- 🧪 **New tests**: `TestMCPCancelledWithIDReturnsResponse`, `TestMCPInitializedWithIDReturnsResponse`, `TestMCPContentAnnotations` (3 sub-tests verifying audience and priority per tool)
+
+---
+
+### Added
 - 📋 **MCP spec compliance** (spec 2025-11-25):
   - **`ping` handler** (MUST): Server now responds to `ping` with empty `{}` result as required by spec.
   - **Tool annotations**: All 6 tools now declare `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` annotations to help clients decide when to prompt for confirmation.

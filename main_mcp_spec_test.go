@@ -230,6 +230,27 @@ func TestMCPCancelledNotification(t *testing.T) {
 	}
 }
 
+// TestMCPCancelledWithIDReturnsResponse verifies that a cancelled message with an ID
+// (which is technically a request per JSON-RPC 2.0) gets a response.
+func TestMCPCancelledWithIDReturnsResponse(t *testing.T) {
+	server := newTestMCPServer()
+
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      "cancel-req-1",
+		Method:  "notifications/cancelled",
+		Params:  map[string]interface{}{"requestId": "some-id"},
+	}
+
+	response := server.handleRequest(req)
+	if response == nil {
+		t.Fatal("JSON-RPC 2.0: message with ID is a request and MUST receive a response")
+	}
+	if response.Error != nil {
+		t.Errorf("Expected success response, got error: %v", response.Error)
+	}
+}
+
 // TestMCPNotificationsInitialized verifies no response for initialized notification.
 func TestMCPNotificationsInitialized(t *testing.T) {
 	server := newTestMCPServer()
@@ -242,6 +263,26 @@ func TestMCPNotificationsInitialized(t *testing.T) {
 	response := server.handleRequest(req)
 	if response != nil {
 		t.Error("notifications/initialized should not produce a response")
+	}
+}
+
+// TestMCPInitializedWithIDReturnsResponse verifies that an initialized message with an ID
+// (which is technically a request per JSON-RPC 2.0) gets a response.
+func TestMCPInitializedWithIDReturnsResponse(t *testing.T) {
+	server := newTestMCPServer()
+
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      "init-req-1",
+		Method:  "notifications/initialized",
+	}
+
+	response := server.handleRequest(req)
+	if response == nil {
+		t.Fatal("JSON-RPC 2.0: message with ID is a request and MUST receive a response")
+	}
+	if response.Error != nil {
+		t.Errorf("Expected success response, got error: %v", response.Error)
 	}
 }
 
@@ -359,5 +400,81 @@ func TestMCPInvalidJSONRPCVersion(t *testing.T) {
 	response := server.handleRequest(req)
 	if response == nil || response.Error != nil {
 		t.Fatal("Valid JSON-RPC 2.0 request should succeed")
+	}
+}
+
+// TestMCPContentAnnotations verifies all tool results include content annotations.
+func TestMCPContentAnnotations(t *testing.T) {
+	server := newTestMCPServer()
+
+	tests := []struct {
+		name            string
+		tool            string
+		args            map[string]interface{}
+		expectAudience  []string
+		expectPriority  float64
+	}{
+		{
+			name:           "get_database_info disconnected",
+			tool:           "get_database_info",
+			args:           nil,
+			expectAudience: []string{"assistant"}, // diagnostic for LLM
+			expectPriority: 1.0,                   // high — DB is down
+		},
+		{
+			name:           "explore without db",
+			tool:           "explore",
+			args:           nil,
+			expectAudience: []string{"assistant"}, // error for LLM
+			expectPriority: 1.0,                   // high — error
+		},
+		{
+			name:           "query_database without db",
+			tool:           "query_database",
+			args:           map[string]interface{}{"query": "SELECT 1"},
+			expectAudience: []string{"assistant"}, // error for LLM
+			expectPriority: 1.0,                   // high — error
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := MCPRequest{
+				JSONRPC: "2.0",
+				ID:      "ann-" + tt.name,
+				Method:  "tools/call",
+				Params:  CallToolParams{Name: tt.tool, Arguments: tt.args},
+			}
+
+			response := server.handleRequest(req)
+			if response == nil {
+				t.Fatal("Expected response")
+			}
+
+			resultBytes, _ := json.Marshal(response.Result)
+			var result CallToolResult
+			if err := json.Unmarshal(resultBytes, &result); err != nil {
+				t.Fatalf("Failed to unmarshal result: %v", err)
+			}
+
+			if len(result.Content) == 0 {
+				t.Fatal("Expected at least one content item")
+			}
+
+			item := result.Content[0]
+			if item.Annotations == nil {
+				t.Error("Content item missing annotations")
+				return
+			}
+			if len(item.Annotations.Audience) == 0 {
+				t.Error("Annotations.Audience should not be empty")
+			}
+			if item.Annotations.Audience[0] != tt.expectAudience[0] {
+				t.Errorf("Expected audience %v, got %v", tt.expectAudience, item.Annotations.Audience)
+			}
+			if item.Annotations.Priority != tt.expectPriority {
+				t.Errorf("Expected priority %.1f, got %.1f", tt.expectPriority, item.Annotations.Priority)
+			}
+		})
 	}
 }
