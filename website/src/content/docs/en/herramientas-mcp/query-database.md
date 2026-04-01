@@ -75,9 +75,21 @@ SELECT name, salary,
 FROM employees
 ```
 
+## Schema validation
+
+Before executing any query, the server validates that referenced tables and views **actually exist** in the database:
+
+- Extracts all table references from the SQL (including JOINs, subqueries, CTEs, and 3-part names)
+- Queries `INFORMATION_SCHEMA.TABLES` to verify existence
+- If a table doesn't exist, suggests similar names using Levenshtein distance ("Did you mean?")
+- If `INFORMATION_SCHEMA` is not accessible (permissions), validation is silently skipped
+- System schema objects (`INFORMATION_SCHEMA`, `sys`) are automatically excluded
+
+This prevents Claude from inventing table names and allows correcting errors before execution.
+
 ## Security
 
 - Queries are executed with `PrepareContext()` — no SQL string concatenation
-- Maximum query size is configurable via `MSSQL_MAX_QUERY_SIZE`
+- Maximum query size is configurable via `MSSQL_MAX_QUERY_SIZE` (1 MB default)
 - A 30-second timeout is applied by default
 - In read-only mode, all referenced tables are validated (including JOINs and subqueries)

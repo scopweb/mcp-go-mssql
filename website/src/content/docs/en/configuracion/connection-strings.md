@@ -49,5 +49,5 @@ server=myserver;database=MyDB;integrated security=sspi;encrypt=true
 
 | Parameter | Production | Development |
 |-----------|------------|-------------|
-| `encrypt` | `true` (always) | `true` (always) |
+| `encrypt` | `true` (always) | `false` by default (configurable with `MSSQL_ENCRYPT`) |
 | `trustservercertificate` | `false` | `true` |

@@ -26,6 +26,7 @@ Todas las credenciales y opciones de configuración se gestionan mediante variab
 | `MSSQL_ENCRYPT` | _(auto)_ | Control de cifrado TLS. Solo efectivo con `DEVELOPER_MODE=true`. `false` = desactivar cifrado (**necesario para SQL Server 2008/2012**). Si no se define: `false` en dev, siempre `true` en producción |
 | `MSSQL_ALLOWED_DATABASES` | _(vacío)_ | BDs adicionales accesibles para queries cross-database (separadas por comas) |
 | `MSSQL_CONNECTION_STRING` | _(vacío)_ | Connection string personalizado (anula otras variables) |
+| `MSSQL_MAX_QUERY_SIZE` | `1048576` | Tamaño máximo de consulta en caracteres (1 MB por defecto) |
 
 ## Plantilla .env
 

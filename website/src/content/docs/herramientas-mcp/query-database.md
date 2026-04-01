@@ -75,9 +75,21 @@ SELECT name, salary,
 FROM employees
 ```
 
+## Validación de schema
+
+Antes de ejecutar cualquier consulta, el servidor valida que las tablas y vistas referenciadas **existan realmente** en la base de datos:
+
+- Extrae todas las referencias a tablas del SQL (incluyendo JOINs, subqueries, CTEs y nombres de 3 partes)
+- Consulta `INFORMATION_SCHEMA.TABLES` para verificar existencia
+- Si una tabla no existe, sugiere nombres similares usando distancia de Levenshtein ("Did you mean?")
+- Si `INFORMATION_SCHEMA` no es accesible (permisos), la validación se omite silenciosamente
+- Objetos de esquemas del sistema (`INFORMATION_SCHEMA`, `sys`) se excluyen automáticamente
+
+Esto previene que Claude invente nombres de tablas y permite corregir errores antes de ejecutar.
+
 ## Seguridad
 
 - Las consultas se ejecutan con `PrepareContext()` — no hay concatenación de strings SQL
-- El tamaño máximo de consulta es configurable via `MSSQL_MAX_QUERY_SIZE`
+- El tamaño máximo de consulta es configurable via `MSSQL_MAX_QUERY_SIZE` (1 MB por defecto)
 - Se aplica un timeout de 30 segundos por defecto
 - En modo read-only, se validan todas las tablas referenciadas (incluyendo JOINs y subqueries)

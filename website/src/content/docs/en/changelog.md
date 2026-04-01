@@ -7,6 +7,48 @@ All relevant changes to this project are documented here.
 
 ## Latest changes
 
+### Cross-database queries (`MSSQL_ALLOWED_DATABASES`)
+
+**New variable:** `MSSQL_ALLOWED_DATABASES`
+- Query multiple databases from a single MCP connector
+- Format: comma-separated list, e.g.: `"OtherDB1,OtherDB2"`
+- Enables 3-part name queries: `SELECT * FROM OtherDB.dbo.TableName`
+- Schema validation checks tables exist in the target database
+- Cross-database modifications are **always blocked** (security)
+
+**Tool improvements:**
+- `explore` accepts new `database` parameter to list tables in allowed databases
+- `get_database_info` shows configured cross-databases
+- Clear error messages when referencing a non-allowed database
+
+**Regex fix:**
+- Table name parser now supports 3-part names (`database.schema.table`)
+- Fixes false "table not found" errors for qualified references like `dbo.TableName`
+
+---
+
+### MCP spec compliance (2025-11-25)
+
+- **Content annotations**: all responses include `audience` and `priority` fields
+- **Tool annotations**: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` on every tool
+- **Rate limiter**: 60 tool calls per minute (token bucket)
+- **JSON-RPC 2.0**: strict validation, proper error codes (-32600, -32601, -32602, -32700)
+- **`logging/setLevel`** handler for dynamic log level control
+- **`ping`** handler for health checks
+- **Clean shutdown** with graceful connection cleanup
+
+---
+
+### Best-effort schema validation for `query_database`
+
+- Before executing a query, validates that all referenced tables/views exist in the database
+- Parses table references from JOINs, subqueries, CTEs, and 3-part names
+- "Did you mean?" suggestions using Levenshtein distance when a table is not found
+- Silently skips validation if `INFORMATION_SCHEMA` is not accessible
+- System schema objects (`INFORMATION_SCHEMA`, `sys`) are automatically excluded
+
+---
+
 ### SQL Server 2008/2012 support and improved diagnostics
 
 **New variable:** `MSSQL_ENCRYPT`

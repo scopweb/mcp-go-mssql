@@ -15,7 +15,7 @@ Herramienta unificada para explorar objetos de la base de datos. Reemplaza a `li
 
 | Parámetro | Tipo | Descripción |
 |-----------|------|-------------|
-| `type` | string | Qué explorar: `tables` (por defecto), `databases`, `procedures`, `search` |
+| `type` | string | Qué explorar: `tables` (por defecto), `views`, `databases`, `procedures`, `search` |
 | `filter` | string | Filtro por nombre (LIKE). Válido para `tables` y `procedures` |
 | `schema` | string | Filtro por esquema. Solo para `procedures` (opcional) |
 | `pattern` | string | Patrón de búsqueda. **Requerido** cuando `type=search` |
@@ -34,6 +34,19 @@ Con filtro:
 ```json
 { "name": "explore", "arguments": { "filter": "Pedido" } }
 ```
+
+### Listar solo vistas (con metadatos)
+
+```json
+{ "name": "explore", "arguments": { "type": "views" } }
+```
+
+Con filtro:
+```json
+{ "name": "explore", "arguments": { "type": "views", "filter": "v_Pedido" } }
+```
+
+Devuelve: `schema_name`, `view_name`, `check_option`, `is_updatable`, `definition_preview` (300 caracteres del código fuente).
 
 ### Listar bases de datos
 

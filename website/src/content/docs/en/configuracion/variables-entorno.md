@@ -26,6 +26,7 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_ENCRYPT` | _(auto)_ | TLS encryption control. Only effective with `DEVELOPER_MODE=true`. `false` = disable encryption (**required for SQL Server 2008/2012**). If not set: `false` in dev, always `true` in production |
 | `MSSQL_ALLOWED_DATABASES` | _(empty)_ | Additional databases accessible for cross-database queries (comma-separated) |
 | `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables) |
+| `MSSQL_MAX_QUERY_SIZE` | `1048576` | Maximum query size in characters (1 MB default) |
 
 ## .env template
 

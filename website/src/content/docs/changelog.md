@@ -5,7 +5,7 @@ description: Historial de cambios de MCP-Go-MSSQL
 
 Todos los cambios relevantes de este proyecto se documentan aquí.
 
-## Último cambio
+## Últimos cambios
 
 ### Consultas cross-database (`MSSQL_ALLOWED_DATABASES`)
 
@@ -24,6 +24,28 @@ Todos los cambios relevantes de este proyecto se documentan aquí.
 **Corrección de regex:**
 - El parser de nombres de tabla ahora soporta 3 partes (`database.schema.table`)
 - Corrige falsos errores "table not found" para referencias cualificadas como `dbo.TableName`
+
+---
+
+### Conformidad con la spec MCP (2025-11-25)
+
+- **Content annotations**: todas las respuestas incluyen campos `audience` y `priority`
+- **Tool annotations**: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` en cada herramienta
+- **Rate limiter**: 60 llamadas por minuto (token bucket)
+- **JSON-RPC 2.0**: validación estricta, códigos de error apropiados (-32600, -32601, -32602, -32700)
+- **`logging/setLevel`** para control dinámico del nivel de log
+- **`ping`** para health checks
+- **Shutdown limpio** con cierre ordenado de conexiones
+
+---
+
+### Validación de schema para `query_database`
+
+- Antes de ejecutar, valida que todas las tablas/vistas referenciadas existan en la BD
+- Parsea referencias de tablas en JOINs, subqueries, CTEs y nombres de 3 partes
+- Sugerencias "Did you mean?" con distancia de Levenshtein cuando una tabla no se encuentra
+- Omite la validación silenciosamente si `INFORMATION_SCHEMA` no es accesible
+- Excluye automáticamente objetos de esquemas del sistema (`INFORMATION_SCHEMA`, `sys`)
 
 ---
 
