@@ -24,6 +24,7 @@ Todas las credenciales y opciones de configuración se gestionan mediante variab
 | `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación en modo read-only |
 | `MSSQL_AUTH` | `sql` | Modo de autenticación: `sql`, `integrated`, `azure` |
 | `MSSQL_ENCRYPT` | _(auto)_ | Control de cifrado TLS. Solo efectivo con `DEVELOPER_MODE=true`. `false` = desactivar cifrado (**necesario para SQL Server 2008/2012**). Si no se define: `false` en dev, siempre `true` en producción |
+| `MSSQL_ALLOWED_DATABASES` | _(vacío)_ | BDs adicionales accesibles para queries cross-database (separadas por comas) |
 | `MSSQL_CONNECTION_STRING` | _(vacío)_ | Connection string personalizado (anula otras variables) |
 
 ## Plantilla .env
@@ -40,7 +41,23 @@ MSSQL_PASSWORD=YourPassword123
 MSSQL_PORT=1433
 DEVELOPER_MODE=true
 MSSQL_READ_ONLY=false
+
+# Cross-database (opcional)
+MSSQL_ALLOWED_DATABASES=OtherDB1,OtherDB2
 ```
+
+### Acceso cross-database
+
+Permite consultar tablas de otras bases de datos del mismo servidor usando nombres de 3 partes:
+
+```sql
+SELECT * FROM OtherDB.dbo.TableName
+```
+
+**Comportamiento de seguridad:**
+- Solo lectura: las modificaciones (INSERT/UPDATE/DELETE) en BDs cruzadas están **siempre bloqueadas**
+- La validación de schema verifica que las tablas existan en la BD destino
+- El usuario SQL debe tener permisos en las BDs adicionales
 
 ## Cargar variables
 

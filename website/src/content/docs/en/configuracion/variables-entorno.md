@@ -24,6 +24,7 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode |
 | `MSSQL_AUTH` | `sql` | Authentication mode: `sql`, `integrated`, `azure` |
 | `MSSQL_ENCRYPT` | _(auto)_ | TLS encryption control. Only effective with `DEVELOPER_MODE=true`. `false` = disable encryption (**required for SQL Server 2008/2012**). If not set: `false` in dev, always `true` in production |
+| `MSSQL_ALLOWED_DATABASES` | _(empty)_ | Additional databases accessible for cross-database queries (comma-separated) |
 | `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables) |
 
 ## .env template
@@ -40,7 +41,23 @@ MSSQL_PASSWORD=YourPassword123
 MSSQL_PORT=1433
 DEVELOPER_MODE=true
 MSSQL_READ_ONLY=false
+
+# Cross-database (optional)
+MSSQL_ALLOWED_DATABASES=OtherDB1,OtherDB2
 ```
+
+### Cross-database access
+
+Allows querying tables in other databases on the same server using 3-part names:
+
+```sql
+SELECT * FROM OtherDB.dbo.TableName
+```
+
+**Security behavior:**
+- Read-only: modifications (INSERT/UPDATE/DELETE) on cross-databases are **always blocked**
+- Schema validation checks tables exist in the target database
+- The SQL user must have permissions on the additional databases
 
 ## Loading variables
 

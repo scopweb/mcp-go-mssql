@@ -7,6 +7,26 @@ Todos los cambios relevantes de este proyecto se documentan aquí.
 
 ## Último cambio
 
+### Consultas cross-database (`MSSQL_ALLOWED_DATABASES`)
+
+**Nueva variable:** `MSSQL_ALLOWED_DATABASES`
+- Permite consultar múltiples bases de datos desde un solo conector MCP
+- Formato: lista separada por comas, ej: `"JJP_Carregues,JJP_Ferratge_PROD"`
+- Habilita queries con nombres de 3 partes: `SELECT * FROM OtherDB.dbo.TableName`
+- La validación de schema verifica que las tablas existan en la BD destino
+- Las modificaciones cross-database están **siempre bloqueadas** (seguridad)
+
+**Mejoras en herramientas:**
+- `explore` acepta nuevo parámetro `database` para listar tablas de BDs permitidas
+- `get_database_info` muestra las bases de datos cruzadas configuradas
+- Mensajes de error claros cuando se referencia una BD no permitida
+
+**Corrección de regex:**
+- El parser de nombres de tabla ahora soporta 3 partes (`database.schema.table`)
+- Corrige falsos errores "table not found" para referencias cualificadas como `dbo.TableName`
+
+---
+
 ### Soporte SQL Server 2008/2012 y diagnóstico mejorado
 
 **Nueva variable:** `MSSQL_ENCRYPT`

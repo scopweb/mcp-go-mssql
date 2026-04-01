@@ -124,6 +124,13 @@ The server reads database connection from these environment variables. See `.env
   - Only these tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP) when `MSSQL_READ_ONLY=true`
   - All other tables remain read-only
   - Prevents accidental data modification in production databases while allowing AI to work with temporary tables
+- `MSSQL_ALLOWED_DATABASES`: Comma-separated list of additional databases this connector can query (cross-database)
+  - Example: `"JJP_Carregues,JJP_Ferratge_PROD"`
+  - Enables queries using 3-part names: `SELECT * FROM JJP_Carregues.dbo.TableName`
+  - The SQL user must have permissions on those databases (same server, same credentials)
+  - Schema validation checks tables exist in the target database before executing
+  - Cross-database tables are **read-only** — modifications are blocked even if MSSQL_WHITELIST_TABLES is set
+  - Use `explore` tool with `database` parameter to list tables in allowed databases
 
 **Configuration Examples:**
 ```bash
@@ -163,6 +170,19 @@ DEVELOPER_MODE=true
 MSSQL_ENCRYPT=false
 # No user/password needed — uses Windows credentials
 # MSSQL_ENCRYPT=false is required because SQL 2008 doesn't support TLS 1.2
+
+# Cross-Database Access (query multiple databases from one connector)
+MSSQL_SERVER=prod-server.database.windows.net
+MSSQL_DATABASE=JJP_Ferratge_DEV
+MSSQL_USER=prod_user@prod-server
+MSSQL_PASSWORD=your_password
+DEVELOPER_MODE=false
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+MSSQL_ALLOWED_DATABASES=JJP_Carregues,JJP_Ferratge_PROD
+# Primary DB is JJP_Ferratge_DEV — AI can also read from JJP_Carregues and JJP_Ferratge_PROD
+# Cross-database queries: SELECT * FROM JJP_Carregues.dbo.TableName
+# Modifications only allowed on whitelisted tables in the primary database
 ```
 
 ### TLS Certificate Handling
@@ -185,7 +205,8 @@ MSSQL_ENCRYPT=false
         "MSSQL_PORT": "1433",
         "DEVELOPER_MODE": "false",
         "MSSQL_READ_ONLY": "true",
-        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia"
+        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia",
+        "MSSQL_ALLOWED_DATABASES": "OtherDB1,OtherDB2"
       }
     },
     "production-db-readonly": {

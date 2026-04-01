@@ -20,6 +20,7 @@ Herramienta unificada para explorar objetos de la base de datos. Reemplaza a `li
 | `schema` | string | Filtro por esquema. Solo para `procedures` (opcional) |
 | `pattern` | string | Patrón de búsqueda. **Requerido** cuando `type=search` |
 | `search_in` | string | Dónde buscar: `name` (por defecto) o `definition` (código fuente) |
+| `database` | string | Explorar tablas de una BD cross-database permitida (requiere `MSSQL_ALLOWED_DATABASES`) |
 
 ## Modos de uso
 
@@ -62,6 +63,23 @@ Con filtro de nombre y esquema:
 ```json
 { "name": "explore", "arguments": { "type": "search", "pattern": "PedidoCamio", "search_in": "definition" } }
 ```
+
+### Explorar tablas de otra base de datos
+
+Requiere `MSSQL_ALLOWED_DATABASES` configurado:
+
+```json
+{ "name": "explore", "arguments": { "database": "JJP_Carregues" } }
+```
+
+Con filtro:
+```json
+{ "name": "explore", "arguments": { "database": "JJP_Carregues", "filter": "Pedido" } }
+```
+
+:::note
+Solo se pueden explorar bases de datos listadas en `MSSQL_ALLOWED_DATABASES`. Si se intenta acceder a una BD no permitida, se devuelve un error con la lista de BDs permitidas.
+:::
 
 ## Límite de resultados
 

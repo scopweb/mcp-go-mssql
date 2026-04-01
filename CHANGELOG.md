@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 🌐 **Cross-database queries (`MSSQL_ALLOWED_DATABASES`)**:
+  - New environment variable `MSSQL_ALLOWED_DATABASES` (comma-separated) allows querying multiple databases from a single MCP connector
+  - Enables 3-part name queries: `SELECT * FROM OtherDB.dbo.TableName`
+  - Schema validation checks tables exist in the target database (queries `[OtherDB].INFORMATION_SCHEMA.TABLES`)
+  - Cross-database modifications are **always blocked** (security: read-only across databases, even with whitelist)
+  - `explore` tool gains new `database` parameter to list tables/views in allowed cross-databases
+  - `get_database_info` shows configured cross-database access
+  - Clear error messages when referencing non-allowed databases, with list of allowed ones
+  - Regex-based table extraction updated to parse 3-part names (`database.schema.table`) correctly — fixes false "table not found" errors for qualified references like `dbo.TableName`
+
+### Added
 - 🛡️ **Best-effort schema validation for `query_database`**:
   - Before executing a query, the server validates that all referenced tables/views actually exist in the database
   - If a table doesn't exist, returns an error with "Did you mean?" suggestions using Levenshtein distance + prefix/substring matching

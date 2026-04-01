@@ -51,6 +51,28 @@ Edita el archivo de configuración de Claude Desktop y añade el servidor MCP:
 }
 ```
 
+### Producción con acceso cross-database
+
+```json
+{
+  "mssql-multi-db": {
+    "command": "mcp-go-mssql.exe",
+    "env": {
+      "MSSQL_SERVER": "prod-server.database.windows.net",
+      "MSSQL_DATABASE": "PrimaryDB",
+      "MSSQL_USER": "app_user",
+      "MSSQL_PASSWORD": "your_password",
+      "DEVELOPER_MODE": "false",
+      "MSSQL_READ_ONLY": "true",
+      "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia",
+      "MSSQL_ALLOWED_DATABASES": "OtherDB1,OtherDB2"
+    }
+  }
+}
+```
+
+> Un solo conector accede a `PrimaryDB` (lectura + escritura en whitelist) y puede leer de `OtherDB1` y `OtherDB2` usando `SELECT * FROM OtherDB1.dbo.TableName`.
+
 ### Desarrollo local
 
 ```json

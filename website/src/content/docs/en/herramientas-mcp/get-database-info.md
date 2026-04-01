@@ -38,3 +38,4 @@ Claude usually invokes this tool automatically at the beginning of a conversatio
 - Whether the database is connected
 - What access mode it has (read/write)
 - Which tables it can modify
+- Which cross-databases it can access (if `MSSQL_ALLOWED_DATABASES` is configured)

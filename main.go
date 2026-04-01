@@ -202,16 +202,19 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 }
 
 // Pre-compiled patterns for table name extraction (performance optimization)
+// tableExtractionPatterns match table references with optional database and schema qualifiers.
+// Capture groups: 1=full prefix (e.g. "db.schema." or "schema."), 2=table name.
+// The prefix is parsed separately to extract database vs schema components.
 var tableExtractionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bFROM\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // FROM [schema.]table
-	regexp.MustCompile(`(?i)\bJOIN\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // JOIN [schema.]table
-	regexp.MustCompile(`(?i)\bINTO\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // INSERT INTO [schema.]table
-	regexp.MustCompile(`(?i)\bUPDATE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),           // UPDATE [schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),    // DELETE FROM [schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
-	regexp.MustCompile(`(?i)\bTABLE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),            // CREATE/DROP TABLE
-	regexp.MustCompile(`(?i)\bVIEW\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // CREATE/DROP VIEW
-	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(\[?[\w]+\]?\.)?\[?([\w]+)\]?`), // TRUNCATE TABLE
+	regexp.MustCompile(`(?i)\bFROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),             // FROM [db.][schema.]table
+	regexp.MustCompile(`(?i)\bJOIN\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),             // JOIN [db.][schema.]table
+	regexp.MustCompile(`(?i)\bINTO\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),             // INSERT INTO [db.][schema.]table
+	regexp.MustCompile(`(?i)\bUPDATE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),           // UPDATE [db.][schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),    // DELETE FROM [db.][schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
+	regexp.MustCompile(`(?i)\b(?:CREATE|DROP|ALTER)\s+TABLE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`), // CREATE/DROP/ALTER TABLE
+	regexp.MustCompile(`(?i)\b(?:CREATE|DROP|ALTER)\s+VIEW\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`), // CREATE/DROP/ALTER VIEW
+	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`), // TRUNCATE TABLE
 }
 
 // systemSchemas contains SQL Server system schemas whose objects should be
@@ -219,6 +222,21 @@ var tableExtractionPatterns = []*regexp.Regexp{
 var systemSchemas = map[string]bool{
 	"information_schema": true,
 	"sys":               true,
+}
+
+// sqlReservedWords contains SQL keywords that should never be treated as table names.
+// This acts as a safety net for regex-based table extraction.
+var sqlReservedWords = map[string]bool{
+	"as": true, "set": true, "return": true, "returns": true,
+	"select": true, "where": true, "and": true, "or": true,
+	"not": true, "null": true, "is": true, "in": true,
+	"on": true, "by": true, "order": true, "group": true,
+	"having": true, "case": true, "when": true, "then": true,
+	"else": true, "end": true, "begin": true, "declare": true,
+	"exec": true, "execute": true, "procedure": true, "function": true,
+	"trigger": true, "index": true, "cursor": true, "open": true,
+	"close": true, "fetch": true, "next": true, "values": true,
+	"output": true, "inserted": true, "deleted": true,
 }
 
 // Pre-compiled pattern for procedure name validation
@@ -235,9 +253,16 @@ func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 
 // serverConfig holds cached configuration read once at startup.
 type serverConfig struct {
-	readOnly        bool
-	whitelistTables []string
-	whitelistProcs  string
+	readOnly         bool
+	whitelistTables  []string
+	whitelistProcs   string
+	allowedDatabases []string // additional databases this connector can query (cross-database)
+}
+
+// tableRef represents a table reference that may include a cross-database qualifier.
+type tableRef struct {
+	database string // empty = current database
+	table    string // lowercase table name
 }
 
 // MSSQL Server
@@ -569,70 +594,185 @@ func parseWhitelistTables(env string) []string {
 	return normalized
 }
 
-// extractAllTablesFromQuery finds all table/view names referenced in the query
-func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
+// parseAllowedDatabases parses a comma-separated list of allowed cross-database names.
+func parseAllowedDatabases(env string) []string {
+	if env == "" {
+		return nil
+	}
+	dbs := strings.Split(env, ",")
+	var normalized []string
+	for _, db := range dbs {
+		db = strings.TrimSpace(db)
+		if db != "" {
+			normalized = append(normalized, strings.ToLower(db))
+		}
+	}
+	return normalized
+}
+
+// parseTablePrefix parses a dot-separated prefix like "DB.schema." or "schema." into
+// (database, schema) components. Both may be empty for unqualified table references.
+func parseTablePrefix(prefix string) (database, schema string) {
+	prefix = strings.TrimRight(prefix, ".")
+	if prefix == "" {
+		return "", ""
+	}
+	parts := strings.Split(prefix, ".")
+	for i, p := range parts {
+		parts[i] = strings.Trim(p, "[] \t")
+	}
+	switch len(parts) {
+	case 1:
+		return "", strings.ToLower(parts[0]) // schema only
+	case 2:
+		return strings.ToLower(parts[0]), strings.ToLower(parts[1]) // database.schema
+	default:
+		return "", ""
+	}
+}
+
+// extractTableRefs finds all table/view references in the query, including cross-database
+// qualifiers like DatabaseName.dbo.TableName.
+func (s *MCPMSSQLServer) extractTableRefs(query string) []tableRef {
 	queryUpper := strings.ToUpper(query)
-	tablesFound := make(map[string]bool) // Use map to avoid duplicates
+	type refKey struct{ db, table string }
+	seen := make(map[refKey]bool)
+	var refs []tableRef
 
 	for _, pattern := range tableExtractionPatterns {
 		matches := pattern.FindAllStringSubmatch(queryUpper, -1)
 		for _, match := range matches {
 			if len(match) > 2 {
-				// match[1] = schema prefix (e.g. "INFORMATION_SCHEMA."), match[2] = table name
-				schemaPrefix := strings.Trim(match[1], ".[]\t ")
-				if systemSchemas[strings.ToLower(schemaPrefix)] {
-					continue // skip system schema objects like INFORMATION_SCHEMA.COLUMNS
+				// match[1] = prefix (e.g. "DB.SCHEMA." or "SCHEMA." or ""), match[2] = table name
+				database, schemaPrefix := parseTablePrefix(match[1])
+
+				// Skip system schema objects (INFORMATION_SCHEMA, sys)
+				if systemSchemas[schemaPrefix] {
+					continue
 				}
+				// If database part looks like a system schema, skip too
+				if systemSchemas[database] {
+					continue
+				}
+
 				tableName := match[2]
-				// Remove brackets if present [tablename] -> tablename
 				tableName = strings.Trim(tableName, "[]")
 				tableName = strings.ToLower(strings.TrimSpace(tableName))
-				if tableName != "" {
-					tablesFound[tableName] = true
+				if tableName == "" || sqlReservedWords[tableName] {
+					continue
+				}
+
+				key := refKey{database, tableName}
+				if !seen[key] {
+					seen[key] = true
+					refs = append(refs, tableRef{database: database, table: tableName})
 				}
 			}
 		}
 	}
+	return refs
+}
 
-	// Convert map keys to slice
+// extractAllTablesFromQuery finds all table/view names referenced in the query (flat list).
+// This is a backward-compatible wrapper around extractTableRefs that returns only table names.
+func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
+	refs := s.extractTableRefs(query)
+	seen := make(map[string]bool)
 	var tables []string
-	for table := range tablesFound {
-		tables = append(tables, table)
+	for _, ref := range refs {
+		if !seen[ref.table] {
+			seen[ref.table] = true
+			tables = append(tables, ref.table)
+		}
 	}
 	return tables
 }
 
+// isAllowedDatabase checks if a database name is in the allowed cross-database list.
+func (s *MCPMSSQLServer) isAllowedDatabase(db string) bool {
+	for _, allowed := range s.config.allowedDatabases {
+		if allowed == db {
+			return true
+		}
+	}
+	return false
+}
+
+// loadTablesForDatabase returns the set of table names in a given database.
+// If database is empty, queries the current database. Uses INFORMATION_SCHEMA.
+func (s *MCPMSSQLServer) loadTablesForDatabase(ctx context.Context, database string) (map[string]bool, error) {
+	var checkQuery string
+	if database == "" {
+		checkQuery = `SELECT LOWER(TABLE_NAME) AS table_name FROM INFORMATION_SCHEMA.TABLES`
+	} else {
+		// Cross-database query: [OtherDB].INFORMATION_SCHEMA.TABLES
+		// database name is from our allowedDatabases list (not user input), but sanitize anyway
+		if !regexp.MustCompile(`^[\w]+$`).MatchString(database) {
+			return nil, fmt.Errorf("invalid database name")
+		}
+		checkQuery = fmt.Sprintf(`SELECT LOWER(TABLE_NAME) AS table_name FROM [%s].INFORMATION_SCHEMA.TABLES`, database)
+	}
+	results, err := s.executeSecureQuery(ctx, checkQuery)
+	if err != nil {
+		return nil, err
+	}
+	tables := make(map[string]bool)
+	for _, row := range results {
+		if name, ok := row["table_name"].(string); ok {
+			tables[strings.ToLower(name)] = true
+		}
+	}
+	return tables, nil
+}
+
 // validateTablesExist performs best-effort validation that tables referenced in a query
-// actually exist in the database. If INFORMATION_SCHEMA is not accessible (permissions),
-// it silently skips validation. Returns nil if all tables exist or validation was skipped,
+// actually exist in the database. Supports cross-database references for allowed databases.
+// If INFORMATION_SCHEMA is not accessible (permissions), it silently skips validation.
+// Returns nil if all tables exist or validation was skipped,
 // or an error message with suggestions if unknown tables are found.
 func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) *string {
-	tables := s.extractAllTablesFromQuery(query)
-	if len(tables) == 0 {
+	refs := s.extractTableRefs(query)
+	if len(refs) == 0 {
 		return nil
 	}
 
-	// Build a single query to check all tables at once
-	// Using INFORMATION_SCHEMA which is standard and usually accessible
-	existingTables := make(map[string]bool)
-	checkQuery := `SELECT LOWER(TABLE_NAME) AS table_name FROM INFORMATION_SCHEMA.TABLES`
-	results, err := s.executeSecureQuery(ctx, checkQuery)
+	// Cache loaded tables per database (empty string = current database)
+	tableCache := make(map[string]map[string]bool)
+
+	// Load current database tables
+	currentTables, err := s.loadTablesForDatabase(ctx, "")
 	if err != nil {
 		// No permissions to read schema — skip validation silently
 		return nil
 	}
+	tableCache[""] = currentTables
 
-	for _, row := range results {
-		if name, ok := row["table_name"].(string); ok {
-			existingTables[strings.ToLower(name)] = true
-		}
-	}
-
-	// Check which referenced tables don't exist
+	// Check each table reference
 	var missing []string
-	for _, table := range tables {
-		if !existingTables[table] {
-			missing = append(missing, table)
+	for _, ref := range refs {
+		if ref.database != "" {
+			// Cross-database reference — check if database is allowed
+			if !s.isAllowedDatabase(ref.database) {
+				missing = append(missing, fmt.Sprintf("%s.%s", ref.database, ref.table))
+				continue
+			}
+			// Load tables for that database if not cached
+			if _, ok := tableCache[ref.database]; !ok {
+				dbTables, err := s.loadTablesForDatabase(ctx, ref.database)
+				if err != nil {
+					// Can't read that database's schema — skip validation for it
+					continue
+				}
+				tableCache[ref.database] = dbTables
+			}
+			if !tableCache[ref.database][ref.table] {
+				missing = append(missing, fmt.Sprintf("%s.%s", ref.database, ref.table))
+			}
+		} else {
+			// Current database reference
+			if !currentTables[ref.table] {
+				missing = append(missing, ref.table)
+			}
 		}
 	}
 
@@ -640,14 +780,38 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 		return nil
 	}
 
-	// Build suggestions for each missing table using string similarity
+	// Build suggestions using current database tables (most common case)
 	var parts []string
 	for _, m := range missing {
-		suggestions := findSimilarNames(m, existingTables)
-		if len(suggestions) > 0 {
-			parts = append(parts, fmt.Sprintf("'%s' not found. Did you mean: %s?", m, strings.Join(suggestions, ", ")))
+		// For cross-database refs (db.table), suggest from that database if available
+		if strings.Contains(m, ".") {
+			dotParts := strings.SplitN(m, ".", 2)
+			dbName, tableName := dotParts[0], dotParts[1]
+			if !s.isAllowedDatabase(dbName) {
+				allowedList := strings.Join(s.config.allowedDatabases, ", ")
+				if allowedList == "" {
+					allowedList = "(none configured)"
+				}
+				parts = append(parts, fmt.Sprintf("'%s' — database '%s' is not in MSSQL_ALLOWED_DATABASES. Allowed: %s",
+					m, dbName, allowedList))
+			} else if dbTables, ok := tableCache[dbName]; ok {
+				suggestions := findSimilarNames(tableName, dbTables)
+				if len(suggestions) > 0 {
+					parts = append(parts, fmt.Sprintf("'%s' not found in database '%s'. Did you mean: %s?",
+						m, dbName, strings.Join(suggestions, ", ")))
+				} else {
+					parts = append(parts, fmt.Sprintf("'%s' not found in database '%s' (no similar tables found)", m, dbName))
+				}
+			} else {
+				parts = append(parts, fmt.Sprintf("'%s' — could not access database '%s'", m, dbName))
+			}
 		} else {
-			parts = append(parts, fmt.Sprintf("'%s' not found (no similar tables found)", m))
+			suggestions := findSimilarNames(m, currentTables)
+			if len(suggestions) > 0 {
+				parts = append(parts, fmt.Sprintf("'%s' not found. Did you mean: %s?", m, strings.Join(suggestions, ", ")))
+			} else {
+				parts = append(parts, fmt.Sprintf("'%s' not found (no similar tables found)", m))
+			}
 		}
 	}
 
@@ -798,7 +962,9 @@ func (s *MCPMSSQLServer) extractOperation(query string) string {
 	return "SELECT" // Default to SELECT for read operations
 }
 
-// validateTablePermissions validates that all tables in a modify operation are whitelisted
+// validateTablePermissions validates that all tables in a modify operation are whitelisted.
+// Cross-database table references are always blocked for modification (security: only
+// current-database tables can be in the whitelist).
 func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// Only validate if read-only mode is enabled (cached at startup)
 	if !s.config.readOnly {
@@ -823,11 +989,21 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 		return nil
 	}
 
-	// Extract ALL tables referenced in the query
-	tablesInQuery := s.extractAllTablesFromQuery(query)
+	// Extract ALL table references including cross-database
+	refsInQuery := s.extractTableRefs(query)
+
+	// Build flat list for logging
+	var tableNames []string
+	for _, ref := range refsInQuery {
+		if ref.database != "" {
+			tableNames = append(tableNames, ref.database+"."+ref.table)
+		} else {
+			tableNames = append(tableNames, ref.table)
+		}
+	}
 
 	s.secLogger.Printf("Permission check - Operation: %s, Tables found: %v, Whitelist: %v",
-		operation, tablesInQuery, whitelist)
+		operation, tableNames, whitelist)
 
 	// If whitelist is empty, deny all modifications
 	if len(whitelist) == 0 {
@@ -835,10 +1011,18 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	}
 
 	// Check if ALL tables in the query are whitelisted
-	for _, table := range tablesInQuery {
+	for _, ref := range refsInQuery {
+		// Cross-database modifications are always blocked
+		if ref.database != "" {
+			s.secLogger.Printf("SECURITY VIOLATION: Attempted %s operation on cross-database table '%s.%s'",
+				operation, ref.database, ref.table)
+			return fmt.Errorf("permission denied: cross-database modification not allowed — table '%s.%s' is in another database",
+				ref.database, ref.table)
+		}
+
 		isWhitelisted := false
 		for _, allowedTable := range whitelist {
-			if table == allowedTable {
+			if ref.table == allowedTable {
 				isWhitelisted = true
 				break
 			}
@@ -846,15 +1030,15 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 
 		if !isWhitelisted {
 			s.secLogger.Printf("SECURITY VIOLATION: Attempted %s operation on non-whitelisted table '%s'",
-				operation, table)
+				operation, ref.table)
 			return fmt.Errorf("permission denied: table '%s' is not whitelisted for %s operations",
-				table, operation)
+				ref.table, operation)
 		}
 	}
 
 	// All tables are whitelisted
 	s.secLogger.Printf("Permission granted: %s operation on whitelisted table(s) %v",
-		operation, tablesInQuery)
+		operation, tableNames)
 	return nil
 }
 
@@ -1098,6 +1282,12 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				} else {
 					info.WriteString("Access Mode: Full access\n")
 				}
+			}
+
+			// Show allowed cross-databases
+			if len(s.config.allowedDatabases) > 0 {
+				info.WriteString("Cross-Database Access: " + strings.Join(s.config.allowedDatabases, ", ") + "\n")
+				info.WriteString("Note: You can query these databases using 3-part names (e.g., DatabaseName.dbo.TableName). Use explore with database parameter to list their tables.\n")
 			}
 		}
 
@@ -1404,31 +1594,105 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 
 		default: // "tables"
-			label = "Tables and views found"
-			if filterVal, ok := params.Arguments["filter"].(string); ok && filterVal != "" {
-				filterPattern := "%" + filterVal + "%"
-				query := `
-					SELECT
-						TABLE_SCHEMA as schema_name,
-						TABLE_NAME as table_name,
-						TABLE_TYPE as table_type
-					FROM INFORMATION_SCHEMA.TABLES
-					WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-					  AND TABLE_NAME LIKE @p1
-					ORDER BY TABLE_SCHEMA, TABLE_NAME
-				`
-				results, err = s.executeSecureQuery(ctx, query, filterPattern)
+			// Check if user wants to explore a specific allowed database
+			dbFilter, _ := params.Arguments["database"].(string)
+
+			if dbFilter != "" {
+				// Explore a specific cross-database
+				dbFilterLower := strings.ToLower(strings.Trim(dbFilter, "[] "))
+				if !s.isAllowedDatabase(dbFilterLower) {
+					allowedList := strings.Join(s.config.allowedDatabases, ", ")
+					if allowedList == "" {
+						allowedList = "(none configured)"
+					}
+					return &MCPResponse{
+						JSONRPC: "2.0",
+						ID:      id,
+						Result: CallToolResult{
+							Content: []ContentItem{
+								{
+									Type:        "text",
+									Text:        fmt.Sprintf("Error: database '%s' is not in MSSQL_ALLOWED_DATABASES. Allowed: %s", dbFilter, allowedList),
+									Annotations: annBothHigh,
+								},
+							},
+							IsError: true,
+						},
+					}
+				}
+				// Validate database name for safe interpolation
+				if !regexp.MustCompile(`^[\w]+$`).MatchString(dbFilterLower) {
+					return &MCPResponse{
+						JSONRPC: "2.0",
+						ID:      id,
+						Result: CallToolResult{
+							Content: []ContentItem{
+								{Type: "text", Text: "Error: invalid database name", Annotations: annBothHigh},
+							},
+							IsError: true,
+						},
+					}
+				}
+
+				label = fmt.Sprintf("Tables and views in [%s]", dbFilter)
+				if filterVal, ok := params.Arguments["filter"].(string); ok && filterVal != "" {
+					query := fmt.Sprintf(`
+						SELECT
+							TABLE_SCHEMA as schema_name,
+							TABLE_NAME as table_name,
+							TABLE_TYPE as table_type
+						FROM [%s].INFORMATION_SCHEMA.TABLES
+						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+						  AND TABLE_NAME LIKE @p1
+						ORDER BY TABLE_SCHEMA, TABLE_NAME
+					`, dbFilterLower)
+					results, err = s.executeSecureQuery(ctx, query, "%"+filterVal+"%")
+				} else {
+					query := fmt.Sprintf(`
+						SELECT
+							TABLE_SCHEMA as schema_name,
+							TABLE_NAME as table_name,
+							TABLE_TYPE as table_type
+						FROM [%s].INFORMATION_SCHEMA.TABLES
+						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+						ORDER BY TABLE_SCHEMA, TABLE_NAME
+					`, dbFilterLower)
+					results, err = s.executeSecureQuery(ctx, query)
+				}
 			} else {
-				query := `
-					SELECT
-						TABLE_SCHEMA as schema_name,
-						TABLE_NAME as table_name,
-						TABLE_TYPE as table_type
-					FROM INFORMATION_SCHEMA.TABLES
-					WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-					ORDER BY TABLE_SCHEMA, TABLE_NAME
-				`
-				results, err = s.executeSecureQuery(ctx, query)
+				// Default: current database + summary of allowed databases
+				label = "Tables and views found"
+				if filterVal, ok := params.Arguments["filter"].(string); ok && filterVal != "" {
+					filterPattern := "%" + filterVal + "%"
+					query := `
+						SELECT
+							TABLE_SCHEMA as schema_name,
+							TABLE_NAME as table_name,
+							TABLE_TYPE as table_type
+						FROM INFORMATION_SCHEMA.TABLES
+						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+						  AND TABLE_NAME LIKE @p1
+						ORDER BY TABLE_SCHEMA, TABLE_NAME
+					`
+					results, err = s.executeSecureQuery(ctx, query, filterPattern)
+				} else {
+					query := `
+						SELECT
+							TABLE_SCHEMA as schema_name,
+							TABLE_NAME as table_name,
+							TABLE_TYPE as table_type
+						FROM INFORMATION_SCHEMA.TABLES
+						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+						ORDER BY TABLE_SCHEMA, TABLE_NAME
+					`
+					results, err = s.executeSecureQuery(ctx, query)
+				}
+
+				// Append cross-database info if allowed databases are configured
+				if err == nil && len(s.config.allowedDatabases) > 0 {
+					label = fmt.Sprintf("Tables and views found (current database + %d allowed cross-databases: %s — use explore with database parameter to list their tables)",
+						len(s.config.allowedDatabases), strings.Join(s.config.allowedDatabases, ", "))
+				}
 			}
 		}
 
@@ -2186,7 +2450,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			{
 				Name:        "explore",
 				Title:       "Explore Database",
-				Description: "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern).",
+				Description: "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern). Use 'database' parameter to explore tables in an allowed cross-database.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -2209,6 +2473,10 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 						"search_in": {
 							Type:        "string",
 							Description: "Where to search: 'name' (default) or 'definition' (inside procedure/view source code)",
+						},
+						"database": {
+							Type:        "string",
+							Description: "Explore tables in a specific allowed cross-database (requires MSSQL_ALLOWED_DATABASES). Example: 'JJP_Carregues'",
 						},
 					},
 					Required: []string{},
@@ -2371,9 +2639,10 @@ func main() {
 
 	// Cache configuration once at startup (avoid os.Getenv on every request)
 	cfg := serverConfig{
-		readOnly:        strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
-		whitelistTables: parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
-		whitelistProcs:  os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
+		readOnly:         strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
+		whitelistTables:  parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
+		whitelistProcs:   os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
+		allowedDatabases: parseAllowedDatabases(os.Getenv("MSSQL_ALLOWED_DATABASES")),
 	}
 
 	// Create MCP server without database initially
@@ -2449,7 +2718,7 @@ func main() {
 		}
 
 		// Log only non-sensitive configuration settings
-		safeEnvVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_PORT", "MSSQL_AUTH", "MSSQL_READ_ONLY", "MSSQL_WHITELIST_TABLES", "DEVELOPER_MODE"}
+		safeEnvVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_PORT", "MSSQL_AUTH", "MSSQL_READ_ONLY", "MSSQL_WHITELIST_TABLES", "MSSQL_ALLOWED_DATABASES", "DEVELOPER_MODE"}
 		secLogger.Printf("Configuration settings:")
 		for _, key := range safeEnvVars {
 			if val := os.Getenv(key); val != "" {

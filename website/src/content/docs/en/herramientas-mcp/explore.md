@@ -20,6 +20,7 @@ Unified tool for exploring database objects. Replaces `list_tables`, `list_datab
 | `schema` | string | Schema filter. Only for `procedures` (optional) |
 | `pattern` | string | Search pattern. **Required** when `type=search` |
 | `search_in` | string | Where to search: `name` (default) or `definition` (source code) |
+| `database` | string | Explore tables in an allowed cross-database (requires `MSSQL_ALLOWED_DATABASES`) |
 
 ## Usage modes
 
@@ -62,6 +63,23 @@ With name and schema filter:
 ```json
 { "name": "explore", "arguments": { "type": "search", "pattern": "OrderTruck", "search_in": "definition" } }
 ```
+
+### Explore tables in another database
+
+Requires `MSSQL_ALLOWED_DATABASES` to be configured:
+
+```json
+{ "name": "explore", "arguments": { "database": "OtherDB" } }
+```
+
+With filter:
+```json
+{ "name": "explore", "arguments": { "database": "OtherDB", "filter": "Order" } }
+```
+
+:::note
+Only databases listed in `MSSQL_ALLOWED_DATABASES` can be explored. Attempting to access a non-allowed database returns an error with the list of allowed databases.
+:::
 
 ## Row limit
 

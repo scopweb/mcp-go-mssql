@@ -65,8 +65,11 @@ debug.log
 # IDE AND EDITOR FILES
 # =============================================================================
 
-# Claude Code / AI agent directories
-.claude/
+# Claude Code / AI agent directories (except project-specific skills)
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/mcp-mssql-tools/
 .agent/
 .agents/
 

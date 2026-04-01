@@ -33,6 +33,24 @@ Executes a SQL query against the MSSQL database using prepared statements.
 - All standard SQL operations
 - `EXEC`, `xp_cmdshell` — Always blocked for security
 
+## Cross-database queries
+
+If `MSSQL_ALLOWED_DATABASES` is configured, you can use 3-part names:
+
+```sql
+-- Query another database
+SELECT * FROM OtherDB.dbo.Clients WHERE active = 1
+
+-- JOIN across databases
+SELECT a.name, b.total
+FROM local_table a
+JOIN OtherDB.dbo.remote_table b ON a.id = b.id
+```
+
+:::caution[Read-only]
+Modifications (INSERT/UPDATE/DELETE) on cross-databases are **always blocked**, even if the table is in the whitelist.
+:::
+
 ## Query examples
 
 ```sql

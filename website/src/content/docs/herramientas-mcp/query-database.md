@@ -33,6 +33,24 @@ Ejecuta una consulta SQL contra la base de datos MSSQL usando prepared statement
 - Todas las operaciones SQL estándar
 - `EXEC`, `xp_cmdshell` — Siempre bloqueado por seguridad
 
+## Consultas cross-database
+
+Si `MSSQL_ALLOWED_DATABASES` está configurado, puedes usar nombres de 3 partes:
+
+```sql
+-- Consultar otra base de datos
+SELECT * FROM JJP_Carregues.dbo.Clients WHERE active = 1
+
+-- JOIN entre bases de datos
+SELECT a.name, b.total
+FROM local_table a
+JOIN OtherDB.dbo.remote_table b ON a.id = b.id
+```
+
+:::caution[Solo lectura]
+Las modificaciones (INSERT/UPDATE/DELETE) en bases de datos cruzadas están **siempre bloqueadas**, incluso si la tabla está en la whitelist.
+:::
+
 ## Ejemplos de consultas
 
 ```sql

@@ -38,3 +38,4 @@ Claude suele invocar esta herramienta automáticamente al inicio de una conversa
 - Si la base de datos está conectada
 - Qué modo de acceso tiene (lectura/escritura)
 - Qué tablas puede modificar
+- Qué bases de datos cruzadas tiene acceso (si `MSSQL_ALLOWED_DATABASES` está configurado)

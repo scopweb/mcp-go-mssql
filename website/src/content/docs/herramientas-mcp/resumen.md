@@ -11,7 +11,7 @@ El servidor MCP-Go-MSSQL expone **5 herramientas** que Claude Desktop puede util
 |-------------|-------------|------------------|
 | [`query_database`](/herramientas-mcp/query-database/) | Ejecutar consultas SQL | `query` (requerido) |
 | [`get_database_info`](/herramientas-mcp/get-database-info/) | Info de conexión y estado | — |
-| [`explore`](/herramientas-mcp/explore/) | Explorar objetos: tablas, bases de datos, procedimientos, búsqueda | `type`, `filter`, `pattern`, `search_in` |
+| [`explore`](/herramientas-mcp/explore/) | Explorar objetos: tablas, bases de datos, procedimientos, búsqueda | `type`, `filter`, `pattern`, `search_in`, `database` |
 | [`inspect`](/herramientas-mcp/inspect/) | Inspeccionar estructura de una tabla: columnas, índices, claves foráneas | `table_name` (requerido), `schema`, `detail` |
 | [`execute_procedure`](/herramientas-mcp/execute-procedure/) | Ejecutar procedimiento almacenado (whitelist requerida) | `procedure_name` (requerido), `parameters` |
 

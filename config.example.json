@@ -1,27 +1,149 @@
 {
   "mcpServers": {
-    "production-db": {
+
+    "// ─── PRODUCCIÓN: AI-Safe con whitelist y cross-database ───": {},
+    "prod-ai-safe": {
       "command": "mcp-go-mssql.exe",
       "args": [],
       "env": {
-        "MSSQL_SERVER": "your-secure-server.database.windows.net",
-        "MSSQL_DATABASE": "YourSecureDatabase",
-        "MSSQL_USER": "secure_user",
-        "MSSQL_PASSWORD": "your-strong-password-here",
+        "MSSQL_SERVER": "prod-server.database.windows.net",
+        "MSSQL_DATABASE": "ProductionDB",
+        "MSSQL_USER": "app_user@prod-server",
+        "MSSQL_PASSWORD": "your-strong-password",
         "MSSQL_PORT": "1433",
-        "DEVELOPER_MODE": "false"
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true",
+        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia",
+        "MSSQL_WHITELIST_PROCEDURES": "sp_GetReport,sp_RefreshView",
+        "MSSQL_ALLOWED_DATABASES": "OtherDB,AnalyticsDB"
       }
     },
-    "dev-db": {
+
+    "// ─── PRODUCCIÓN: Solo lectura estricta (sin whitelist) ───": {},
+    "prod-readonly": {
       "command": "mcp-go-mssql.exe",
       "args": [],
       "env": {
-        "MSSQL_SERVER": "dev-server.local",
-        "MSSQL_DATABASE": "DevDatabase",
-        "MSSQL_USER": "dev_user",
+        "MSSQL_SERVER": "prod-server.database.windows.net",
+        "MSSQL_DATABASE": "ProductionDB",
+        "MSSQL_USER": "readonly_user@prod-server",
+        "MSSQL_PASSWORD": "readonly-password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true"
+      }
+    },
+
+    "// ─── PRODUCCIÓN: Acceso completo (sin restricciones) ───": {},
+    "prod-full-access": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "prod-server.database.windows.net",
+        "MSSQL_DATABASE": "ProductionDB",
+        "MSSQL_USER": "admin_user@prod-server",
+        "MSSQL_PASSWORD": "admin-password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "false"
+      }
+    },
+
+    "// ─── DESARROLLO: Local con acceso completo ───": {},
+    "dev-local": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "localhost",
+        "MSSQL_DATABASE": "DevDB",
+        "MSSQL_USER": "sa",
         "MSSQL_PASSWORD": "dev-password",
         "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_READ_ONLY": "false"
+      }
+    },
+
+    "// ─── DESARROLLO: SQL Server 2008/2012 (sin TLS 1.2) ───": {},
+    "dev-legacy": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "legacy-server",
+        "MSSQL_DATABASE": "LegacyDB",
+        "MSSQL_USER": "legacy_user",
+        "MSSQL_PASSWORD": "legacy-password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_ENCRYPT": "false"
+      }
+    },
+
+    "// ─── AUTENTICACIÓN INTEGRADA (Windows/SSPI) ───": {},
+    "windows-auth": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "corp-server.internal",
+        "MSSQL_DATABASE": "CorpDB",
+        "MSSQL_AUTH": "integrated",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true"
+      }
+    },
+
+    "// ─── AUTENTICACIÓN INTEGRADA: Sin BD (explorar servidor) ───": {},
+    "windows-auth-explore": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "corp-server.internal",
+        "MSSQL_AUTH": "integrated",
         "DEVELOPER_MODE": "true"
+      }
+    },
+
+    "// ─── CONNECTION STRING PERSONALIZADO ───": {},
+    "custom-connstr": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_CONNECTION_STRING": "server=myserver;database=mydb;user id=myuser;password=mypass;encrypt=true;trustservercertificate=false;connection timeout=30",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true"
+      }
+    },
+
+    "// ─── CROSS-DATABASE: Múltiples BDs desde un conector ───": {},
+    "multi-database": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "shared-server.database.windows.net",
+        "MSSQL_DATABASE": "PrimaryDB",
+        "MSSQL_USER": "multi_user@shared-server",
+        "MSSQL_PASSWORD": "your-password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true",
+        "MSSQL_WHITELIST_TABLES": "temp_ai",
+        "MSSQL_ALLOWED_DATABASES": "SecondaryDB,ArchiveDB,ReportingDB"
+      }
+    },
+
+    "// ─── PUERTO NO ESTÁNDAR + INSTANCIA CON NOMBRE ───": {},
+    "named-instance": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "server\\SQLEXPRESS",
+        "MSSQL_DATABASE": "AppDB",
+        "MSSQL_USER": "app_user",
+        "MSSQL_PASSWORD": "app-password",
+        "MSSQL_PORT": "1434",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_ENCRYPT": "false"
       }
     }
   }
