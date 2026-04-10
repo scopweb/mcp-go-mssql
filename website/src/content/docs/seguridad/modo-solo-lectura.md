@@ -70,8 +70,19 @@ UPDATE users SET status = 'active'
 Para permitir modificaciones solo en tablas específicas, combina con `MSSQL_WHITELIST_TABLES`:
 
 ```bash
+# Whitelist específica
 MSSQL_READ_ONLY=true
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+
+# Comodín: habilitará modificaciones en TODAS las tablas
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=*
 ```
+
+| Configuración | SELECT | Modificaciones |
+|---|---|---|
+| Solo `READ_ONLY=true` | ✅ | ❌ Bloqueado |
+| `READ_ONLY=true` + tablas específicas | ✅ | ✅ Solo en listadas |
+| `READ_ONLY=true` + `*` | ✅ | ✅ En todas |
 
 Consulta la sección [Whitelist de tablas](/seguridad/whitelist-tablas/) para más detalles.

@@ -15,9 +15,24 @@ Cuando se usan asistentes de IA con bases de datos de producción, existe riesgo
 ## Configuración
 
 ```bash
+# Whitelist específica: solo las tablas indicadas pueden modificarse
 MSSQL_READ_ONLY=true
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+
+# Comodín: permite modificar TODAS las tablas (manteniendo protecciones de seguridad)
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=*
 ```
+
+## Comportamiento según configuración
+
+| `MSSQL_WHITELIST_TABLES` | SELECT | Modificaciones (INSERT/UPDATE/DELETE...) |
+|---|---|---|
+| No configurado | ✅ Sí | ❌ Bloqueado todo |
+| `tabla1,tabla2` | ✅ Sí | ✅ Solo en las tablas listadas |
+| `*` (comodín) | ✅ Sí | ✅ En **todas** las tablas |
+
+> **Nota:** Con `MSSQL_WHITELIST_TABLES=*`, las modificaciones están permitidas en todas las tablas pero **continúan bloqueadas** las operaciones peligrosas del sistema (`XP_CMDSHELL`, `SP_CONFIGURE`, etc.).
 
 ## Flujo de validación
 
@@ -108,6 +123,20 @@ BEGIN
     WHERE created_at < DATEADD(day, -7, GETDATE());
 END;
 ```
+
+## Comodín `*` — acceso total con protecciones
+
+Usa `MSSQL_WHITELIST_TABLES=*` cuando quieras que el asistente de IA pueda escribir en cualquier tabla pero manteniendo las protecciones de seguridad del modo solo lectura:
+
+```bash
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=*
+```
+
+**Protecciones que siguen activas con comodín:**
+- `XP_CMDSHELL`, `XP_REGREAD`, `XP_DIRTREE` → siempre bloqueados
+- `SP_CONFIGURE`, `SP_ADDLOGIN`, `SP_DROPLOGIN` → siempre bloqueados
+- Modificaciones en bases de datos cruzadas (`MSSQL_ALLOWED_DATABASES`) → siempre bloqueadas
 
 ## Limitaciones
 

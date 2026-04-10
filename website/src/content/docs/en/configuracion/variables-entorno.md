@@ -21,7 +21,7 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_PORT` | `1433` | SQL Server port |
 | `DEVELOPER_MODE` | `false` | `true` for development (relaxed TLS, detailed errors) |
 | `MSSQL_READ_ONLY` | `false` | Blocks write operations |
-| `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode |
+| `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode. Use `*` to allow all tables |
 | `MSSQL_AUTH` | `sql` | Authentication mode: `sql`, `integrated`, `azure` |
 | `MSSQL_ENCRYPT` | _(auto)_ | TLS encryption control. Only effective with `DEVELOPER_MODE=true`. `false` = disable encryption (**required for SQL Server 2008/2012**). If not set: `false` in dev, always `true` in production |
 | `MSSQL_ALLOWED_DATABASES` | _(empty)_ | Additional databases accessible for cross-database queries (comma-separated) |

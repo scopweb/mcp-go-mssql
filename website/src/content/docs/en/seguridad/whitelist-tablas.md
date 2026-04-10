@@ -15,9 +15,24 @@ When using AI assistants with production databases, there's a risk of:
 ## Configuration
 
 ```bash
+# Specific whitelist: only listed tables can be modified
 MSSQL_READ_ONLY=true
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+
+# Wildcard: allows modifying ALL tables (while keeping security protections)
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=*
 ```
+
+## Behavior by configuration
+
+| `MSSQL_WHITELIST_TABLES` | SELECT | Modifications (INSERT/UPDATE/DELETE...) |
+|---|---|---|
+| Not set | ✅ Yes | ❌ All blocked |
+| `table1,table2` | ✅ Yes | ✅ Only listed tables |
+| `*` (wildcard) | ✅ Yes | ✅ **All** tables |
+
+> **Note:** With `MSSQL_WHITELIST_TABLES=*`, modifications are allowed on all tables but dangerous system operations (`XP_CMDSHELL`, `SP_CONFIGURE`, etc.) **remain blocked**.
 
 ## Validation flow
 
@@ -108,6 +123,20 @@ BEGIN
     WHERE created_at < DATEADD(day, -7, GETDATE());
 END;
 ```
+
+## Wildcard `*` — full access with protections
+
+Use `MSSQL_WHITELIST_TABLES=*` when you want the AI assistant to write to any table while keeping read-only security protections:
+
+```bash
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=*
+```
+
+**Protections that remain active with wildcard:**
+- `XP_CMDSHELL`, `XP_REGREAD`, `XP_DIRTREE` → always blocked
+- `SP_CONFIGURE`, `SP_ADDLOGIN`, `SP_DROPLOGIN` → always blocked
+- Modifications on cross-databases (`MSSQL_ALLOWED_DATABASES`) → always blocked
 
 ## Limitations
 

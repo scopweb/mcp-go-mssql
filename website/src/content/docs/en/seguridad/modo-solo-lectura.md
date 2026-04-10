@@ -70,8 +70,19 @@ UPDATE users SET status = 'active'
 To allow modifications only on specific tables, combine with `MSSQL_WHITELIST_TABLES`:
 
 ```bash
+# Specific whitelist
 MSSQL_READ_ONLY=true
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+
+# Wildcard: enables modifications on ALL tables
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=*
 ```
+
+| Configuration | SELECT | Modifications |
+|---|---|---|
+| `READ_ONLY=true` only | ✅ | ❌ Blocked |
+| `READ_ONLY=true` + specific tables | ✅ | ✅ Only listed |
+| `READ_ONLY=true` + `*` | ✅ | ✅ All tables |
 
 See the [Table Whitelist](/en/seguridad/whitelist-tablas/) section for more details.
