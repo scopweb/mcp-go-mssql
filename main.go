@@ -206,22 +206,22 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 // Capture groups: 1=full prefix (e.g. "db.schema." or "schema."), 2=table name.
 // The prefix is parsed separately to extract database vs schema components.
 var tableExtractionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bFROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),             // FROM [db.][schema.]table
-	regexp.MustCompile(`(?i)\bJOIN\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),             // JOIN [db.][schema.]table
-	regexp.MustCompile(`(?i)\bINTO\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),             // INSERT INTO [db.][schema.]table
-	regexp.MustCompile(`(?i)\bUPDATE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),           // UPDATE [db.][schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),    // DELETE FROM [db.][schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
+	regexp.MustCompile(`(?i)\bFROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                          // FROM [db.][schema.]table
+	regexp.MustCompile(`(?i)\bJOIN\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                          // JOIN [db.][schema.]table
+	regexp.MustCompile(`(?i)\bINTO\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                          // INSERT INTO [db.][schema.]table
+	regexp.MustCompile(`(?i)\bUPDATE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                        // UPDATE [db.][schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                 // DELETE FROM [db.][schema.]table
+	regexp.MustCompile(`(?i)\bDELETE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?\s+FROM`),                 // DELETE table FROM
 	regexp.MustCompile(`(?i)\b(?:CREATE|DROP|ALTER)\s+TABLE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`), // CREATE/DROP/ALTER TABLE
-	regexp.MustCompile(`(?i)\b(?:CREATE|DROP|ALTER)\s+VIEW\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`), // CREATE/DROP/ALTER VIEW
-	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`), // TRUNCATE TABLE
+	regexp.MustCompile(`(?i)\b(?:CREATE|DROP|ALTER)\s+VIEW\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),  // CREATE/DROP/ALTER VIEW
+	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),              // TRUNCATE TABLE
 }
 
 // systemSchemas contains SQL Server system schemas whose objects should be
 // excluded from user-table validation (e.g. INFORMATION_SCHEMA.COLUMNS).
 var systemSchemas = map[string]bool{
 	"information_schema": true,
-	"sys":               true,
+	"sys":                true,
 }
 
 // sqlReservedWords contains SQL keywords that should never be treated as table names.
@@ -579,9 +579,13 @@ func (s *MCPMSSQLServer) getWhitelistedTables() []string {
 }
 
 // parseWhitelistTables parses a comma-separated whitelist into normalized lowercase slice.
+// The special value "*" means all tables are allowed for modification.
 func parseWhitelistTables(env string) []string {
 	if env == "" {
 		return nil
+	}
+	if strings.TrimSpace(env) == "*" {
+		return []string{"*"}
 	}
 	tables := strings.Split(env, ",")
 	var normalized []string
@@ -1010,6 +1014,14 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 		return fmt.Errorf("permission denied: no tables are whitelisted for %s operations", operation)
 	}
 
+	// Wildcard "*" means all tables are allowed for modification
+	for _, allowedTable := range whitelist {
+		if allowedTable == "*" {
+			s.secLogger.Printf("Permission granted: %s operation allowed by wildcard whitelist (*)", operation)
+			return nil
+		}
+	}
+
 	// Check if ALL tables in the query are whitelisted
 	for _, ref := range refsInQuery {
 		// Cross-database modifications are always blocked
@@ -1265,8 +1277,13 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 			// Show read-only status and whitelist (cached config)
 			whitelist := s.getWhitelistedTables()
+			isWildcard := len(whitelist) == 1 && whitelist[0] == "*"
 			if s.config.readOnly {
-				if len(whitelist) > 0 {
+				if isWildcard {
+					info.WriteString("Access Mode: READ-ONLY with wildcard whitelist (*)\n")
+					info.WriteString("Whitelisted Tables: * (all tables allowed for modification)\n")
+					info.WriteString("Note: SELECT allowed on all tables. Modifications allowed on ALL tables (wildcard).\n")
+				} else if len(whitelist) > 0 {
 					info.WriteString("Access Mode: READ-ONLY with whitelist exceptions\n")
 					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
 					info.WriteString("Note: SELECT allowed on all tables. Modifications (INSERT/UPDATE/DELETE/CREATE/DROP) only allowed on whitelisted tables.\n")
@@ -1275,7 +1292,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					info.WriteString("Whitelisted Tables: NONE (all modifications blocked)\n")
 				}
 			} else {
-				if len(whitelist) > 0 {
+				if isWildcard {
+					info.WriteString("Access Mode: Full access (wildcard whitelist — same as no read-only)\n")
+				} else if len(whitelist) > 0 {
 					info.WriteString("Access Mode: Whitelist-protected (modifications restricted)\n")
 					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
 					info.WriteString("Note: Only whitelisted tables can be modified. All other tables are read-only.\n")
@@ -1318,7 +1337,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
+							Type:        "text",
 							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 							Annotations: annAssistantHigh,
 						},
@@ -1445,7 +1464,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
+							Type:        "text",
 							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 							Annotations: annAssistantHigh,
 						},
@@ -1753,7 +1772,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
+							Type:        "text",
 							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 							Annotations: annAssistantHigh,
 						},
@@ -1817,7 +1836,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
+							Type:        "text",
 							Text:        fmt.Sprintf("Error: Stored procedure '%s' is not in the whitelist. Allowed: %s", procName, whitelistEnv),
 							Annotations: annBothHigh,
 						},
@@ -1946,7 +1965,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				Result: CallToolResult{
 					Content: []ContentItem{
 						{
-							Type: "text",
+							Type:        "text",
 							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
 							Annotations: annAssistantHigh,
 						},
