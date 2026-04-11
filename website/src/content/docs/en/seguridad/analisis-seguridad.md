@@ -12,11 +12,17 @@ MCP-Go-MSSQL has been designed following recognized security standards and appli
 | Vector | Mitigation |
 |--------|------------|
 | SQL Injection | Exclusive prepared statements, no dynamic concatenation |
+| SQL Injection (AI) | CHAR concat, inline comment, Unicode homoglyph blocking |
 | Unauthorized access | Read-only mode + table whitelist |
+| Dirty reads (AI) | Table hint blocking (NOLOCK, READUNCOMMITTED, TABLOCK) |
+| Timing attacks (AI) | WAITFOR DELAY blocking |
+| Data exfiltration (AI) | OPENROWSET/OPENDATASOURCE blocking |
 | Data interception | Mandatory TLS on all connections |
 | Resource exhaustion | Connection pooling with configurable limits |
 | Information leakage | Generic errors to client, details only in internal logs |
 | Privilege escalation | Multi-table validation on JOINs and subqueries |
+| Homoglyph obfuscation (AI) | Cyrillic/Greek letter detection and blocking |
+| Unicode control chars (AI) | RTL override, zero-width space blocking |
 
 ### Standards compliance
 

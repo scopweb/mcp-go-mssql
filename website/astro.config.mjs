@@ -75,6 +75,7 @@ export default defineConfig({
 						{ label: 'Modo solo lectura', translations: { en: 'Read-Only Mode' }, slug: 'seguridad/modo-solo-lectura' },
 						{ label: 'Whitelist de tablas', translations: { en: 'Table Whitelist' }, slug: 'seguridad/whitelist-tablas' },
 						{ label: 'Protección SQL Injection', translations: { en: 'SQL Injection Protection' }, slug: 'seguridad/sql-injection' },
+						{ label: 'Protección ataques IA', translations: { en: 'AI Attack Protection' }, slug: 'seguridad/ataques-ia' },
 						{ label: 'Análisis de seguridad', translations: { en: 'Security Analysis' }, slug: 'seguridad/analisis-seguridad' },
 						{ label: 'Auditoría y logging', translations: { en: 'Audit & Logging' }, slug: 'seguridad/auditoria' },
 					],

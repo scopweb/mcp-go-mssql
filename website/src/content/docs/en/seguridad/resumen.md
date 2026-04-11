@@ -24,6 +24,21 @@ MCP-Go-MSSQL implements multiple security layers to protect databases in product
 - **Table whitelist** — granular control over modifiable tables
 - **Role-based configuration** — different configs for different environments
 
+### AI-assisted attack protection
+
+MCP-Go-MSSQL implements specific defenses against attack techniques that an AI can execute automatically:
+
+- **CHAR()/NCHAR() concatenation** — detects dynamically built keywords
+- **Inline comments** — detects keywords hidden inside SQL comments
+- **Dangerous table hints** — blocks `WITH (NOLOCK)`, `WITH (READUNCOMMITTED)`, etc.
+- **WAITFOR DELAY** — prevents timing attacks to infer data
+- **OPENROWSET/OPENDATASOURCE** — prevents exfiltration to external servers
+- **Unicode control characters** — blocks RTL override and zero-width spaces
+- **Unicode homoglyphs** — detects Cyrillic/Greek letters mimicking ASCII
+- **Subqueries against whitelist** — validates that subquery tables are also in whitelist
+
+See [AI-Assisted Attack Protection](./ataques-ia.md) for complete details.
+
 ### Authentication
 - **Multiple methods** — SQL Server, Windows Integrated (SSPI), custom connection strings
 - **Dev/prod modes** — different levels of TLS strictness
