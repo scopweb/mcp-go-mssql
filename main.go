@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"sync"
 	"time"
 
@@ -241,6 +242,455 @@ var sqlReservedWords = map[string]bool{
 
 // Pre-compiled pattern for procedure name validation
 var validProcedureNamePattern = regexp.MustCompile(`^[\w.\[\]]+$`)
+
+// Pre-compiled pattern for removing ALL SQL comments (inline and leading)
+var inlineCommentPattern = regexp.MustCompile(`/\*.*?\*/`)
+
+// stripStringLiterals removes SQL string literals (both single and double quoted)
+// so that patterns appearing inside strings are not falsely detected as code.
+// Handles escaped quotes: SQL uses '' for escaped single quotes within single-quoted strings.
+func stripStringLiterals(query string) string {
+	var result strings.Builder
+	result.Grow(len(query))
+
+	i := 0
+	for i < len(query) {
+		ch := query[i]
+
+		// Single-quoted string
+		if ch == '\'' {
+			result.WriteByte(ch)
+			i++
+			for i < len(query) {
+				if query[i] == '\'' {
+					// Check for doubled quote (SQL escape for single quote)
+					if i+1 < len(query) && query[i+1] == '\'' {
+						result.WriteByte('\'')
+						result.WriteByte('\'')
+						i += 2
+					} else {
+						// End of string
+						result.WriteByte('\'')
+						i++
+						break
+					}
+				} else {
+					result.WriteByte(query[i])
+					i++
+				}
+			}
+			continue
+		}
+
+		// Double-quoted string (SQL Server identifier quoting, but can appear in some contexts)
+		if ch == '"' {
+			result.WriteByte(ch)
+			i++
+			for i < len(query) {
+				if query[i] == '"' {
+					// Check for doubled quote (escape)
+					if i+1 < len(query) && query[i+1] == '"' {
+						result.WriteByte('"')
+						result.WriteByte('"')
+						i += 2
+					} else {
+						result.WriteByte('"')
+						i++
+						break
+					}
+				} else {
+					result.WriteByte(query[i])
+					i++
+				}
+			}
+			continue
+		}
+
+		result.WriteByte(ch)
+		i++
+	}
+
+	return result.String()
+}
+
+// Pre-compiled pattern for CHAR/NCHAR string concatenation that can bypass keyword detection
+// Matches CHAR(n)+CHAR(n)+... or NCHAR(n)+NCHAR(n)+... patterns used to build keywords dynamically
+var charConcatenationPattern = regexp.MustCompile(`(?i)(CHAR|NCHAR)\s*\(\d+\)(\s*\+\s*(CHAR|NCHAR)\s*\(\d+\))*`)
+
+// Pre-compiled pattern for table/index hints that can enable dirty reads or other risky behavior
+// NOLOCK, READUNCOMMITTED, READUNCOMMITTED, TABLOCK, etc.
+var dangerousHintsPattern = regexp.MustCompile(`(?i)\b(WITH\s*\(\s*(NOLOCK|READUNCOMMITTED|READCOMMITTED|READCOMMITTEDLOCK|TABLOCK|UPDLOCK|HOLDLOCK|ROWLOCK)\s*\))`)
+
+// Pre-compiled pattern for WAITFOR DELAY which enables timing attacks to infer data existence
+var waitforPattern = regexp.MustCompile(`(?i)\bWAITFOR\b`)
+
+// Pre-compiled pattern for subqueries in SELECT, FROM, WHERE that might reference restricted tables
+// This complements the table extraction but specifically targets subquery contexts
+var subqueryPattern = regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE)\s*\([^)]*\s*FROM\b`)
+
+// Pre-compiled pattern for EXECUTE of string (dynamic SQL within stored procedures)
+var executeStringPattern = regexp.MustCompile(`(?i)\bEXEC\s*\(\s*@`)
+
+// Pre-compiled pattern for OPENROWSET which can exfiltrate data to external sources
+var openrowsetPattern = regexp.MustCompile(`(?i)\bOPENROWSET\b`)
+
+// Pre-compiled pattern for OPENDATASOURCE
+var opendatasourcePattern = regexp.MustCompile(`(?i)\bOPENDATASOURCE\b`)
+
+// Pre-compiled pattern for linked servers references
+var linkedServerPattern = regexp.MustCompile(`(?i)\b(OPENQUERY|OPENROWSET|OPENDATASOURCE)\b`)
+
+// Pre-compiled pattern for SELECT INTO which can create new tables
+var selectIntoPattern = regexp.MustCompile(`(?i)\bSELECT\s+[^;]+INTO\s+[^;]+FROM\b`)
+
+// Pre-compiled pattern for temporary table creation via SELECT INTO
+var tempTablePattern = regexp.MustCompile(`(?i)#\w+`)
+
+// stripAllComments removes ALL SQL comments (block and line) from a query.
+// Unlike stripLeadingComments which only removes from the beginning, this removes
+// inline comments throughout the query that could be used to hide keywords.
+func stripAllComments(query string) string {
+	// Remove all block comments (inline comments anywhere)
+	result := inlineCommentPattern.ReplaceAllString(query, " ")
+	// Also remove line comments (-- to end of line)
+	// We need to do this carefully to not affect strings that contain --
+	result = stripLineComments(result)
+	return result
+}
+
+// stripLineComments removes -- line comments but preserves content inside strings
+func stripLineComments(query string) string {
+	var result strings.Builder
+	inString := false
+	var stringChar byte
+	escapeNext := false
+
+	for i := 0; i < len(query); i++ {
+		ch := query[i]
+
+		if escapeNext {
+			escapeNext = false
+			result.WriteByte(ch)
+			continue
+		}
+
+		if ch == '\\' && inString {
+			result.WriteByte(ch)
+			escapeNext = true
+			continue
+		}
+
+		if ch == '\'' && !inString {
+			inString = true
+			stringChar = byte('\'')
+			result.WriteByte(ch)
+			continue
+		}
+
+		if ch == '"' && !inString {
+			inString = true
+			stringChar = byte('"')
+			result.WriteByte(ch)
+			continue
+		}
+
+		if ch == '[' && !inString {
+			// SQL bracket-quoted identifier - treat as string context for purposes of comment detection
+			result.WriteByte(ch)
+			continue
+		}
+
+		if inString && ch == stringChar {
+			// Check for doubled quote (SQL escape)
+			if i+1 < len(query) && query[i+1] == stringChar {
+				result.WriteByte(ch)
+				result.WriteByte(ch)
+				i++
+				continue
+			}
+			inString = false
+			result.WriteByte(ch)
+			continue
+		}
+
+		if !inString && i+1 < len(query) && query[i] == '-' && query[i+1] == '-' {
+			// Found -- start of line comment, skip to end of line
+			i += 2
+			for i < len(query) && query[i] != '\n' && query[i] != '\r' {
+				i++
+			}
+			i-- // back up one since the outer loop will increment
+			continue
+		}
+
+		result.WriteByte(ch)
+	}
+
+	return result.String()
+}
+
+// unicodeControlChars matches Unicode bidirectional control characters and other
+// potentially malicious control characters that could affect text rendering or interpretation.
+// U+200B..U+200F: Zero-width spaces and directional formatting
+// U+202A..U+202E: Bidirectional text override (LEFT-TO-RIGHT OVERRIDE, RIGHT-TO-LEFT OVERRIDE, etc.)
+// U+2066..U+2069: Bidirectional isolate control characters
+var unicodeControlChars = regexp.MustCompile("[\u200B-\u200F\u202A-\u202E\u2066-\u2069]")
+
+// stripUnicodeControlChars removes bidirectional control characters and other
+// invisible Unicode characters that could be used for obfuscation.
+func stripUnicodeControlChars(query string) string {
+	return unicodeControlChars.ReplaceAllString(query, "")
+}
+
+// isLatin checks if a rune is a basic Latin letter (ASCII A-Z, a-z).
+// Used for homoglyph detection — SQL keywords are pure ASCII Latin.
+func isLatin(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+// containsHomoglyphs checks if the query contains non-ASCII letters that could be
+// homoglyphs of ASCII letters used in SQL keywords. For example, Cyrillic 'е' (U+0435)
+// looks identical to Latin 'e' and can be used to obfuscate keywords like SELесT.
+func containsHomoglyphs(query string) bool {
+	// First strip string literals to avoid false positives
+	queryWithoutStrings := stripStringLiterals(query)
+
+	// Strip any Unicode control characters first
+	queryClean := stripUnicodeControlChars(queryWithoutStrings)
+
+	// Check each character — if it's a letter but not Latin, it's a potential homoglyph
+	for _, r := range queryClean {
+		if unicode.IsLetter(r) && !isLatin(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeToASCII attempts to transliterate common Unicode homoglyphs to their ASCII equivalents.
+// This helps detect keywords obfuscated with Cyrillic, Greek, etc. characters.
+// Returns the normalized string and true if any transliteration was performed.
+func normalizeToASCII(query string) string {
+	// Map of common Cyrillic/Greek homoglyphs to Latin letters
+	// Only includes characters that visually resemble ASCII letters and are commonly used in attacks
+	homoglyphMap := map[rune]rune{
+		// Cyrillic homoglyphs (U+0430-U+044F are Cyrillic lowercase)
+		'\u0430': 'a', // Cyrillic 'а' → 'a'
+		'\u0435': 'e', // Cyrillic 'е' → 'e'
+		'\u043e': 'o', // Cyrillic 'о' → 'o'
+		'\u0440': 'p', // Cyrillic 'р' → 'p'
+		'\u0441': 'c', // Cyrillic 'с' → 'c'
+		'\u0445': 'x', // Cyrillic 'х' → 'x'
+		'\u0451': 'e', // Cyrillic 'ё' → 'e'
+		// Greek homoglyphs (U+03B1-U+03C9 are Greek lowercase)
+		'\u03B1': 'a', // Greek 'α' → 'a'
+		'\u03B5': 'e', // Greek 'ε' → 'e'
+		'\u03BF': 'o', // Greek 'ο' → 'o'
+		'\u03C1': 'p', // Greek 'ρ' → 'p'
+		'\u03C4': 't', // Greek 'τ' → 't'
+		'\u03C5': 'u', // Greek 'υ' → 'u'
+		// Full-width Latin lookalikes (U+FF41-U+FF5A are full-width lowercase)
+		'\uFF41': 'a',
+		'\uFF42': 'b',
+		'\uFF43': 'c',
+		'\uFF44': 'd',
+		'\uFF45': 'e',
+		// Mathematical bold Fraktur etc. - skip for brevity
+	}
+
+	result := make([]rune, 0, len(query))
+	for _, r := range query {
+		if replacement, ok := homoglyphMap[r]; ok {
+			result = append(result, replacement)
+		} else {
+			result = append(result, r)
+		}
+	}
+	return string(result)
+}
+
+// validateQueryUnicodeSafety checks for Unicode-based obfuscation techniques
+// including homoglyphs and bidirectional control characters.
+func (s *MCPMSSQLServer) validateQueryUnicodeSafety(query string) error {
+	// Strip string literals and comments first
+	cleanQuery := stripAllComments(query)
+	cleanQuery = stripStringLiterals(cleanQuery)
+
+	// Check for bidirectional control characters (RTL/LTR override)
+	if unicodeControlChars.MatchString(cleanQuery) {
+		return fmt.Errorf("query contains Unicode control characters (e.g. bidirectional override) which can be used for obfuscation")
+	}
+
+	// Check for homoglyphs - non-Latin letters that could mimic ASCII keyword characters
+	if containsHomoglyphs(cleanQuery) {
+		// Try to normalize and check if it reveals a dangerous keyword
+		normalized := normalizeToASCII(cleanQuery)
+		upperNormalized := strings.ToUpper(normalized)
+
+		// Check if normalization reveals a dangerous keyword
+		for keyword, pattern := range dangerousKeywordPatterns {
+			if pattern.MatchString(upperNormalized) {
+				return fmt.Errorf("query contains non-ASCII characters that appear to be homoglyphs of keyword '%s' — possible Unicode obfuscation attack", keyword)
+			}
+		}
+
+		// Even if no known keyword found, flag suspicious Unicode usage
+		return fmt.Errorf("query contains non-Latin Unicode characters that may be used for homoglyph obfuscation")
+	}
+
+	return nil
+}
+
+// containsCharConcatenation checks if the query uses CHAR()/NCHAR() concatenation
+// which can be used to construct keywords like SELECT, INSERT, etc. dynamically
+// to bypass simple pattern matching.
+func containsCharConcatenation(query string) bool {
+	// Strip string literals first to avoid false positives like 'CHAR(83)' in text output
+	queryWithoutStrings := stripStringLiterals(query)
+
+	// First quick check: if the pattern isn't found at all, return false
+	if !charConcatenationPattern.MatchString(queryWithoutStrings) {
+		return false
+	}
+
+	// More thorough check: look for CHAR/NCHAR with numeric arguments followed by +
+	// This catches: CHAR(83)+CHAR(69) or CHAR(83)+CHAR(69)+CHAR(76) etc.
+	// We look for 3+ concatenations as single chars are less likely to be abuse
+	concatPattern := regexp.MustCompile(`(?i)(CHAR|NCHAR)\s*\(\s*\d+\s*\)(\s*\+\s*(CHAR|NCHAR)\s*\(\s*\d+\s*\)){2,}`)
+	return concatPattern.MatchString(queryWithoutStrings)
+}
+
+// containsDangerousHints checks for table/index hints like NOLOCK that enable
+// dirty reads or other risky read behaviors.
+func containsDangerousHints(query string) bool {
+	queryWithoutStrings := stripStringLiterals(query)
+	return dangerousHintsPattern.MatchString(queryWithoutStrings)
+}
+
+// containsWaitfor checks for WAITFOR DELAY which enables timing attacks.
+func containsWaitfor(query string) bool {
+	queryWithoutStrings := stripStringLiterals(query)
+	return waitforPattern.MatchString(queryWithoutStrings)
+}
+
+// containsDangerousSelectPatterns checks for dangerous SELECT-based patterns
+// that could be used for data exfiltration or bypass attempts.
+func containsDangerousSelectPatterns(query string) bool {
+	queryWithoutStrings := stripStringLiterals(query)
+	upperQuery := strings.ToUpper(queryWithoutStrings)
+	// Check for OPENROWSET (data exfiltration to external sources)
+	if openrowsetPattern.MatchString(upperQuery) {
+		return true
+	}
+	// Check for OPENDATASOURCE (data exfiltration)
+	if opendatasourcePattern.MatchString(upperQuery) {
+		return true
+	}
+	// Check for SELECT INTO (creates new tables)
+	if selectIntoPattern.MatchString(upperQuery) {
+		return true
+	}
+	// Check for temporary tables in tempdb
+	if tempTablePattern.MatchString(upperQuery) {
+		// Only flag if it's a SELECT creating temp table (not just referencing one)
+		if strings.Contains(upperQuery, "SELECT") && strings.Contains(upperQuery, "INTO") {
+			return true
+		}
+	}
+	return false
+}
+
+// validateQueryStructuralSafety performs deep structural analysis of the query
+// to detect obfuscation techniques and dangerous patterns that simple keyword
+// matching would miss. Returns an error describing the specific threat if found.
+func (s *MCPMSSQLServer) validateQueryStructuralSafety(query string) error {
+	// Check for comment-based keyword obfuscation
+	strippedQuery := stripAllComments(query)
+	if len(strippedQuery) != len(query) {
+		// Comments were removed - check if dangerous keywords were hidden in comments
+		upperStripped := strings.ToUpper(strippedQuery)
+		upperOriginal := strings.ToUpper(query)
+
+		for keyword, pattern := range dangerousKeywordPatterns {
+			// If original had the keyword but stripped version doesn't, it was hidden in a comment
+			if pattern.MatchString(upperOriginal) && !pattern.MatchString(upperStripped) {
+				return fmt.Errorf("query obfuscation detected: keyword '%s' appears to be hidden in comments", keyword)
+			}
+		}
+	}
+
+	// Check for CHAR/NCHAR concatenation bypass
+	if containsCharConcatenation(query) {
+		return fmt.Errorf("query contains character concatenation pattern that may be used to bypass keyword detection")
+	}
+
+	// Check for dangerous table hints (NOLOCK, etc.)
+	if containsDangerousHints(query) {
+		return fmt.Errorf("query contains forbidden table hint (e.g. NOLOCK) which enables dirty reads")
+	}
+
+	// Check for WAITFOR (timing attacks)
+	if containsWaitfor(query) {
+		return fmt.Errorf("query contains WAITFOR which can be used for timing-based attacks to infer data existence")
+	}
+
+	// Check for dangerous SELECT patterns
+	if containsDangerousSelectPatterns(query) {
+		return fmt.Errorf("query contains dangerous pattern (OPENROWSET/OPENDATASOURCE/SELECT INTO) that could be used for data exfiltration")
+	}
+
+	return nil
+}
+
+// validateSubqueriesForRestrictedTables checks if any subqueries or CTEs reference
+// tables that would not be accessible in a direct query. This prevents exfiltration
+// via nested queries like: SELECT * FROM (SELECT secret_col FROM restricted_table) x
+func (s *MCPMSSQLServer) validateSubqueriesForRestrictedTables(query string) error {
+	if !s.config.readOnly {
+		return nil
+	}
+
+	whitelist := s.getWhitelistedTables()
+	if len(whitelist) == 0 {
+		return nil
+	}
+
+	// Check for subqueries in SELECT, FROM, or WHERE clauses
+	// Pattern: anything between ( and ) that contains SELECT
+	subqueryExtractPattern := regexp.MustCompile(`(?i)\(\s*SELECT\s+[^)]+\)`)
+	matches := subqueryExtractPattern.FindAllString(query, -1)
+
+	for _, subquery := range matches {
+		// Extract tables from the subquery
+		subqueryRefs := s.extractTableRefs(subquery)
+		for _, ref := range subqueryRefs {
+			// Cross-database refs in subqueries are especially suspicious
+			if ref.database != "" {
+				return fmt.Errorf("query contains subquery referencing cross-database table '%s.%s' which is not allowed", ref.database, ref.table)
+			}
+
+			// Check if the table is whitelisted for modification
+			isWhitelisted := false
+			for _, allowedTable := range whitelist {
+				if allowedTable == "*" {
+					isWhitelisted = true
+					break
+				}
+				if ref.table == allowedTable {
+					isWhitelisted = true
+					break
+				}
+			}
+
+			// If not whitelisted, this is a potential exfiltration via subquery
+			if !isWhitelisted {
+				return fmt.Errorf("query contains subquery that references non-whitelisted table '%s' — this pattern may be used for data exfiltration", ref.table)
+			}
+		}
+	}
+
+	return nil
+}
 
 func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 	result := input
@@ -1078,6 +1528,24 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	// Validate granular table permissions (whitelist)
 	if err := s.validateTablePermissions(query); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Validate query structural safety (inline comments, CHAR concatenation, NOLOCK hints, etc.)
+	if err := s.validateQueryStructuralSafety(query); err != nil {
+		s.secLogger.Printf("Structural safety violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Validate Unicode obfuscation (homoglyphs, bidirectional control characters)
+	if err := s.validateQueryUnicodeSafety(query); err != nil {
+		s.secLogger.Printf("Unicode safety violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Validate subqueries don't reference restricted tables
+	if err := s.validateSubqueriesForRestrictedTables(query); err != nil {
+		s.secLogger.Printf("Subquery safety violation blocked: %s", err)
 		return nil, err
 	}
 

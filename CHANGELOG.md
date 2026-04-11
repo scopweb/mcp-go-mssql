@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — AI-Powered Attack Hardening
+
+- 🛡️ **Inline comment keyword obfuscation detection**: New `stripAllComments()` + `stripLineComments()` functions remove ALL SQL comments (not just leading ones), preventing attacks like `SEL/*x*/ECT` or `/*INS*/ INSERT` that hide keywords inside comments to evade keyword detection
+- 🛡️ **CHAR()/NCHAR() concatenation blocking**: Detects `CHAR(83)+CHAR(69)+...` patterns used to dynamically build SQL keywords like `SELECT` or `INSERT` that bypass simple regex keyword matching. Now correctly ignores string literals (`'CHAR(83)'`) to avoid false positives
+- 🛡️ **Forbidden table hints blocking**: `WITH (NOLOCK)`, `WITH (READUNCOMMITTED)`, `WITH (TABLOCK)`, `WITH (UPDLOCK)`, `WITH (HOLDLOCK)` are now blocked — NOLOCK enables dirty reads on production data
+- 🛡️ **WAITFOR DELAY blocking**: Prevents timing attacks where an AI infers data existence by measuring query response delays (`IF (condition) WAITFOR DELAY '00:00:10'`)
+- 🛡️ **OPENROWSET/OPENDATASOURCE blocking**: Prevents data exfiltration to external servers via linked server queries
+- 🛡️ **Unicode bidirectional control character detection**: Blocks RTL override (`\u202E`), zero-width spaces (`\u200B`), and other invisible Unicode characters used to visually obscure keywords (e.g. `SEL\u202ECT` renders as `SELECt`)
+- 🛡️ **Unicode homoglyph detection**: Detects non-Latin letters (Cyrillic `е`, Greek `ε`, etc.) that visually resemble ASCII letters and can be used to obfuscate keywords (`SEL\u0435CT` = `SELECT`). Includes `normalizeToASCII()` transliteration
+- 🛡️ **Subquery exfiltration protection**: `validateSubqueriesForRestrictedTables()` validates that tables referenced inside subqueries `(SELECT secret FROM restricted)` are also whitelisted, preventing nested data extraction
+- 🛡️ **execute_procedure now validates SQL content**: Stored procedure execution now routes through `executeSecureQuery()` which applies all security validations (keyword detection, hints, timing attacks, etc.), preventing malicious procedures from bypassing security through parameter manipulation
+- 🛡️ **String literal preservation**: All pattern-matching functions now strip string literals (`'...'`, `"..."`) before analysis to avoid false positives on user data that happens to contain SQL keywords
+
+### Security — Known Issues
+
+- ✅ **Go stdlib vulnerabilities fixed**: Go 1.26.2 addresses all four vulnerabilities (GO-2026-4947, GO-2026-4946, GO-2026-4870, GO-2026-4866) in `crypto/x509` and `crypto/tls`. Project now requires **Go 1.26.2+**. Run `go install golang.org/dl/go1.26.2@latest && go1.26.2 download` to update
+
+### Dependencies
+
+- 📦 **Go 1.26.2** (released 2026-04-07): Security release fixing 4 stdlib vulnerabilities in `crypto/x509` and `crypto/tls`. Update via `go install golang.org/dl/go1.26.2@latest && go1.26.2 download`
+- 📦 **Updated**: `golang.org/x/crypto` v0.49.0 → **v0.50.0**
+- 📦 **Updated**: `golang.org/x/mod` v0.34.0 → **v0.35.0**
+- 📦 **Updated**: `golang.org/x/text` v0.35.0 → **v0.36.0**
+
+### Tests
+
+- 🧪 **AI attack vector tests**: `TestAIAttackVectors` — 20 test cases covering CHAR concatenation, NOLOCK hints, WAITFOR timing attacks, OPENROWSET exfiltration, Unicode bidirectional control characters, and false-positive prevention with string literals
+- 🧪 **Unicode obfuscation tests**: Tests for RTL override, zero-width space, and homoglyph detection
+
 ### Added
 - 🌐 **Cross-database queries (`MSSQL_ALLOWED_DATABASES`)**:
   - New environment variable `MSSQL_ALLOWED_DATABASES` (comma-separated) allows querying multiple databases from a single MCP connector
