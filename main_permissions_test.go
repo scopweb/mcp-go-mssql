@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -321,6 +322,232 @@ func TestExtractOperation(t *testing.T) {
 			if operation != tt.expected {
 				t.Errorf("Expected operation '%s', got '%s' for query: %s",
 					tt.expected, operation, tt.query)
+			}
+		})
+	}
+}
+
+// TestBUG001_StripStringLiterals verifies that stripStringLiterals removes content
+// inside string literals so that security patterns inside strings don't trigger
+// false positives (e.g. 'WITH (NOLOCK) is dangerous' should not be flagged).
+func TestBUG001_StripStringLiterals(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		contains string // should NOT be present in output
+	}{
+		{
+			name:     "NOLOCK inside single-quoted string is removed",
+			input:    "SELECT 'WITH (NOLOCK) es peligrosa' AS info",
+			contains: "NOLOCK",
+		},
+		{
+			name:     "SQL keyword inside string is removed",
+			input:    "SELECT 'DROP TABLE users' AS warning_text",
+			contains: "DROP",
+		},
+		{
+			name:     "WAITFOR inside string is removed",
+			input:    "SELECT 'WAITFOR DELAY is bad' AS info",
+			contains: "WAITFOR",
+		},
+		{
+			name:     "Escaped quotes preserved correctly",
+			input:    "SELECT 'it''s a test' AS info",
+			contains: "test", // content between quotes should be stripped
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripStringLiterals(tt.input)
+			if strings.Contains(result, tt.contains) {
+				t.Errorf("stripStringLiterals should remove '%s' from string literals.\nInput:  %s\nOutput: %s",
+					tt.contains, tt.input, result)
+			}
+		})
+	}
+
+	// Verify that content OUTSIDE strings is preserved
+	t.Run("content outside strings preserved", func(t *testing.T) {
+		input := "SELECT col FROM users WHERE name = 'test value'"
+		result := stripStringLiterals(input)
+		if !strings.Contains(result, "SELECT") || !strings.Contains(result, "FROM") || !strings.Contains(result, "users") {
+			t.Errorf("stripStringLiterals should preserve SQL outside strings.\nInput:  %s\nOutput: %s", input, result)
+		}
+	})
+
+	// Verify quotes themselves are preserved (structure intact)
+	t.Run("quote markers preserved", func(t *testing.T) {
+		input := "SELECT 'hello' AS col"
+		result := stripStringLiterals(input)
+		if !strings.Contains(result, "''") {
+			t.Errorf("stripStringLiterals should preserve empty quotes ''.\nInput:  %s\nOutput: %s", input, result)
+		}
+	})
+}
+
+// TestBUG001_NoFalsePositiveOnHintsInStrings verifies the full chain:
+// containsDangerousHints should NOT flag NOLOCK inside a string literal.
+func TestBUG001_NoFalsePositiveOnHintsInStrings(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		wantHit bool
+	}{
+		{
+			name:    "Real NOLOCK hint — should be detected",
+			query:   "SELECT * FROM users WITH (NOLOCK)",
+			wantHit: true,
+		},
+		{
+			name:    "NOLOCK inside string literal — should NOT be detected",
+			query:   "SELECT 'WITH (NOLOCK) es peligrosa' AS info",
+			wantHit: false,
+		},
+		{
+			name:    "READUNCOMMITTED inside string — should NOT be detected",
+			query:   "SELECT 'WITH (READUNCOMMITTED)' AS info",
+			wantHit: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containsDangerousHints(tt.query)
+			if got != tt.wantHit {
+				t.Errorf("containsDangerousHints(%q) = %v, want %v", tt.query, got, tt.wantHit)
+			}
+		})
+	}
+}
+
+// TestBUG001_StructuralSafetyNoFalsePositive verifies the full validation chain
+// does not produce false positives for dangerous patterns inside string literals.
+func TestBUG001_StructuralSafetyNoFalsePositive(t *testing.T) {
+	server := newTestMCPServer()
+
+	safeLiteralQueries := []struct {
+		name  string
+		query string
+	}{
+		{"NOLOCK in string", "SELECT 'WITH (NOLOCK) es peligrosa' AS info"},
+		{"WAITFOR in string", "SELECT 'WAITFOR DELAY is dangerous' AS info"},
+		{"OPENROWSET in string", "SELECT 'OPENROWSET is blocked' AS info"},
+	}
+
+	for _, tt := range safeLiteralQueries {
+		t.Run(tt.name, func(t *testing.T) {
+			err := server.validateQueryStructuralSafety(tt.query)
+			if err != nil {
+				t.Errorf("False positive: validateQueryStructuralSafety(%q) returned error: %v", tt.query, err)
+			}
+		})
+	}
+}
+
+// TestBUG002_SubquerySystemSchemaBlocked verifies that subqueries referencing
+// system schema tables (sys.*, INFORMATION_SCHEMA.*) are blocked by whitelist validation.
+func TestBUG002_SubquerySystemSchemaBlocked(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = true
+	server.config.whitelistTables = []string{"users", "orders"}
+
+	tests := []struct {
+		name    string
+		query   string
+		wantErr bool
+	}{
+		{
+			name:    "sys.objects in subquery — must be blocked",
+			query:   "SELECT * FROM (SELECT name FROM sys.objects) AS x",
+			wantErr: true,
+		},
+		{
+			name:    "sys.columns in subquery — must be blocked",
+			query:   "SELECT * FROM (SELECT name FROM sys.columns) AS x",
+			wantErr: true,
+		},
+		{
+			name:    "INFORMATION_SCHEMA.TABLES in subquery — must be blocked",
+			query:   "SELECT * FROM (SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES) AS x",
+			wantErr: true,
+		},
+		{
+			name:    "Whitelisted table in subquery — should pass",
+			query:   "SELECT * FROM (SELECT name FROM users) AS x",
+			wantErr: false,
+		},
+		{
+			name:    "Non-whitelisted user table in subquery — must be blocked",
+			query:   "SELECT * FROM (SELECT secret FROM passwords) AS x",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := server.validateSubqueriesForRestrictedTables(tt.query)
+			if tt.wantErr && err == nil {
+				t.Errorf("Expected error for query: %s", tt.query)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("Expected no error for query: %s, got: %v", tt.query, err)
+			}
+		})
+	}
+}
+
+// TestBUG002_ExtractTableRefsIncludesSystemSchemas verifies that extractTableRefs
+// includes system schema tables with qualified names (e.g. "sys.objects").
+func TestBUG002_ExtractTableRefsIncludesSystemSchemas(t *testing.T) {
+	server := newTestMCPServer()
+
+	tests := []struct {
+		name          string
+		query         string
+		expectTable   string
+		shouldContain bool
+	}{
+		{
+			name:          "sys.objects extracted with qualified name",
+			query:         "SELECT name FROM sys.objects",
+			expectTable:   "sys.objects",
+			shouldContain: true,
+		},
+		{
+			name:          "sys.columns extracted with qualified name",
+			query:         "SELECT * FROM sys.columns WHERE object_id = 1",
+			expectTable:   "sys.columns",
+			shouldContain: true,
+		},
+		{
+			name:          "INFORMATION_SCHEMA.TABLES extracted",
+			query:         "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES",
+			expectTable:   "information_schema.tables",
+			shouldContain: true,
+		},
+		{
+			name:          "Regular table still works",
+			query:         "SELECT * FROM users",
+			expectTable:   "users",
+			shouldContain: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			refs := server.extractTableRefs(tt.query)
+			found := false
+			var tableNames []string
+			for _, ref := range refs {
+				tableNames = append(tableNames, ref.table)
+				if ref.table == tt.expectTable {
+					found = true
+				}
+			}
+			if tt.shouldContain && !found {
+				t.Errorf("Expected table '%s' in refs, got: %v", tt.expectTable, tableNames)
 			}
 		})
 	}

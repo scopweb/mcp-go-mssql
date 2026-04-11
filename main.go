@@ -246,8 +246,10 @@ var validProcedureNamePattern = regexp.MustCompile(`^[\w.\[\]]+$`)
 // Pre-compiled pattern for removing ALL SQL comments (inline and leading)
 var inlineCommentPattern = regexp.MustCompile(`/\*.*?\*/`)
 
-// stripStringLiterals removes SQL string literals (both single and double quoted)
+// stripStringLiterals removes SQL string literal *contents* (both single and double quoted)
 // so that patterns appearing inside strings are not falsely detected as code.
+// The opening and closing quote characters are preserved as empty literals ('')
+// to maintain query structure, but all content between them is removed.
 // Handles escaped quotes: SQL uses '' for escaped single quotes within single-quoted strings.
 func stripStringLiterals(query string) string {
 	var result strings.Builder
@@ -257,49 +259,48 @@ func stripStringLiterals(query string) string {
 	for i < len(query) {
 		ch := query[i]
 
-		// Single-quoted string
+		// Single-quoted string: write opening quote, skip content, write closing quote
 		if ch == '\'' {
-			result.WriteByte(ch)
+			result.WriteByte(ch) // opening quote
 			i++
 			for i < len(query) {
 				if query[i] == '\'' {
 					// Check for doubled quote (SQL escape for single quote)
 					if i+1 < len(query) && query[i+1] == '\'' {
-						result.WriteByte('\'')
-						result.WriteByte('\'')
+						// Escaped quote inside string — skip both (content removal)
 						i += 2
 					} else {
-						// End of string
+						// End of string — write closing quote
 						result.WriteByte('\'')
 						i++
 						break
 					}
 				} else {
-					result.WriteByte(query[i])
+					// Content inside string — skip (do not write)
 					i++
 				}
 			}
 			continue
 		}
 
-		// Double-quoted string (SQL Server identifier quoting, but can appear in some contexts)
+		// Double-quoted identifier: write opening quote, skip content, write closing quote
 		if ch == '"' {
-			result.WriteByte(ch)
+			result.WriteByte(ch) // opening quote
 			i++
 			for i < len(query) {
 				if query[i] == '"' {
 					// Check for doubled quote (escape)
 					if i+1 < len(query) && query[i+1] == '"' {
-						result.WriteByte('"')
-						result.WriteByte('"')
+						// Escaped quote — skip both
 						i += 2
 					} else {
+						// End of string — write closing quote
 						result.WriteByte('"')
 						i++
 						break
 					}
 				} else {
-					result.WriteByte(query[i])
+					// Content inside string — skip
 					i++
 				}
 			}
@@ -1119,20 +1120,22 @@ func (s *MCPMSSQLServer) extractTableRefs(query string) []tableRef {
 				// match[1] = prefix (e.g. "DB.SCHEMA." or "SCHEMA." or ""), match[2] = table name
 				database, schemaPrefix := parseTablePrefix(match[1])
 
-				// Skip system schema objects (INFORMATION_SCHEMA, sys)
-				if systemSchemas[schemaPrefix] {
-					continue
-				}
-				// If database part looks like a system schema, skip too
-				if systemSchemas[database] {
-					continue
-				}
-
 				tableName := match[2]
 				tableName = strings.Trim(tableName, "[]")
 				tableName = strings.ToLower(strings.TrimSpace(tableName))
 				if tableName == "" || sqlReservedWords[tableName] {
 					continue
+				}
+
+				// For system schema objects (sys.*, INFORMATION_SCHEMA.*),
+				// include them with schema-qualified name so whitelist validation
+				// can block unauthorized access (e.g. sys.objects, information_schema.columns).
+				if systemSchemas[schemaPrefix] {
+					tableName = schemaPrefix + "." + tableName
+				} else if systemSchemas[database] {
+					// database part is actually a system schema (e.g. sys.objects without db prefix)
+					tableName = database + "." + tableName
+					database = ""
 				}
 
 				key := refKey{database, tableName}
@@ -1169,18 +1172,22 @@ func (s *MCPMSSQLServer) extractTablesFromSubqueries(query string) []tableRef {
 			subMatches := pattern.FindAllStringSubmatch(subqueryUpper, -1)
 			for _, match := range subMatches {
 				if len(match) > 2 {
-					database, _ := parseTablePrefix(match[1])
-
-					// System schemas are allowed in subqueries for metadata queries,
-					// but we still track them to prevent exfiltration via restricted tables.
-					// (The actual blocking is done by validateTablePermissions which checks
-					// the whitelist — system schemas are NOT in the whitelist.)
+					database, schemaPrefix := parseTablePrefix(match[1])
 
 					tableName := match[2]
 					tableName = strings.Trim(tableName, "[]")
 					tableName = strings.ToLower(strings.TrimSpace(tableName))
 					if tableName == "" || sqlReservedWords[tableName] {
 						continue
+					}
+
+					// For system schema objects in subqueries (sys.objects, INFORMATION_SCHEMA.COLUMNS),
+					// include them with schema-qualified name so the whitelist check blocks them.
+					if systemSchemas[schemaPrefix] {
+						tableName = schemaPrefix + "." + tableName
+					} else if systemSchemas[database] {
+						tableName = database + "." + tableName
+						database = ""
 					}
 
 					key := refKey{database, tableName}
@@ -1273,6 +1280,18 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 	// Check each table reference
 	var missing []string
 	for _, ref := range refs {
+		// Skip system schema-qualified tables (sys.objects, information_schema.columns, etc.)
+		// These are virtual/system tables not listed in INFORMATION_SCHEMA.TABLES
+		isSystemTable := false
+		for sysSchema := range systemSchemas {
+			if strings.HasPrefix(ref.table, sysSchema+".") {
+				isSystemTable = true
+				break
+			}
+		}
+		if isSystemTable {
+			continue
+		}
 		if ref.database != "" {
 			// Cross-database reference — check if database is allowed
 			if !s.isAllowedDatabase(ref.database) {
