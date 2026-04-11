@@ -605,16 +605,21 @@ func containsDangerousSelectPatterns(query string) bool {
 // matching would miss. Returns an error describing the specific threat if found.
 func (s *MCPMSSQLServer) validateQueryStructuralSafety(query string) error {
 	// Check for comment-based keyword obfuscation
-	strippedQuery := stripAllComments(query)
-	if len(strippedQuery) != len(query) {
-		// Comments were removed - check if dangerous keywords were hidden in comments
-		upperStripped := strings.ToUpper(strippedQuery)
-		upperOriginal := strings.ToUpper(query)
+	// Strategy: if the original query (with comments intact) contains a dangerous keyword,
+	// block it regardless of position or whether it's inside a comment.
+	// This handles both "SELECT /*DROP*/" (keyword inside comment after prefix)
+	// and "/*DROP*/ SELECT" (keyword before prefix).
+	// We strip string literals to avoid false positives on "'DROP'" in data.
+	queryForCommentCheck := stripStringLiterals(query)
 
-		for keyword, pattern := range dangerousKeywordPatterns {
-			// If original had the keyword but stripped version doesn't, it was hidden in a comment
-			if pattern.MatchString(upperOriginal) && !pattern.MatchString(upperStripped) {
-				return fmt.Errorf("query obfuscation detected: keyword '%s' appears to be hidden in comments", keyword)
+	if strings.Contains(query, "/*") || strings.Contains(query, "--") {
+		upperOriginal := strings.ToUpper(queryForCommentCheck)
+		// Check each dangerous keyword in the original (comment-containing) query.
+		// This catches keywords hidden anywhere: before prefix, after prefix, inside comments.
+		for keyword := range dangerousKeywordPatterns {
+			// Use simple contains first as a quick check
+			if strings.Contains(upperOriginal, keyword) {
+				return fmt.Errorf("query contains forbidden keyword '%s' — comments cannot hide SQL keywords from security validation", keyword)
 			}
 		}
 	}
@@ -1086,13 +1091,27 @@ func parseTablePrefix(prefix string) (database, schema string) {
 }
 
 // extractTableRefs finds all table/view references in the query, including cross-database
-// qualifiers like DatabaseName.dbo.TableName.
+// qualifiers like DatabaseName.dbo.TableName AND tables inside subqueries.
+// This prevents subquery-based evasion where a restricted table like sys.objects
+// is accessed through a nested SELECT: SELECT * FROM (SELECT name FROM sys.objects) AS x
 func (s *MCPMSSQLServer) extractTableRefs(query string) []tableRef {
 	queryUpper := strings.ToUpper(query)
 	type refKey struct{ db, table string }
 	seen := make(map[refKey]bool)
 	var refs []tableRef
 
+	// First: extract tables from subqueries (SELECT inside parentheses).
+	// This must run BEFORE the top-level patterns so subquery tables are included.
+	subqueryTables := s.extractTablesFromSubqueries(query)
+	for _, t := range subqueryTables {
+		key := refKey{t.database, t.table}
+		if !seen[key] {
+			seen[key] = true
+			refs = append(refs, t)
+		}
+	}
+
+	// Second: extract top-level table references (FROM, JOIN, INTO, etc.)
 	for _, pattern := range tableExtractionPatterns {
 		matches := pattern.FindAllStringSubmatch(queryUpper, -1)
 		for _, match := range matches {
@@ -1124,6 +1143,56 @@ func (s *MCPMSSQLServer) extractTableRefs(query string) []tableRef {
 			}
 		}
 	}
+	return refs
+}
+
+// extractTablesFromSubqueries extracts all table references that appear inside subqueries.
+// This closes the evasion gap where restricted tables (like sys.objects) are accessed
+// through "SELECT * FROM (SELECT col FROM restricted_table) AS x".
+func (s *MCPMSSQLServer) extractTablesFromSubqueries(query string) []tableRef {
+	type refKey struct{ db, table string }
+	seen := make(map[refKey]bool)
+	var refs []tableRef
+
+	// Remove string literals first so we don't accidentally match tables inside strings
+	queryClean := stripStringLiterals(query)
+
+	// Find all subquery bodies: content between ( and ) that contains SELECT
+	// We look for (SELECT ... FROM ...) patterns
+	subqueryPattern := regexp.MustCompile(`(?i)\(\s*SELECT\s+[^()]+FROM\s+[^()]+\)`)
+	matches := subqueryPattern.FindAllString(queryClean, -1)
+
+	for _, subquery := range matches {
+		// For each subquery, extract table references using the same patterns
+		subqueryUpper := strings.ToUpper(subquery)
+		for _, pattern := range tableExtractionPatterns {
+			subMatches := pattern.FindAllStringSubmatch(subqueryUpper, -1)
+			for _, match := range subMatches {
+				if len(match) > 2 {
+					database, _ := parseTablePrefix(match[1])
+
+					// System schemas are allowed in subqueries for metadata queries,
+					// but we still track them to prevent exfiltration via restricted tables.
+					// (The actual blocking is done by validateTablePermissions which checks
+					// the whitelist — system schemas are NOT in the whitelist.)
+
+					tableName := match[2]
+					tableName = strings.Trim(tableName, "[]")
+					tableName = strings.ToLower(strings.TrimSpace(tableName))
+					if tableName == "" || sqlReservedWords[tableName] {
+						continue
+					}
+
+					key := refKey{database, tableName}
+					if !seen[key] {
+						seen[key] = true
+						refs = append(refs, tableRef{database: database, table: tableName})
+					}
+				}
+			}
+		}
+	}
+
 	return refs
 }
 
