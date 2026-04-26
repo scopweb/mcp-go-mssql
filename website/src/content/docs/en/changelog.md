@@ -7,6 +7,67 @@ All relevant changes to this project are documented here.
 
 ## Latest changes
 
+### Dynamic Multi-Connection Mode
+
+When `MSSQL_DYNAMIC_MODE=true` is enabled, the server can connect to multiple databases from a single MCP instance. Connections are pre-configured in `.env` and the AI only sees safe aliases — **no sensitive data exposed**.
+
+**New variables:**
+- `MSSQL_DYNAMIC_MODE` (default: `false`) — Enable dynamic connections
+- `MSSQL_DYNAMIC_MAX_CONNECTIONS` (default: `10`) — Maximum active connections
+
+**New tools:** `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
+
+**Connection configuration (`.env`):**
+```bash
+MSSQL_DYNAMIC_IDENTITY_SERVER=10.203.3.11
+MSSQL_DYNAMIC_IDENTITY_DATABASE=JJP_CRM_IDENTITY
+MSSQL_DYNAMIC_IDENTITY_USER=ppp
+MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
+```
+
+**Per-connection security:**
+- `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY`
+- `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES`
+- `MSSQL_DYNAMIC_<ALIAS>_AUTOPILOT`
+
+**In Claude Desktop** you only need:
+```json
+{"MSSQL_DYNAMIC_MODE": "true"}
+```
+(no credentials in the JSON)
+
+---
+
+### Destructive operation confirmation
+
+**New feature:** Confirmation system for DDL operations that modify or destroy existing objects.
+
+**New variables:**
+- `MSSQL_CONFIRM_DESTRUCTIVE` (default: `true`) — Require confirmation for `ALTER VIEW`, `DROP TABLE`, etc. on existing objects
+- `MSSQL_AUTOPILOT` (default: `false`) — Autonomous mode: skip confirmation + skip schema validation. Whitelist still active
+
+**New tool:** `confirm_operation` — Confirm pending destructive operations with token.
+
+**Operations requiring confirmation:**
+
+| Operation | Target |
+|-----------|--------|
+| `ALTER VIEW` | Existing view |
+| `DROP TABLE` | Existing table |
+| `DROP VIEW` | Existing view |
+| `DROP PROCEDURE` | Existing procedure |
+| `DROP FUNCTION` | Existing function |
+| `ALTER TABLE` | Existing table |
+| `TRUNCATE TABLE` | Existing table |
+
+**Tokens:**
+- Generated with `crypto/rand` (32-char hex)
+- Valid for 5 minutes
+- Single-use (deleted after execution or expiration)
+- Only for objects that **already exist** — `CREATE TABLE new_table` does not require confirmation
+
+---
+
 ### Cross-database queries (`MSSQL_ALLOWED_DATABASES`)
 
 **New variable:** `MSSQL_ALLOWED_DATABASES`

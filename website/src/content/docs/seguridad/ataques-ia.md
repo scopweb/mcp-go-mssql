@@ -146,6 +146,46 @@ La función `stripStringLiterals()` elimina el contenido de `'...'` y `"..."` an
 | `validateQueryUnicodeSafety()` | Orchestrator de validación Unicode |
 | `validateSubqueriesForRestrictedTables()` | Valida tablas en subqueries contra whitelist |
 
+## Confirmación de operaciones destructivas
+
+Además de bloquear ataques específicos, el servidor implementa un sistema de confirmación para operaciones DDL que podrían destruir datos u objetos existentes.
+
+### Operaciones que requieren confirmación
+
+Cuando `MSSQL_CONFIRM_DESTRUCTIVE=true` (default), las siguientes operaciones requieren confirmación explícita si el objeto destino ya existe:
+
+| Operación | Objetivo |
+|-----------|----------|
+| `ALTER VIEW` | Vista existente |
+| `DROP TABLE` | Tabla existente |
+| `DROP VIEW` | Vista existente |
+| `DROP PROCEDURE` | Procedimiento existente |
+| `DROP FUNCTION` | Función existente |
+| `ALTER TABLE` | Tabla existente |
+| `TRUNCATE TABLE` | Tabla existente |
+
+### Cómo funciona
+
+1. La IA envía una query destructiva (ej: `ALTER VIEW dbo.MiVista AS SELECT 1`)
+2. El servidor detecta que el objeto existe → retorna error `-32000` con token de confirmación
+3. El cliente muestra warning al usuario
+4. Usuario llama `confirm_operation { token: "abc123..." }` para ejecutar
+5. El token expira en 5 minutos y es de un solo uso
+
+### Modo AUTOPILOT
+
+Para desarrollo con IA que necesita autonomía completa dentro de un scope limitado:
+
+```bash
+MSSQL_AUTOPILOT=true
+MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+```
+
+En modo autopilot:
+- No se requiere confirmación para DDL destructivo
+- No se valida que las tablas existan (la IA puede crear/modificar sin blocks)
+- La whitelist sigue activa: solo objetos en `MSSQL_WHITELIST_TABLES` pueden ser modificados
+
 ## Tests
 
 ```bash

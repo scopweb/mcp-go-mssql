@@ -27,6 +27,7 @@ The codebase implements a security-first architecture with these key components:
 - **Connection pooling**: Limited connection counts to prevent resource exhaustion
 - **SQL Injection Protection**: Uses prepared statements exclusively - NO dynamic SQL
 - **Secure error handling**: Generic error messages to clients, detailed logs internally
+- **Destructive operation confirmation**: DDL operations (ALTER VIEW, DROP TABLE, etc.) on existing objects require explicit user confirmation via `confirm_operation` tool. Tokens expire after 5 minutes. Controlled by `MSSQL_CONFIRM_DESTRUCTIVE` env var (default: true)
 
 ### Network Security
 - **Database TLS encryption**: Mandatory TLS for all database connections
@@ -131,6 +132,26 @@ The server reads database connection from these environment variables. See `.env
   - Schema validation checks tables exist in the target database before executing
   - Cross-database tables are **read-only** — modifications are blocked even if MSSQL_WHITELIST_TABLES is set
   - Use `explore` tool with `database` parameter to list tables in allowed databases
+- `MSSQL_CONFIRM_DESTRUCTIVE`: Require explicit confirmation for destructive DDL operations (default: true)
+  - `"true"`: DDL operations on existing objects (ALTER VIEW, DROP TABLE, etc.) require confirmation via `confirm_operation` tool
+  - `"false"`: No confirmation required (for CI/CD automation)
+- `MSSQL_AUTOPILOT`: Enable autonomous AI mode (default: false)
+  - `"true"`: Skip destructive confirmation AND schema validation — AI operates without interruptions
+  - Whitelist protection still applies: only whitelisted tables can be modified
+  - Ideal for development with AI assistants that need full autonomy within a limited scope
+  - Combines with `MSSQL_WHITELIST_TABLES` to delimit the AI's operational scope
+- `MSSQL_SKIP_SCHEMA_VALIDATION`: Skip table existence validation (default: false)
+  - `"true"`: Disables validation that tables referenced in queries actually exist
+  - Useful when AI needs flexibility to query non-existent tables (development mode)
+  - Does NOT skip whitelist protection or destructive operation confirmation
+  - Simpler than AUTOPILOT when you only need to disable schema checks
+- `MSSQL_DYNAMIC_MODE`: Enable dynamic multi-database connections (default: false)
+  - `"true"`: Enables runtime database connections via `dynamic_connect` tool
+  - Allows connecting to multiple databases from a single MCP server instance
+  - Tools: `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
+  - In `query_database`, use parameter `connection=<alias>` to query a specific dynamic connection
+  - If not specified, queries use the default database connection from environment variables
+  - `MSSQL_DYNAMIC_MAX_CONNECTIONS`: Maximum number of dynamic connections (default: 10)
 
 **Configuration Examples:**
 ```bash
@@ -183,6 +204,18 @@ MSSQL_ALLOWED_DATABASES=JJP_Carregues,JJP_Ferratge_PROD
 # Primary DB is JJP_Ferratge_DEV — AI can also read from JJP_Carregues and JJP_Ferratge_PROD
 # Cross-database queries: SELECT * FROM JJP_Carregues.dbo.TableName
 # Modifications only allowed on whitelisted tables in the primary database
+
+# Autonomous AI Development (AI works without interruptions within whitelist scope)
+MSSQL_SERVER=localhost
+MSSQL_DATABASE=DevDB
+MSSQL_USER=dev_user
+MSSQL_PASSWORD=dev_password
+DEVELOPER_MODE=true
+MSSQL_AUTOPILOT=true
+MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia,mi_vista
+# AI can modify/created/drop only whitelisted objects without confirmation
+# Schema validation is skipped — AI can query non-existent tables without error
+# Useful for development where AI needs full autonomy within a limited scope
 ```
 
 ### TLS Certificate Handling
@@ -233,6 +266,33 @@ MSSQL_ALLOWED_DATABASES=JJP_Carregues,JJP_Ferratge_PROD
         "MSSQL_PORT": "1433",
         "DEVELOPER_MODE": "true",
         "MSSQL_READ_ONLY": "false"
+      }
+    },
+    "dev-db-autopilot": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "dev-server.local",
+        "MSSQL_DATABASE": "DevDatabase",
+        "MSSQL_USER": "dev_user",
+        "MSSQL_PASSWORD": "dev_password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_AUTOPILOT": "true",
+        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia"
+      }
+    },
+    "dev-db-dynamic": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "localhost",
+        "MSSQL_DATABASE": "DevDB",
+        "MSSQL_USER": "dev_user",
+        "MSSQL_PASSWORD": "dev_password",
+        "MSSQL_PORT": "1433",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_DYNAMIC_MODE": "true"
       }
     }
   }

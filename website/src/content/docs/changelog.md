@@ -7,6 +7,67 @@ Todos los cambios relevantes de este proyecto se documentan aquí.
 
 ## Últimos cambios
 
+### Modo Dynamic Multi-Connection
+
+Cuando `MSSQL_DYNAMIC_MODE=true` está habilitado, el servidor puede conectar a múltiples bases de datos desde una única instancia MCP. Las conexiones se pre-configuran en `.env` y la IA solo ve alias seguros — **sin datos sensibles expuestos**.
+
+**Nuevas variables:**
+- `MSSQL_DYNAMIC_MODE` (default: `false`) — Habilita conexiones dinámicas
+- `MSSQL_DYNAMIC_MAX_CONNECTIONS` (default: `10`) — Máximo de conexiones activas
+
+**Nuevas herramientas:** `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
+
+**Configuración de conexiones (`.env`):**
+```bash
+MSSQL_DYNAMIC_IDENTITY_SERVER=10.203.3.11
+MSSQL_DYNAMIC_IDENTITY_DATABASE=JJP_CRM_IDENTITY
+MSSQL_DYNAMIC_IDENTITY_USER=ppp
+MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
+```
+
+**Seguridad por conexión:**
+- `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY`
+- `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES`
+- `MSSQL_DYNAMIC_<ALIAS>_AUTOPILOT`
+
+**En Claude Desktop** solo necesitas:
+```json
+{"MSSQL_DYNAMIC_MODE": "true"}
+```
+(sin credenciales en el JSON)
+
+---
+
+### Confirmación de operaciones destructivas
+
+**Nueva característica:** Sistema de confirmación para operaciones DDL que modifican o destruyen objetos existentes.
+
+**Nuevas variables:**
+- `MSSQL_CONFIRM_DESTRUCTIVE` (default: `true`) — Requiere confirmación para `ALTER VIEW`, `DROP TABLE`, etc. en objetos existentes
+- `MSSQL_AUTOPILOT` (default: `false`) — Modo autónomo: skip confirmación + skip validación schema. Whitelist sigue activo
+
+**Nueva herramienta:** `confirm_operation` — Confirmar operaciones destructivas pendientes con token.
+
+**Operaciones que requieren confirmación:**
+
+| Operación | Objetivo |
+|-----------|----------|
+| `ALTER VIEW` | Vista existente |
+| `DROP TABLE` | Tabla existente |
+| `DROP VIEW` | Vista existente |
+| `DROP PROCEDURE` | Procedimiento existente |
+| `DROP FUNCTION` | Función existente |
+| `ALTER TABLE` | Tabla existente |
+| `TRUNCATE TABLE` | Tabla existente |
+
+**Tokens:**
+- Generados con `crypto/rand` (32-char hex)
+- Válidos 5 minutos
+- Un solo uso (se eliminan tras ejecución o expiración)
+- Solo para objetos que **ya existen** — `CREATE TABLE new_table` no requiere confirmación
+
+---
+
 ### Consultas cross-database (`MSSQL_ALLOWED_DATABASES`)
 
 **Nueva variable:** `MSSQL_ALLOWED_DATABASES`

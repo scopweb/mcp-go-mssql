@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — Destructive Operation Confirmation
+
+- 🛡️ **Confirmation required for destructive DDL**: Operations that modify or destroy existing database objects (`ALTER VIEW`, `DROP TABLE`, `DROP VIEW`, `DROP PROCEDURE`, `DROP FUNCTION`, `ALTER TABLE`, `TRUNCATE TABLE`) now require explicit user confirmation before execution
+- 🔐 **New `confirm_operation` tool**: Dedicated MCP tool to confirm pending destructive operations using a token received from the warning response
+- ⏱️ **Token-based confirmation**: Each destructive operation generates a unique confirmation token (32-char hex, crypto/rand) valid for 5 minutes
+- 📋 **Object existence check**: Confirmation is only required when the target object already exists — `CREATE TABLE new_table` proceeds without confirmation
+- 🔒 **One-time use tokens**: Tokens are deleted after execution or expiration to prevent replay attacks
+- 🌐 **`MSSQL_CONFIRM_DESTRUCTIVE` env var**: Set to `"false"` to disable confirmation (for CI/CD automation)
+- 📊 **Security logging**: All destructive operation warnings and confirmations are logged via `secLogger.Printf`
+- 🚀 **`MSSQL_AUTOPILOT` mode**: New autonomous AI mode for development workflows
+  - Skips destructive DDL confirmation (ALTER VIEW, DROP TABLE, etc.)
+  - Skips schema validation (tables/views don't need to exist)
+  - Whitelist protection still active: only whitelisted tables can be modified
+  - Ideal when AI needs full autonomy within a limited, controlled scope
+  - Example: `MSSQL_AUTOPILOT=true` + `MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia`
+
 ### Security — AI-Powered Attack Hardening
 
 - 🛡️ **Inline comment keyword obfuscation detection**: New `stripAllComments()` + `stripLineComments()` functions remove ALL SQL comments (not just leading ones), preventing attacks like `SEL/*x*/ECT` or `/*INS*/ INSERT` that hide keywords inside comments to evade keyword detection
@@ -35,6 +51,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 🧪 **AI attack vector tests**: `TestAIAttackVectors` — 20 test cases covering CHAR concatenation, NOLOCK hints, WAITFOR timing attacks, OPENROWSET exfiltration, Unicode bidirectional control characters, and false-positive prevention with string literals
 - 🧪 **Unicode obfuscation tests**: Tests for RTL override, zero-width space, and homoglyph detection
+
+### Added
+
+- 🔌 **Dynamic Multi-Connection Mode (`MSSQL_DYNAMIC_MODE`)**:
+  - New optional mode allows connecting to multiple databases from a single MCP server instance
+  - Environment variables: `MSSQL_DYNAMIC_MODE=true` (default: false), `MSSQL_DYNAMIC_MAX_CONNECTIONS=10`
+  - Three new tools: `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
+  - `query_database` gains optional `connection` parameter to specify which dynamic connection to use
+  - **Security-first design**: All credentials stored in `.env` with prefix `MSSQL_DYNAMIC_<ALIAS>_`
+  - AI only sees connection aliases (server/database names) — NO passwords or users exposed
+  - Per-connection security config: `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY`, `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES`, `MSSQL_DYNAMIC_<ALIAS>_AUTOPILOT`
+  - Example `.env`:
+    ```
+    MSSQL_DYNAMIC_IDENTITY_SERVER=10.203.3.11
+    MSSQL_DYNAMIC_IDENTITY_DATABASE=JJP_CRM_IDENTITY
+    MSSQL_DYNAMIC_IDENTITY_USER=ppp
+    MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
+    ```
+  - Claude Desktop config needs only `MSSQL_DYNAMIC_MODE=true` — no credentials in JSON
 
 ### Added
 - 🌐 **Cross-database queries (`MSSQL_ALLOWED_DATABASES`)**:

@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,6 +43,22 @@ type MCPError struct {
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
+
+// ConfirmationRequiredError is returned when a destructive DDL operation
+// requires user confirmation before execution.
+type ConfirmationRequiredError struct {
+	Token     string // token to pass to confirm_operation
+	Operation string // human-readable operation type
+	Target    string // schema.object target
+	ExpiresIn string // time until token expires
+}
+
+func (e *ConfirmationRequiredError) Error() string {
+	return fmt.Sprintf("DESTRUCTIVE OPERATION REQUIRES CONFIRMATION: %s on %s. Use confirm_operation tool with token %s", e.Operation, e.Target, e.Token)
+}
+
+// DestructiveConfirmationCode is the JSON-RPC error code for destructive operation confirmation.
+const DestructiveConfirmationCode = -32000
 
 type InitializeParams struct {
 	ProtocolVersion string   `json:"protocolVersion"`
@@ -200,6 +218,18 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 	"CALL":     regexp.MustCompile(`(?i)\bCALL\b`),
 	"BULK":     regexp.MustCompile(`(?i)\bBULK\b`),
 	"BCP":      regexp.MustCompile(`(?i)\bBCP\b`),
+}
+
+// destructiveOpPatterns detect DDL operations that modify/destroy existing database objects.
+// These require confirmation if the target object already exists.
+var destructiveOpPatterns = map[string]*regexp.Regexp{
+	"DROP_TABLE":    regexp.MustCompile(`(?i)\bDROP\s+TABLE\b`),
+	"DROP_VIEW":     regexp.MustCompile(`(?i)\bDROP\s+VIEW\b`),
+	"DROP_PROC":     regexp.MustCompile(`(?i)\bDROP\s+PROCEDURE\b`),
+	"DROP_FUNCTION": regexp.MustCompile(`(?i)\bDROP\s+FUNCTION\b`),
+	"ALTER_VIEW":    regexp.MustCompile(`(?i)\bALTER\s+VIEW\b`),
+	"ALTER_TABLE":   regexp.MustCompile(`(?i)\bALTER\s+TABLE\b`),
+	"TRUNCATE_TABLE": regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\b`),
 }
 
 // Pre-compiled patterns for table name extraction (performance optimization)
@@ -709,16 +739,42 @@ func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 
 // serverConfig holds cached configuration read once at startup.
 type serverConfig struct {
-	readOnly         bool
-	whitelistTables  []string
-	whitelistProcs   string
-	allowedDatabases []string // additional databases this connector can query (cross-database)
+	readOnly            bool
+	whitelistTables     []string
+	whitelistProcs      string
+	allowedDatabases    []string // additional databases this connector can query (cross-database)
+	confirmDestructive  bool     // require confirmation for destructive DDL operations
+	autopilot bool     // skip schema validation for autonomous operation (destructive confirmation still enforced)
 }
+
+// pendingOperation represents a destructive operation awaiting user confirmation.
+type pendingOperation struct {
+	query     string
+	createdAt time.Time
+	expiresAt time.Time
+}
+
+// confirmationTokenTTL is how long a destructive operation token remains valid.
+const confirmationTokenTTL = 5 * time.Minute
 
 // tableRef represents a table reference that may include a cross-database qualifier.
 type tableRef struct {
 	database string // empty = current database
 	table    string // lowercase table name
+}
+
+// ConnectionInfo holds a named dynamic database connection.
+type ConnectionInfo struct {
+	Alias     string
+	DB        *sql.DB
+	Server    string
+	Database  string
+	User      string
+	CreatedAt time.Time
+	// Per-connection security config
+	readOnly          bool
+	whitelistTables   []string
+	autopilot         bool
 }
 
 // MSSQL Server
@@ -728,6 +784,8 @@ type MCPMSSQLServer struct {
 	secLogger   *SecurityLogger
 	devMode     bool
 	config      serverConfig
+	pendingOps  map[string]pendingOperation // token -> operation awaiting confirmation
+	pendingOpMu sync.Mutex
 	rateLimiter struct {
 		mu        sync.Mutex
 		tokens    int
@@ -735,6 +793,11 @@ type MCPMSSQLServer struct {
 		lastReset time.Time
 		interval  time.Duration
 	}
+	// Dynamic multi-connection support
+	dynamicMode     bool
+	connections     map[string]*ConnectionInfo
+	connMu          sync.RWMutex
+	maxDynamicConns int
 }
 
 // checkRateLimit implements a simple token-bucket rate limiter for tool invocations.
@@ -766,6 +829,44 @@ func (s *MCPMSSQLServer) setDB(db *sql.DB) {
 	s.dbMu.Lock()
 	defer s.dbMu.Unlock()
 	s.db = db
+}
+
+// Dynamic connection management for multi-database mode.
+
+func (s *MCPMSSQLServer) addDynamicConnectionInfo(alias string, connInfo *ConnectionInfo) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	s.connections[alias] = connInfo
+}
+
+func (s *MCPMSSQLServer) getDynamicConnection(alias string) (*sql.DB, bool) {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	if conn, ok := s.connections[alias]; ok {
+		return conn.DB, true
+	}
+	return nil, false
+}
+
+func (s *MCPMSSQLServer) listDynamicConnections() []*ConnectionInfo {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	result := make([]*ConnectionInfo, 0, len(s.connections))
+	for _, conn := range s.connections {
+		result = append(result, conn)
+	}
+	return result
+}
+
+func (s *MCPMSSQLServer) removeDynamicConnection(alias string) error {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if conn, ok := s.connections[alias]; ok {
+		conn.DB.Close()
+		delete(s.connections, alias)
+		return nil
+	}
+	return fmt.Errorf("connection '%s' not found", alias)
 }
 
 func buildSecureConnectionString() (string, error) {
@@ -1273,8 +1374,13 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 	currentTables, err := s.loadTablesForDatabase(ctx, "")
 	if err != nil {
 		// No permissions to read schema — skip validation silently
+		s.secLogger.Printf("Schema validation skipped: cannot load tables from current database (err: %v)", err)
 		return nil
 	}
+	if len(currentTables) == 0 {
+		s.secLogger.Printf("Schema validation warning: current database has 0 tables in INFORMATION_SCHEMA.TABLES")
+	}
+	s.secLogger.Printf("Schema validation: loaded %d tables from current database", len(currentTables))
 	tableCache[""] = currentTables
 
 	// Check each table reference
@@ -1303,8 +1409,10 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 				dbTables, err := s.loadTablesForDatabase(ctx, ref.database)
 				if err != nil {
 					// Can't read that database's schema — skip validation for it
+					s.secLogger.Printf("Schema validation skipped: cannot load tables from cross-database '%s' (err: %v)", ref.database, err)
 					continue
 				}
+				s.secLogger.Printf("Schema validation: loaded %d tables from cross-database '%s'", len(dbTables), ref.database)
 				tableCache[ref.database] = dbTables
 			}
 			if !tableCache[ref.database][ref.table] {
@@ -1321,6 +1429,8 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 	if len(missing) == 0 {
 		return nil
 	}
+
+	s.secLogger.Printf("Schema validation: %d tables not found in cache (this may indicate permissions issue or empty INFORMATION_SCHEMA)", len(missing))
 
 	// Build suggestions using current database tables (most common case)
 	var parts []string
@@ -1360,6 +1470,245 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 	msg := "Schema validation error — the following tables/views do not exist:\n" + strings.Join(parts, "\n") +
 		"\n\nUse the 'explore' tool to list available tables, or 'inspect' to see column details."
 	return &msg
+}
+
+// objectType represents the type of database object to check for existence.
+type objectType string
+
+const (
+	objectTypeTable     objectType = "U"   // user table
+	objectTypeView      objectType = "V"   // view
+	objectTypeProcedure objectType = "P"   // stored procedure
+	objectTypeFunction  objectType = "FN"  // scalar function; also IF (inline), TF (table-valued)
+)
+
+// objectExists checks if a database object (table, view, proc, func) already exists.
+// schema and name should be lowercase for consistency.
+func (s *MCPMSSQLServer) objectExists(ctx context.Context, schema, name string, objType objectType) (bool, error) {
+	db := s.getDB()
+	if db == nil {
+		return false, fmt.Errorf("database not connected")
+	}
+
+	// Map objectType to sys.objects type codes
+	var typeCodes []string
+	switch objType {
+	case objectTypeTable:
+		typeCodes = []string{"U"}
+	case objectTypeView:
+		typeCodes = []string{"V"}
+	case objectTypeProcedure:
+		typeCodes = []string{"P", "PC"} // also "PC" for CLR procedure
+	case objectTypeFunction:
+		typeCodes = []string{"FN", "IF", "TF", "FT"} // scalar, inline table, table-valued, assembly
+	default:
+		return false, fmt.Errorf("unknown object type: %s", objType)
+	}
+
+	// Build query to check object existence
+	query := `
+		SELECT TOP 1 1 FROM sys.objects
+		WHERE LOWER(SCHEMA_NAME(schema_id)) = @p1
+		  AND LOWER(name) = @p2
+		  AND type IN (` + placeholders(len(typeCodes)) + `)`
+
+	args := make([]interface{}, 0, len(typeCodes)+2)
+	args = append(args, schema, name)
+	for _, tc := range typeCodes {
+		args = append(args, tc)
+	}
+
+	results, err := s.executeSecureQuery(ctx, query, args...)
+	if err != nil {
+		// If query fails (permissions, etc.), assume object doesn't exist to be safe
+		return false, nil
+	}
+
+	return len(results) > 0, nil
+}
+
+// placeholders generates SQL Server parameter placeholders like @p1, @p2, @p3.
+func placeholders(count int) string {
+	var parts []string
+	for i := 1; i <= count; i++ {
+		parts = append(parts, fmt.Sprintf("@p%d", i))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// extractDDLTargetObjects extracts schema.object names from a DDL query.
+// Returns a list of targets that should be checked for existence.
+func (s *MCPMSSQLServer) extractDDLTargetObjects(query string) []struct {
+	schema string
+	name   string
+	objType objectType
+} {
+	var targets []struct {
+		schema string
+		name   string
+		objType objectType
+	}
+
+	// Check DROP TABLE
+	if matches := regexp.MustCompile(`(?i)\bDROP\s+TABLE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
+		prefix, name := matches[1], matches[2]
+		schema, objName := parseTableRef(prefix, name)
+		targets = append(targets, struct {
+			schema string
+			name   string
+			objType objectType
+		}{schema: schema, name: objName, objType: objectTypeTable})
+	}
+
+	// Check DROP VIEW
+	if matches := regexp.MustCompile(`(?i)\bDROP\s+VIEW\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
+		prefix, name := matches[1], matches[2]
+		schema, objName := parseTableRef(prefix, name)
+		targets = append(targets, struct {
+			schema string
+			name   string
+			objType objectType
+		}{schema: schema, name: objName, objType: objectTypeView})
+	}
+
+	// Check DROP PROCEDURE
+	if matches := regexp.MustCompile(`(?i)\bDROP\s+PROCEDURE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
+		prefix, name := matches[1], matches[2]
+		schema, objName := parseTableRef(prefix, name)
+		targets = append(targets, struct {
+			schema string
+			name   string
+			objType objectType
+		}{schema: schema, name: objName, objType: objectTypeProcedure})
+	}
+
+	// Check DROP FUNCTION
+	if matches := regexp.MustCompile(`(?i)\bDROP\s+FUNCTION\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
+		prefix, name := matches[1], matches[2]
+		schema, objName := parseTableRef(prefix, name)
+		targets = append(targets, struct {
+			schema string
+			name   string
+			objType objectType
+		}{schema: schema, name: objName, objType: objectTypeFunction})
+	}
+
+	// Check ALTER VIEW
+	if matches := regexp.MustCompile(`(?i)\bALTER\s+VIEW\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
+		prefix, name := matches[1], matches[2]
+		schema, objName := parseTableRef(prefix, name)
+		targets = append(targets, struct {
+			schema string
+			name   string
+			objType objectType
+		}{schema: schema, name: objName, objType: objectTypeView})
+	}
+
+	// Check ALTER TABLE (for DROP COLUMN, etc.)
+	if matches := regexp.MustCompile(`(?i)\bALTER\s+TABLE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
+		prefix, name := matches[1], matches[2]
+		schema, objName := parseTableRef(prefix, name)
+		targets = append(targets, struct {
+			schema string
+			name   string
+			objType objectType
+		}{schema: schema, name: objName, objType: objectTypeTable})
+	}
+
+	// Check TRUNCATE TABLE
+	if matches := regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
+		prefix, name := matches[1], matches[2]
+		schema, objName := parseTableRef(prefix, name)
+		targets = append(targets, struct {
+			schema string
+			name   string
+			objType objectType
+		}{schema: schema, name: objName, objType: objectTypeTable})
+	}
+
+	return targets
+}
+
+// parseTableRef parses a table reference prefix and name into schema and table name.
+// Handles forms like: "table", "schema.table", "[table]", "[schema].[table]", etc.
+func parseTableRef(prefix, name string) (schema, tableName string) {
+	tableName = strings.ToLower(strings.Trim(strings.Trim(name, "[]"), "\""))
+
+	if prefix == "" {
+		return "dbo", tableName // default schema
+	}
+
+	// prefix might be "schema." or "[schema]."
+	schema = strings.ToLower(strings.Trim(strings.Trim(prefix, "[]\""), "."))
+	return schema, tableName
+}
+
+// checkDestructiveConfirmation checks if a query targets an existing object and requires
+// user confirmation before execution. Returns (token, error) if confirmation is needed.
+func (s *MCPMSSQLServer) checkDestructiveConfirmation(ctx context.Context, query string) (string, error) {
+	// Only check if confirmDestructive is enabled
+	if !s.config.confirmDestructive {
+		return "", nil
+	}
+
+	// Extract target objects from the DDL query
+	targets := s.extractDDLTargetObjects(query)
+	if len(targets) == 0 {
+		return "", nil // Not a destructive operation we track
+	}
+
+	// Check if any target object exists
+	for _, target := range targets {
+		exists, err := s.objectExists(ctx, target.schema, target.name, target.objType)
+		if err != nil {
+			s.secLogger.Printf("Error checking object existence for %s.%s: %v", target.schema, target.name, err)
+			continue // Skip on error, let the query execute
+		}
+		if exists {
+			// Generate confirmation token
+			token := generateOpToken()
+			s.pendingOpMu.Lock()
+			s.pendingOps[token] = pendingOperation{
+				query:     query,
+				createdAt: time.Now(),
+				expiresAt: time.Now().Add(confirmationTokenTTL),
+			}
+			s.pendingOpMu.Unlock()
+
+			// Log the warning
+			s.secLogger.Printf("DESTRUCTIVE OPERATION WARNING: %s on existing %s.%s (%s) - token: %s",
+				extractDestructiveOpType(query), target.schema, target.name, target.objType, token)
+
+			return token, nil
+		}
+	}
+
+	return "", nil
+}
+
+// extractDestructiveOpType returns a human-readable operation type from the query.
+func extractDestructiveOpType(query string) string {
+	upper := strings.ToUpper(query)
+	for op, pattern := range destructiveOpPatterns {
+		if pattern.MatchString(query) {
+			return strings.ReplaceAll(op, "_", " ")
+		}
+	}
+	// Fallback: extract first word
+	parts := strings.Fields(upper)
+	if len(parts) > 0 {
+		return parts[0] + " (detected)"
+	}
+	return "UNKNOWN"
+}
+
+// generateOpToken generates a random confirmation token using crypto/rand.
+func generateOpToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
 }
 
 // findSimilarNames returns up to 3 existing table names similar to the target.
@@ -1637,6 +1986,186 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		return nil, err
 	}
 
+	// Check for destructive operation confirmation requirement
+	// AUTOPILOT does NOT skip destructive confirmation — each dangerous operation requires explicit confirmation
+	s.secLogger.Printf("AUTOPILOT=%v — %s", s.config.autopilot, s.extractOperation(query))
+	if token, err := s.checkDestructiveConfirmation(ctx, query); err != nil {
+			// If check fails with confirmation requirement, return confirmation error
+			if token != "" {
+				targets := s.extractDDLTargetObjects(query)
+				var targetStr string
+				if len(targets) > 0 {
+					targetStr = targets[0].schema + "." + targets[0].name
+				}
+				opType := extractDestructiveOpType(query)
+				return nil, &ConfirmationRequiredError{
+					Token:     token,
+					Operation: opType,
+					Target:    targetStr,
+					ExpiresIn: "5 minutes",
+				}
+			}
+			// Other errors from checkDestructiveConfirmation are logged but don't block
+		} else if token != "" {
+			// Confirmation required
+			targets := s.extractDDLTargetObjects(query)
+			var targetStr string
+			if len(targets) > 0 {
+				targetStr = targets[0].schema + "." + targets[0].name
+			}
+			opType := extractDestructiveOpType(query)
+			return nil, &ConfirmationRequiredError{
+				Token:     token,
+				Operation: opType,
+				Target:    targetStr,
+				ExpiresIn: "5 minutes",
+			}
+	}
+
+	stmt, err := db.PrepareContext(ctx, query)
+	if err != nil {
+		if s.devMode {
+			s.secLogger.Printf("Failed to prepare statement: %v", err)
+			return nil, fmt.Errorf("query preparation failed: %v", err)
+		}
+		s.secLogger.Printf("Failed to prepare statement: query preparation error")
+		return nil, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		if s.devMode {
+			s.secLogger.Printf("Failed to execute query: %v", err)
+			return nil, fmt.Errorf("query execution failed: %v", err)
+		}
+		s.secLogger.Printf("Failed to execute query: execution error")
+		return nil, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
+	var results []map[string]interface{}
+	rowCount := 0
+	truncated := false
+	for rows.Next() {
+		if rowCount >= maxQueryRows {
+			truncated = true
+			break
+		}
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range columns {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, err
+		}
+
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			val := values[i]
+			if b, ok := val.([]byte); ok {
+				row[col] = string(b)
+			} else {
+				row[col] = val
+			}
+		}
+		results = append(results, row)
+		rowCount++
+	}
+
+	if truncated {
+		results = append(results, map[string]interface{}{
+			"_truncated": fmt.Sprintf("Results limited to %d rows. Use WHERE or TOP to narrow the query.", maxQueryRows),
+		})
+	}
+
+	return results, nil
+}
+
+// executeSecureQueryWithDB is a wrapper that accepts an explicit db connection.
+// This enables dynamic multi-database connections in MSSQL_DYNAMIC_MODE.
+func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.DB, query string, args ...interface{}) ([]map[string]interface{}, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not connected")
+	}
+
+	if err := s.validateBasicInput(query); err != nil {
+		return nil, err
+	}
+
+	// Validate read-only restrictions
+	if err := s.validateReadOnlyQuery(query); err != nil {
+		s.secLogger.Printf("Read-only violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Validate granular table permissions (whitelist)
+	if err := s.validateTablePermissions(query); err != nil {
+		s.secLogger.Printf("Permission violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Validate query structural safety (inline comments, CHAR concatenation, NOLOCK hints, etc.)
+	if err := s.validateQueryStructuralSafety(query); err != nil {
+		s.secLogger.Printf("Structural safety violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Validate Unicode obfuscation (homoglyphs, bidirectional control characters)
+	if err := s.validateQueryUnicodeSafety(query); err != nil {
+		s.secLogger.Printf("Unicode safety violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Validate subqueries don't reference restricted tables
+	if err := s.validateSubqueriesForRestrictedTables(query); err != nil {
+		s.secLogger.Printf("Subquery safety violation blocked: %s", err)
+		return nil, err
+	}
+
+	// Check for destructive operation confirmation requirement
+	// AUTOPILOT does NOT skip destructive confirmation — each dangerous operation requires explicit confirmation
+	s.secLogger.Printf("AUTOPILOT=%v — %s", s.config.autopilot, s.extractOperation(query))
+	if token, err := s.checkDestructiveConfirmation(ctx, query); err != nil {
+			// If check fails with confirmation requirement, return confirmation error
+			if token != "" {
+				targets := s.extractDDLTargetObjects(query)
+				var targetStr string
+				if len(targets) > 0 {
+					targetStr = targets[0].schema + "." + targets[0].name
+				}
+				opType := extractDestructiveOpType(query)
+				return nil, &ConfirmationRequiredError{
+					Token:     token,
+					Operation: opType,
+					Target:    targetStr,
+					ExpiresIn: "5 minutes",
+				}
+			}
+			// Other errors from checkDestructiveConfirmation are logged but don't block
+		} else if token != "" {
+			// Confirmation required
+			targets := s.extractDDLTargetObjects(query)
+			var targetStr string
+			if len(targets) > 0 {
+				targetStr = targets[0].schema + "." + targets[0].name
+			}
+			opType := extractDestructiveOpType(query)
+			return nil, &ConfirmationRequiredError{
+				Token:     token,
+				Operation: opType,
+				Target:    targetStr,
+				ExpiresIn: "5 minutes",
+			}
+		}
+
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
 		if s.devMode {
@@ -1886,20 +2415,48 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "query_database":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
-							Annotations: annAssistantHigh,
+		// Check for dynamic connection parameter
+		var db *sql.DB
+		connectionName, hasConnection := params.Arguments["connection"].(string)
+
+		if hasConnection && connectionName != "" {
+			// Use dynamic connection
+			var ok bool
+			db, ok = s.getDynamicConnection(connectionName)
+			if !ok {
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{
+								Type:        "text",
+								Text:        fmt.Sprintf("Error: Unknown dynamic connection '%s'. Use dynamic_list to see active connections.", connectionName),
+								Annotations: annBothHigh,
+							},
 						},
+						IsError: true,
 					},
-					IsError: true,
-				},
+				}
+			}
+		} else {
+			// Use default connection
+			db = s.getDB()
+			if db == nil {
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{
+								Type:        "text",
+								Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
+								Annotations: annAssistantHigh,
+							},
+						},
+						IsError: true,
+					},
+				}
 			}
 		}
 
@@ -1926,25 +2483,47 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 		// Best-effort schema validation: check that referenced tables exist.
 		// If INFORMATION_SCHEMA is not accessible (permissions), validation is silently skipped.
-		if validationErr := s.validateTablesExist(ctx, query); validationErr != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        *validationErr,
-							Annotations: annBothHigh,
+		// Skipped in autopilot mode only.
+		s.secLogger.Printf("SCHEMA_VALIDATION: autopilot=%v", s.config.autopilot)
+		if !s.config.autopilot {
+			if validationErr := s.validateTablesExist(ctx, query); validationErr != nil {
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{
+								Type:        "text",
+								Text:        *validationErr,
+								Annotations: annBothHigh,
+							},
 						},
+						IsError: true,
 					},
-					IsError: true,
-				},
+				}
 			}
 		}
 
-		results, err := s.executeSecureQuery(ctx, query)
+		results, err := s.executeSecureQueryWithDB(ctx, db, query)
 		if err != nil {
+			// Check if this is a confirmation-required error
+			if confirmErr, ok := err.(*ConfirmationRequiredError); ok {
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Error: &MCPError{
+						Code:    DestructiveConfirmationCode,
+						Message: confirmErr.Error(),
+						Data: map[string]interface{}{
+							"operation":   confirmErr.Operation,
+							"target":      confirmErr.Target,
+							"token":       confirmErr.Token,
+							"expires_in":  confirmErr.ExpiresIn,
+							"confirm_url": "use confirm_operation tool with this token to execute",
+						},
+					},
+				}
+			}
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
@@ -2885,6 +3464,359 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			},
 		}
 
+	case "confirm_operation":
+		token, ok := params.Arguments["token"].(string)
+		if !ok || token == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        "Error: Missing or invalid 'token' parameter. Provide the token from the destructive operation warning.",
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Look up the pending operation
+		s.pendingOpMu.Lock()
+		op, exists := s.pendingOps[token]
+		if !exists {
+			s.pendingOpMu.Unlock()
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        "Error: Invalid or expired confirmation token. The token may have expired (valid for 5 minutes) or has already been used.",
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Check if expired
+		if time.Now().After(op.expiresAt) {
+			delete(s.pendingOps, token)
+			s.pendingOpMu.Unlock()
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        "Error: Confirmation token has expired. Please retry the original destructive operation.",
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Remove token (one-time use)
+		delete(s.pendingOps, token)
+		s.pendingOpMu.Unlock()
+
+		// Log that confirmation was received
+		s.secLogger.Printf("DESTRUCTIVE OPERATION CONFIRMED: executing %s", op.query)
+
+		// Execute the pending operation
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		results, err := s.executeSecureQuery(ctx, op.query)
+		if err != nil {
+			// If execution fails, return the error
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        fmt.Sprintf("Operation failed: %v", err),
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Operation succeeded
+		opType := extractDestructiveOpType(op.query)
+		if results == nil || len(results) == 0 {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        fmt.Sprintf("%s executed successfully after confirmation. No rows returned.", opType),
+							Annotations: annBothQuery,
+						},
+					},
+				},
+			}
+		}
+
+		resultBytes, _ := json.MarshalIndent(results, "", "  ")
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type:        "text",
+						Text:        fmt.Sprintf("%s executed successfully after confirmation. %d rows returned:\n%s", opType, len(results), string(resultBytes)),
+						Annotations: annBothQuery,
+					},
+				},
+			},
+		}
+
+	case "dynamic_connect":
+		// Connect to a pre-configured dynamic connection from .env
+		// No credentials needed - they are loaded from MSSQL_DYNAMIC_<ALIAS>_XXX env vars
+		alias, ok := params.Arguments["alias"].(string)
+		if !ok || alias == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        "Error: Missing or invalid 'alias' parameter",
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		// Build connection string from MSSQL_DYNAMIC_<ALIAS>_XXX env vars
+		prefix := "MSSQL_DYNAMIC_" + strings.ToUpper(alias) + "_"
+		server := os.Getenv(prefix + "SERVER")
+		database := os.Getenv(prefix + "DATABASE")
+		user := os.Getenv(prefix + "USER")
+		password := os.Getenv(prefix + "PASSWORD")
+		portStr := os.Getenv(prefix + "PORT")
+
+		if server == "" || database == "" || user == "" || password == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        fmt.Sprintf("Dynamic connection '%s' not found or incomplete in configuration. Use dynamic_list to see available connections.", alias),
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		port := 1433
+		if portStr != "" {
+			if p, err := strconv.Atoi(portStr); err == nil {
+				port = p
+			}
+		}
+
+		encrypt := "true"
+		if s.devMode {
+			encrypt = "false"
+		}
+		trustCert := "false"
+		if s.devMode {
+			trustCert = "true"
+		}
+
+		connStr := fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			server, port, database, user, password, encrypt, trustCert,
+		)
+
+		db, err := sql.Open("sqlserver", connStr)
+		if err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        fmt.Sprintf("Failed to open connection: %v", err),
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		if err := db.PingContext(context.Background()); err != nil {
+			db.Close()
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        fmt.Sprintf("Failed to connect: %v", err),
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		db.SetMaxOpenConns(5)
+		db.SetMaxIdleConns(2)
+		db.SetConnMaxLifetime(time.Hour)
+		db.SetConnMaxIdleTime(15 * time.Minute)
+
+		// Load per-connection security config
+		connInfo := &ConnectionInfo{
+			Alias:     alias,
+			DB:        db,
+			Server:    server,
+			Database:  database,
+			User:      user,
+			CreatedAt: time.Now(),
+			readOnly:  strings.ToLower(os.Getenv(prefix+"READ_ONLY")) == "true",
+			autopilot: strings.ToLower(os.Getenv(prefix+"AUTOPILOT")) == "true",
+		}
+		if wl := os.Getenv(prefix + "WHITELIST_TABLES"); wl != "" {
+			connInfo.whitelistTables = parseWhitelistTables(wl)
+		}
+
+		s.addDynamicConnectionInfo(alias, connInfo)
+		s.secLogger.Printf("Dynamic connection '%s' activated: %s/%s", alias, server, database)
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type:        "text",
+						Text:        fmt.Sprintf("Connected to '%s' (%s/%s)", alias, server, database),
+						Annotations: annBothQuery,
+					},
+				},
+			},
+		}
+
+	case "dynamic_list":
+		connections := s.listDynamicConnections()
+		if len(connections) == 0 {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        "No active dynamic connections. Use dynamic_connect to establish one.",
+							Annotations: annBothQuery,
+						},
+					},
+				},
+			}
+		}
+
+		var info strings.Builder
+		info.WriteString("Active dynamic connections:\n")
+		for _, conn := range connections {
+			age := time.Since(conn.CreatedAt).Round(time.Second)
+			info.WriteString(fmt.Sprintf("- %s (%s/%s) - connected %s ago\n", conn.Alias, conn.Server, conn.Database, age))
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type:        "text",
+						Text:        info.String(),
+						Annotations: annBothQuery,
+					},
+				},
+			},
+		}
+
+	case "dynamic_disconnect":
+		alias, ok := params.Arguments["alias"].(string)
+		if !ok || alias == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        "Error: Missing or invalid 'alias' parameter",
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		if err := s.removeDynamicConnection(alias); err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type:        "text",
+							Text:        err.Error(),
+							Annotations: annBothHigh,
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		s.secLogger.Printf("Dynamic connection '%s' closed", alias)
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type:        "text",
+						Text:        fmt.Sprintf("Disconnected '%s'", alias),
+						Annotations: annBothQuery,
+					},
+				},
+			},
+		}
+
 	default:
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -2988,13 +3920,17 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			{
 				Name:        "query_database",
 				Title:       "Query Database",
-				Description: "Execute a secure SQL query against the MSSQL database",
+				Description: "Execute any SQL query (SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP). Aliases: run_sql, execute_sql, db_query, sql_execute, sql_query, run_query, exec_query. Returns up to 500 rows. For execution plan only (no execution), use 'explain_query' instead.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"query": {
 							Type:        "string",
-							Description: "SQL query to execute (uses prepared statements for security)",
+							Description: "SQL query: SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP. Example: UPDATE mytable SET col='value' WHERE id=1",
+						},
+						"connection": {
+							Type:        "string",
+							Description: "Dynamic connection alias (from dynamic_connect). If not specified, uses the default database connection.",
 						},
 					},
 					Required: []string{"query"},
@@ -3009,7 +3945,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			{
 				Name:        "get_database_info",
 				Title:       "Get Database Info",
-				Description: "Get database connection status and basic information",
+				Description: "Get database connection status, server info, and current configuration. Aliases: server_info, db_status, db_info, connection_status. Use this first to verify connectivity before running queries.",
 				InputSchema: InputSchema{
 					Type:       "object",
 					Properties: map[string]Property{},
@@ -3025,7 +3961,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			{
 				Name:        "explore",
 				Title:       "Explore Database",
-				Description: "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern). Use 'database' parameter to explore tables in an allowed cross-database.",
+				Description: "Explore database objects (tables, views, procedures, databases). Aliases: list_tables, list_views, list_procedures, show_tables, show_views, db_explore, find_tables, search_tables. type=tables (default), type=views, type=databases, type=procedures, type=search.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -3066,7 +4002,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			{
 				Name:        "inspect",
 				Title:       "Inspect Table",
-				Description: "Inspect a table's structure. detail=columns (default) returns column info, detail=indexes returns indexes, detail=foreign_keys returns FK relationships, detail=dependencies returns objects (views, procedures, functions) that reference this table, detail=all returns everything in one call.",
+				Description: "Inspect a table's structure (columns, indexes, foreign keys, dependencies). Aliases: describe_table, table_structure, schema_info, show_columns, table_info, column_info, index_info. detail=columns (default), detail=indexes, detail=foreign_keys, detail=dependencies, detail=all.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -3119,14 +4055,14 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			},
 			{
 				Name:        "explain_query",
-				Title:       "Explain Query",
-				Description: "Show the estimated execution plan for a SQL query without executing it. Useful for performance analysis and query optimization. Only SELECT queries are accepted.",
+				Title:       "Show Query Execution Plan",
+				Description: "Display the estimated execution plan for a SELECT query WITHOUT executing it. Aliases: show_plan, explain_plan, sql_explain, analyze_query, query_plan, plan_analysis. ONLY accepts SELECT queries. For INSERT/UPDATE/DELETE or query execution, use 'query_database' instead.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"query": {
 							Type:        "string",
-							Description: "SELECT query to analyze (must be a read-only query)",
+							Description: "SELECT query only — shows execution plan without running the query. For INSERT/UPDATE/DELETE use 'query_database' instead.",
 						},
 					},
 					Required: []string{"query"},
@@ -3135,6 +4071,109 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					ReadOnlyHint:    boolPtr(true),
 					DestructiveHint: boolPtr(false),
 					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
+				},
+			},
+			{
+				Name:        "confirm_operation",
+				Title:       "Confirm Destructive Operation",
+				Description: "Confirm a pending destructive operation that requires explicit user confirmation. Use the token from the destructive operation warning.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"token": {
+							Type:        "string",
+							Description: "Confirmation token received from a destructive operation warning",
+						},
+					},
+					Required: []string{"token"},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(false),
+					DestructiveHint: boolPtr(true),
+					IdempotentHint:  boolPtr(false),
+					OpenWorldHint:   boolPtr(false),
+				},
+			},
+			{
+				Name:        "dynamic_connect",
+				Title:       "Dynamic Connect",
+				Description: "Establish a named database connection for multi-database mode. Use this to connect to additional databases beyond the default connection. Aliases: connect_db, db_connect. Requires MSSQL_DYNAMIC_MODE=true.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"alias": {
+							Type:        "string",
+							Description: "Name for this connection (used in queries with connection parameter)",
+						},
+						"server": {
+							Type:        "string",
+							Description: "SQL Server hostname or IP address",
+						},
+						"database": {
+							Type:        "string",
+							Description: "Database name",
+						},
+						"user": {
+							Type:        "string",
+							Description: "Username for SQL Server authentication",
+						},
+						"password": {
+							Type:        "string",
+							Description: "Password for SQL Server authentication",
+						},
+						"port": {
+							Type:        "integer",
+							Description: "SQL Server port (default: 1433)",
+						},
+						"encrypt": {
+							Type:        "boolean",
+							Description: "Enable TLS encryption (default: true in prod, false in dev)",
+						},
+					},
+					Required: []string{"alias", "server", "database", "user", "password"},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(false),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
+				},
+			},
+			{
+				Name:        "dynamic_list",
+				Title:       "Dynamic List Connections",
+				Description: "List all active dynamic database connections. Shows alias, server, database, and connection age. Aliases: list_connections, list_conns, connections.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+					Required:   []string{},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(true),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
+				},
+			},
+			{
+				Name:        "dynamic_disconnect",
+				Title:       "Dynamic Disconnect",
+				Description: "Close a named dynamic database connection. Aliases: disconnect_db, db_disconnect.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"alias": {
+							Type:        "string",
+							Description: "Name of the connection to close",
+						},
+					},
+					Required: []string{"alias"},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(true),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(false),
 					OpenWorldHint:   boolPtr(false),
 				},
 			},
@@ -3214,19 +4253,47 @@ func main() {
 
 	// Cache configuration once at startup (avoid os.Getenv on every request)
 	cfg := serverConfig{
-		readOnly:         strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
-		whitelistTables:  parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
-		whitelistProcs:   os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
-		allowedDatabases: parseAllowedDatabases(os.Getenv("MSSQL_ALLOWED_DATABASES")),
+		readOnly:          strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
+		whitelistTables:   parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
+		whitelistProcs:    os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
+		allowedDatabases:   parseAllowedDatabases(os.Getenv("MSSQL_ALLOWED_DATABASES")),
+		confirmDestructive: strings.ToLower(os.Getenv("MSSQL_CONFIRM_DESTRUCTIVE")) != "false", // default true
+		autopilot:         strings.ToLower(os.Getenv("MSSQL_AUTOPILOT")) == "true",
+	}
+
+	// Dynamic multi-connection mode configuration
+	dynamicMode := strings.ToLower(os.Getenv("MSSQL_DYNAMIC_MODE")) == "true"
+	maxDynamicConns := 10
+	if envMax := os.Getenv("MSSQL_DYNAMIC_MAX_CONNECTIONS"); envMax != "" {
+		if parsed, err := strconv.Atoi(envMax); err == nil && parsed > 0 {
+			maxDynamicConns = parsed
+		}
 	}
 
 	// Create MCP server without database initially
 	server := &MCPMSSQLServer{
-		db:        nil,
-		secLogger: secLogger,
-		devMode:   devMode,
-		config:    cfg,
+		db:                nil,
+		secLogger:         secLogger,
+		devMode:          devMode,
+		config:           cfg,
+		pendingOps:       make(map[string]pendingOperation),
+		dynamicMode:      dynamicMode,
+		connections:      make(map[string]*ConnectionInfo),
+		maxDynamicConns:  maxDynamicConns,
 	}
+
+	// Log final configuration
+	secLogger.Printf("=== SERVER CONFIGURATION ===")
+	secLogger.Printf("DEVELOPER_MODE=%v", devMode)
+	secLogger.Printf("AUTOPILOT=%v (skips schema validation; destructive confirmation always enforced)", cfg.autopilot)
+	secLogger.Printf("CONFIRM_DESTRUCTIVE=%v", cfg.confirmDestructive)
+	secLogger.Printf("READ_ONLY=%v", cfg.readOnly)
+	wl := strings.Join(cfg.whitelistTables, ",")
+	if wl == "" {
+		wl = "(none)"
+	}
+	secLogger.Printf("WHITELIST_TABLES=%s", wl)
+	secLogger.Printf("=============================")
 	// Initialize rate limiter: 60 tool calls per minute
 	server.rateLimiter.maxTokens = 60
 	server.rateLimiter.tokens = 60
@@ -3293,7 +4360,7 @@ func main() {
 		}
 
 		// Log only non-sensitive configuration settings
-		safeEnvVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_PORT", "MSSQL_AUTH", "MSSQL_READ_ONLY", "MSSQL_WHITELIST_TABLES", "MSSQL_ALLOWED_DATABASES", "DEVELOPER_MODE"}
+		safeEnvVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_PORT", "MSSQL_AUTH", "MSSQL_READ_ONLY", "MSSQL_WHITELIST_TABLES", "MSSQL_ALLOWED_DATABASES", "MSSQL_SKIP_SCHEMA_VALIDATION", "DEVELOPER_MODE"}
 		secLogger.Printf("Configuration settings:")
 		for _, key := range safeEnvVars {
 			if val := os.Getenv(key); val != "" {

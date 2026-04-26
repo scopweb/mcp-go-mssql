@@ -279,7 +279,90 @@ MSSQL_PASSWORD=secure_password
 MSSQL_READ_ONLY=true
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 DEVELOPER_MODE=false
+
+# Dynamic Multi-Database Mode (single server, multiple connections)
+MSSQL_SERVER=localhost
+MSSQL_DATABASE=DevDB
+MSSQL_USER=dev_user
+MSSQL_PASSWORD=dev_password
+DEVELOPER_MODE=true
+MSSQL_DYNAMIC_MODE=true
+MSSQL_DYNAMIC_MAX_CONNECTIONS=10
+# Use tools: dynamic_connect, dynamic_list, dynamic_disconnect
+# In query_database, use parameter: connection=<alias>
 ```
+
+## Dynamic Multi-Connection Mode
+
+When `MSSQL_DYNAMIC_MODE=true` is enabled, the server can connect to multiple databases from a single MCP instance. Connections are pre-configured in `.env` with credentials, and the AI only sees safe aliases — **no sensitive data exposed**.
+
+**Available Tools:**
+- `dynamic_connect` - Activate a pre-configured connection by alias
+- `dynamic_list` - List all available dynamic connections (shows alias, server, database — NO passwords)
+- `dynamic_disconnect` - Close a named dynamic connection
+
+**How it works:**
+1. Connections are defined in `.env` with prefix `MSSQL_DYNAMIC_<ALIAS>_`
+2. AI calls `dynamic_connect` with just an alias (no credentials in params)
+3. Server reads credentials from environment variables
+4. AI sees only server/database names, not passwords or users
+
+**Example `.env` configuration:**
+```bash
+# Default connection (always available)
+MSSQL_SERVER=10.203.3.10
+MSSQL_DATABASE=JJP_CRM
+MSSQL_USER=sa
+MSSQL_PASSWORD=secret123
+
+# Dynamic connections (AI sees only: identity, ferratge, crm)
+MSSQL_DYNAMIC_IDENTITY_SERVER=10.203.3.11
+MSSQL_DYNAMIC_IDENTITY_DATABASE=JJP_CRM_IDENTITY
+MSSQL_DYNAMIC_IDENTITY_USER=ppp
+MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
+
+MSSQL_DYNAMIC_FERRATGE_SERVER=10.203.3.12
+MSSQL_DYNAMIC_FERRATGE_DATABASE=JJP_Ferratge_PROD
+MSSQL_DYNAMIC_FERRATGE_USER=ferratge_user
+MSSQL_DYNAMIC_FERRATGE_PASSWORD=otra_password
+```
+
+**Usage:**
+```json
+// 1. List available connections (AI sees alias, server, database only)
+tool: dynamic_list
+
+// 2. Activate a connection by alias (no credentials exposed)
+tool: dynamic_connect
+params: {"alias": "identity"}
+
+// 3. Query using the connection
+tool: query_database
+params: {"sql": "SELECT TOP 10 * FROM customers", "connection": "identity"}
+
+// 4. Disconnect when done
+tool: dynamic_disconnect
+params: {"alias": "identity"}
+```
+
+**Claude Desktop Configuration for Dynamic Mode:**
+```json
+{
+  "mcpServers": {
+    "mssql-multi": {
+      "command": "C:\\MCPs\\clone\\mcp-go-mssql\\build\\mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "DEVELOPER_MODE": "true",
+        "MSSQL_DYNAMIC_MODE": "true",
+        "MSSQL_DYNAMIC_MAX_CONNECTIONS": "10"
+      }
+    }
+  }
+}
+```
+
+**Note:** All credentials are stored in `.env`, NOT in Claude Desktop config. The MCP server env only needs `MSSQL_DYNAMIC_MODE=true` — no database credentials in the JSON config.
 
 ## Security Features
 
