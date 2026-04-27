@@ -99,11 +99,13 @@ Check connection status and server configuration. No parameters.
 
 Execute SQL against the database. All queries use prepared statements.
 
+**Aliases:** run_sql, execute_sql, db_query, sql_execute, sql_query, run_query, exec_query
+
 **Parameters:**
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `query` | string | Yes | SQL query (prepared statement execution) |
+| `query` | string | Yes | SQL query (SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP) |
 
 **Annotations:** not read-only, not destructive, not idempotent
 
@@ -192,6 +194,27 @@ explain_query(query="SELECT p.*, c.Nombre FROM Pedidos p JOIN Clientes c ON p.Cl
 - Query is slow and you need to understand why
 - Before running a heavy query on production
 - To check if indexes are being used
+
+---
+
+## 7. `confirm_operation`
+
+Confirm a pending destructive operation (DROP, ALTER, CREATE TABLE on existing objects).
+
+**Parameters:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `token` | string | Yes | Token received from a destructive operation warning |
+
+**When to use:**
+- When `query_database` returns a destructive confirmation error
+- Token expires after 5 minutes
+
+**Example:**
+```
+confirm_operation(token="abc123...")
+```
 
 ---
 

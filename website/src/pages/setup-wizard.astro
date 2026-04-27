@@ -1,0 +1,1081 @@
+---
+// Setup Wizard - Interactive configuration generator
+---
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Wizard - MCP MSSQL</title>
+    <style>
+        :root {
+            --primary: #3B82F6;
+            --primary-dark: #1D4ED8;
+            --success: #10B981;
+            --warning: #F59E0B;
+            --danger: #EF4444;
+            --gray-50: #F9FAFB;
+            --gray-100: #F3F4F6;
+            --gray-200: #E5E7EB;
+            --gray-300: #D1D5DB;
+            --gray-400: #9CA3AF;
+            --gray-500: #6B7280;
+            --gray-600: #4B5563;
+            --gray-700: #374151;
+            --gray-800: #1F2937;
+            --gray-900: #111827;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--gray-900) 0%, var(--gray-800) 100%);
+            min-height: 100vh;
+            color: var(--gray-100);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--primary) 0%, #60A5FA 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: var(--gray-400);
+            font-size: 1.1rem;
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            margin-bottom: 3rem;
+        }
+
+        .progress-bar {
+            display: flex;
+            justify-content: space-between;
+            position: relative;
+        }
+
+        .progress-bar::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--gray-700);
+            transform: translateY(-50%);
+            z-index: 0;
+        }
+
+        .progress-line {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            height: 3px;
+            background: var(--primary);
+            transform: translateY(-50%);
+            z-index: 1;
+            transition: width 0.3s ease;
+        }
+
+        .step-indicator {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--gray-700);
+            border: 3px solid var(--gray-600);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            z-index: 2;
+            transition: all 0.3s ease;
+        }
+
+        .step-indicator.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+        }
+
+        .step-indicator.completed {
+            background: var(--success);
+            border-color: var(--success);
+        }
+
+        /* Cards */
+        .step-card {
+            background: var(--gray-800);
+            border-radius: 16px;
+            padding: 2rem;
+            border: 1px solid var(--gray-700);
+            display: none;
+        }
+
+        .step-card.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .step-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .step-number {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .step-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: var(--gray-300);
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 0.875rem 1rem;
+            border-radius: 8px;
+            border: 2px solid var(--gray-600);
+            background: var(--gray-700);
+            color: var(--gray-100);
+            font-size: 1rem;
+            transition: border-color 0.2s ease;
+        }
+
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        input::placeholder {
+            color: var(--gray-500);
+        }
+
+        /* Info Boxes */
+        .info-box {
+            background: var(--gray-700);
+            border-left: 4px solid var(--primary);
+            padding: 1rem 1.25rem;
+            border-radius: 0 8px 8px 0;
+            margin-bottom: 1.5rem;
+        }
+
+        .info-box.success {
+            border-color: var(--success);
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .info-box.warning {
+            border-color: var(--warning);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .info-box-title {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .info-box p {
+            color: var(--gray-300);
+            font-size: 0.95rem;
+        }
+
+        /* Choice Cards */
+        .choice-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .choice-card {
+            background: var(--gray-700);
+            border: 2px solid var(--gray-600);
+            border-radius: 12px;
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .choice-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+        }
+
+        .choice-card.selected {
+            border-color: var(--primary);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .choice-card input {
+            display: none;
+        }
+
+        .choice-title {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .choice-desc {
+            font-size: 0.85rem;
+            color: var(--gray-400);
+        }
+
+        /* Toggle */
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--gray-700);
+            padding: 1rem 1.25rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .toggle-label {
+            font-weight: 500;
+        }
+
+        .toggle-desc {
+            font-size: 0.85rem;
+            color: var(--gray-400);
+        }
+
+        .toggle {
+            position: relative;
+            width: 56px;
+            height: 28px;
+        }
+
+        .toggle input {
+            display: none;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: var(--gray-600);
+            border-radius: 28px;
+            transition: 0.2s;
+        }
+
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            left: 3px;
+            bottom: 3px;
+            background: white;
+            border-radius: 50%;
+            transition: 0.2s;
+        }
+
+        .toggle input:checked + .toggle-slider {
+            background: var(--primary);
+        }
+
+        .toggle input:checked + .toggle-slider::before {
+            transform: translateX(28px);
+        }
+
+        /* Buttons */
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .btn {
+            padding: 0.875rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: var(--gray-600);
+            color: var(--gray-100);
+        }
+
+        .btn-secondary:hover {
+            background: var(--gray-500);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Output */
+        .output-section {
+            margin-top: 2rem;
+        }
+
+        .output-box {
+            background: var(--gray-900);
+            border: 1px solid var(--gray-700);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .output-header {
+            background: var(--gray-800);
+            padding: 0.75rem 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .output-title {
+            font-weight: 600;
+            font-family: monospace;
+            color: var(--gray-300);
+        }
+
+        .copy-btn {
+            padding: 0.5rem 1rem;
+            background: var(--gray-700);
+            border: none;
+            border-radius: 6px;
+            color: var(--gray-200);
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+        }
+
+        .copy-btn:hover {
+            background: var(--primary);
+        }
+
+        .copy-btn.copied {
+            background: var(--success);
+        }
+
+        pre {
+            padding: 1rem;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: var(--gray-300);
+        }
+
+        /* Summary Table */
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .summary-table th,
+        .summary-table td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--gray-700);
+        }
+
+        .summary-table th {
+            color: var(--gray-400);
+            font-weight: 500;
+            width: 40%;
+        }
+
+        .summary-value {
+            font-weight: 600;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .badge-true {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+
+        .badge-false {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
+
+        .badge-warning {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        /* Security Matrix */
+        .security-matrix {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.75rem;
+            margin: 1.5rem 0;
+        }
+
+        .security-item {
+            background: var(--gray-700);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+        .security-icon {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .security-label {
+            font-size: 0.85rem;
+            color: var(--gray-400);
+        }
+
+        /* Responsive */
+        @media (max-width: 640px) {
+            .container {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.75rem;
+            }
+
+            .choice-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .security-matrix {
+                grid-template-columns: 1fr;
+            }
+
+            .btn-group {
+                flex-direction: column;
+            }
+
+            .btn {
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎛️ MCP MSSQL Setup Wizard</h1>
+            <p class="subtitle">Configura tu servidor MCP para SQL Server paso a paso</p>
+        </header>
+
+        <!-- Progress Bar -->
+        <div class="progress-container">
+            <div class="progress-bar">
+                <div class="progress-line" id="progressLine"></div>
+                <div class="step-indicator active" data-step="1">1</div>
+                <div class="step-indicator" data-step="2">2</div>
+                <div class="step-indicator" data-step="3">3</div>
+                <div class="step-indicator" data-step="4">4</div>
+                <div class="step-indicator" data-step="5">5</div>
+            </div>
+        </div>
+
+        <!-- Step 1: Connection -->
+        <div class="step-card active" id="step1">
+            <div class="step-header">
+                <div class="step-number">1</div>
+                <div class="step-title">Conexión a la Base de Datos</div>
+            </div>
+
+            <div class="form-group">
+                <label for="server">Servidor SQL</label>
+                <input type="text" id="server" placeholder="localhost o 192.168.1.100">
+            </div>
+
+            <div class="form-group">
+                <label for="port">Puerto</label>
+                <input type="number" id="port" value="1433" placeholder="1433">
+            </div>
+
+            <div class="form-group">
+                <label for="database">Base de Datos</label>
+                <input type="text" id="database" placeholder="MiBaseDeDatos">
+            </div>
+
+            <div class="form-group">
+                <label for="username">Usuario</label>
+                <input type="text" id="username" placeholder="sa">
+            </div>
+
+            <div class="form-group">
+                <label for="password">Contraseña</label>
+                <input type="password" id="password" placeholder="••••••••">
+            </div>
+
+            <div class="info-box">
+                <div class="info-box-title">💡 ¿Encrypt = disable?</div>
+                <p>Si tu SQL Server usa certificado self-signed o no tiene TLS, usa <code>encrypt=disable</code>. Para producción con certificados válidos, usa <code>encrypt=true</code>.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="encrypt">Modo de Conexión</label>
+                <select id="encrypt">
+                    <option value="disable">encrypt=disable (desarrollo local, self-signed)</option>
+                    <option value="true">encrypt=true (producción, certificados válidos)</option>
+                </select>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+            </div>
+        </div>
+
+        <!-- Step 2: Usage Type -->
+        <div class="step-card" id="step2">
+            <div class="step-header">
+                <div class="step-number">2</div>
+                <div class="step-title">¿Cómo usarás la Base de Datos?</div>
+            </div>
+
+            <div class="choice-grid">
+                <label class="choice-card" onclick="selectChoice('usage', 0)">
+                    <input type="radio" name="usage" value="dev">
+                    <div class="choice-title">🧪 Desarrollo</div>
+                    <div class="choice-desc">Experimentar, probar queries, sin riesgo</div>
+                </label>
+
+                <label class="choice-card" onclick="selectChoice('usage', 1)">
+                    <input type="radio" name="usage" value="readonly">
+                    <div class="choice-title">👁️ Solo Lectura</div>
+                    <div class="choice-desc">Consultar datos, nunca modificar</div>
+                </label>
+
+                <label class="choice-card" onclick="selectChoice('usage', 2)">
+                    <input type="radio" name="usage" value="limited">
+                    <div class="choice-title">🔒 Lectura + Escritura Limitada</div>
+                    <div class="choice-desc">AI modifica solo ciertas tablas</div>
+                </label>
+
+                <label class="choice-card" onclick="selectChoice('usage', 3)">
+                    <input type="radio" name="usage" value="full">
+                    <div class="choice-title">🔓 Acceso Total</div>
+                    <div class="choice-desc">AI puede hacer todo, máximo cuidado</div>
+                </label>
+            </div>
+
+            <div class="info-box warning">
+                <div class="info-box-title">⚠️ Recuerda</div>
+                <p>Todas las opciones mantienen SELECT habilitado en todas las tablas. La diferencia está en INSERT, UPDATE, DELETE y operaciones destructivas.</p>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+                <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+            </div>
+        </div>
+
+        <!-- Step 3: Security Options -->
+        <div class="step-card" id="step3">
+            <div class="step-header">
+                <div class="step-number">3</div>
+                <div class="step-title">Opciones de Seguridad</div>
+            </div>
+
+            <div class="info-box">
+                <div class="info-box-title">ℹ️ Modo Desarrollador</div>
+                <p>Muestra errores detallados y permite certificados TLS no válidos. Recomendado para desarrollo local.</p>
+            </div>
+            <div class="toggle-group">
+                <div>
+                    <div class="toggle-label">DEVELOPER_MODE</div>
+                    <div class="toggle-desc">Errores detallados + TLS laxo</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="developerMode" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="info-box">
+                <div class="info-box-title">🚀 Autopilot</div>
+                <p>Omite confirmación de operaciones destructivas y validación de esquema. Ideal para desarrollo sin interrupciones.</p>
+            </div>
+            <div class="toggle-group">
+                <div>
+                    <div class="toggle-label">MSSQL_AUTOPILOT</div>
+                    <div class="toggle-desc">Sin confirmaciones, sin validaciones</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="autopilot">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div id="whitelistSection" style="display: none;">
+                <div class="info-box">
+                    <div class="info-box-title">🔒 Whitelist de Tablas</div>
+                    <p>Solo las tablas listadas aquí podrán ser modificadas (INSERT/UPDATE/DELETE). Las demás solo aceptan SELECT.</p>
+                </div>
+                <div class="form-group">
+                    <label for="whitelistTables">Tablas permitidas (separadas por coma)</label>
+                    <input type="text" id="whitelistTables" placeholder="temp_ai,resultados,v_temp_ia">
+                </div>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+                <button class="btn btn-primary" onclick="nextStep()">Siguiente →</button>
+            </div>
+        </div>
+
+        <!-- Step 4: Summary -->
+        <div class="step-card" id="step4">
+            <div class="step-header">
+                <div class="step-number">4</div>
+                <div class="step-title">Resumen de tu Configuración</div>
+            </div>
+
+            <div class="info-box success">
+                <div class="info-box-title">✅ Configuración Generada</div>
+                <p>Revisa los valores abajo y copia el JSON para tu Claude Desktop.</p>
+            </div>
+
+            <table class="summary-table">
+                <tr>
+                    <th>Servidor</th>
+                    <td><span class="summary-value" id="sumServer">-</span>:<span id="sumPort">-</span></td>
+                </tr>
+                <tr>
+                    <th>Base de Datos</th>
+                    <td><span class="summary-value" id="sumDatabase">-</span></td>
+                </tr>
+                <tr>
+                    <th>Usuario</th>
+                    <td><span class="summary-value" id="sumUser">-</span></td>
+                </tr>
+                <tr>
+                    <th>Encrypt</th>
+                    <td><span class="summary-value" id="sumEncrypt">-</span></td>
+                </tr>
+                <tr>
+                    <th>DEVELOPER_MODE</th>
+                    <td><span class="badge" id="sumDevMode">-</span></td>
+                </tr>
+                <tr>
+                    <th>MSSQL_AUTOPILOT</th>
+                    <td><span class="badge" id="sumAutopilot">-</span></td>
+                </tr>
+                <tr>
+                    <th>Modo</th>
+                    <td><span class="summary-value" id="sumUsage">-</span></td>
+                </tr>
+            </table>
+
+            <div class="security-matrix">
+                <div class="security-item">
+                    <div class="security-icon">🔍</div>
+                    <div class="security-label">SELECT</div>
+                    <div>✅ Siempre</div>
+                </div>
+                <div class="security-item">
+                    <div class="security-icon">✏️</div>
+                    <div class="security-label">INSERT/UPDATE/DELETE</div>
+                    <div id="sumWriteAccess">-</div>
+                </div>
+                <div class="security-item">
+                    <div class="security-icon">⚠️</div>
+                    <div class="security-label">DROP/ALTER</div>
+                    <div id="sumDestructive">-</div>
+                </div>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="prevStep()">← Anterior</button>
+                <button class="btn btn-primary" onclick="nextStep()">Generar JSON →</button>
+            </div>
+        </div>
+
+        <!-- Step 5: Output -->
+        <div class="step-card" id="step5">
+            <div class="step-header">
+                <div class="step-number">5</div>
+                <div class="step-title">¡Configuración Lista!</div>
+            </div>
+
+            <div class="output-section">
+                <div class="output-box">
+                    <div class="output-header">
+                        <span class="output-title">Claude Desktop Config</span>
+                        <button class="copy-btn" onclick="copyToClipboard()">📋 Copiar</button>
+                    </div>
+                    <pre id="outputJson"></pre>
+                </div>
+            </div>
+
+            <div class="output-section">
+                <div class="output-box">
+                    <div class="output-header">
+                        <span class="output-title">Archivo .env</span>
+                        <button class="copy-btn" onclick="copyEnv()">📋 Copiar</button>
+                    </div>
+                    <pre id="outputEnv"></pre>
+                </div>
+            </div>
+
+            <div class="info-box success">
+                <div class="info-box-title">✅ Próximos Pasos</div>
+                <p>1. Copia la configuración de arriba<br>
+                   2. Pégala en tu Claude Desktop config<br>
+                   3. Reinicia Claude Desktop<br>
+                   4. ¡Listo!</p>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="prevStep()">← Volver</button>
+                <button class="btn btn-success" onclick="startOver()">🔄 Nueva Configuración</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 1;
+        const totalSteps = 5;
+        let selectedUsage = null;
+
+        function updateProgress() {
+            // Update line
+            const progressLine = document.getElementById('progressLine');
+            const progress = ((currentStep - 1) / (totalSteps - 1)) * 100;
+            progressLine.style.width = `calc(${progress}% - 20px)`;
+
+            // Update indicators
+            document.querySelectorAll('.step-indicator').forEach((ind, idx) => {
+                ind.classList.remove('active', 'completed');
+                if (idx + 1 < currentStep) {
+                    ind.classList.add('completed');
+                    ind.innerHTML = '✓';
+                } else if (idx + 1 === currentStep) {
+                    ind.classList.add('active');
+                    ind.innerHTML = idx + 1;
+                } else {
+                    ind.innerHTML = idx + 1;
+                }
+            });
+
+            // Show/hide cards
+            document.querySelectorAll('.step-card').forEach((card, idx) => {
+                card.classList.toggle('active', idx + 1 === currentStep);
+            });
+        }
+
+        function nextStep() {
+            if (currentStep < totalSteps) {
+                currentStep++;
+                if (currentStep === 4) updateSummary();
+                if (currentStep === 5) generateOutput();
+                updateProgress();
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 1) {
+                currentStep--;
+                updateProgress();
+            }
+        }
+
+        function selectChoice(group, index) {
+            document.querySelectorAll(`input[name="${group}"]`).forEach((input, idx) => {
+                input.checked = idx === index;
+                input.closest('.choice-card').classList.toggle('selected', idx === index);
+            });
+
+            const values = ['dev', 'readonly', 'limited', 'full'];
+            selectedUsage = values[index];
+
+            // Update whitelist visibility
+            const whitelistSection = document.getElementById('whitelistSection');
+            whitelistSection.style.display = selectedUsage === 'limited' ? 'block' : 'none';
+        }
+
+        function getConfig() {
+            const server = document.getElementById('server').value || 'localhost';
+            const port = document.getElementById('port').value || '1433';
+            const database = document.getElementById('database').value || 'MiDB';
+            const username = document.getElementById('username').value || 'sa';
+            const password = document.getElementById('password').value || '';
+            const encrypt = document.getElementById('encrypt').value;
+            const developerMode = document.getElementById('developerMode').checked;
+            const autopilot = document.getElementById('autopilot').checked;
+            const whitelistTables = document.getElementById('whitelistTables').value || '';
+
+            let readOnly = false;
+            let confirmDestructive = true;
+
+            switch (selectedUsage) {
+                case 'readonly':
+                    readOnly = true;
+                    break;
+                case 'limited':
+                    readOnly = false;
+                    confirmDestructive = !autopilot;
+                    break;
+                case 'full':
+                    readOnly = false;
+                    confirmDestructive = false;
+                    break;
+                case 'dev':
+                default:
+                    readOnly = false;
+                    confirmDestructive = !autopilot;
+                    break;
+            }
+
+            return {
+                server,
+                port,
+                database,
+                username,
+                password,
+                encrypt,
+                developerMode,
+                autopilot,
+                readOnly,
+                confirmDestructive,
+                whitelistTables,
+                usage: selectedUsage
+            };
+        }
+
+        function updateSummary() {
+            const cfg = getConfig();
+
+            document.getElementById('sumServer').textContent = cfg.server;
+            document.getElementById('sumPort').textContent = cfg.port;
+            document.getElementById('sumDatabase').textContent = cfg.database;
+            document.getElementById('sumUser').textContent = cfg.username;
+            document.getElementById('sumEncrypt').textContent = cfg.encrypt === 'disable' ? 'encrypt=disable' : 'encrypt=true';
+
+            const devBadge = document.getElementById('sumDevMode');
+            devBadge.textContent = cfg.developerMode ? 'true' : 'false';
+            devBadge.className = `badge ${cfg.developerMode ? 'badge-true' : 'badge-false'}`;
+
+            const autoBadge = document.getElementById('sumAutopilot');
+            autoBadge.textContent = cfg.autopilot ? 'true' : 'false';
+            autoBadge.className = `badge ${cfg.autopilot ? 'badge-true' : 'badge-false'}`;
+
+            const usageLabels = {
+                'dev': 'Desarrollo',
+                'readonly': 'Solo Lectura',
+                'limited': 'Lectura + Escritura Limitada',
+                'full': 'Acceso Total'
+            };
+            document.getElementById('sumUsage').textContent = usageLabels[cfg.usage] || '-';
+
+            // Write access
+            let writeAccess = '❌ Bloqueado';
+            if (cfg.readOnly) {
+                writeAccess = '❌ Bloqueado (READ_ONLY=true)';
+            } else if (cfg.whitelistTables) {
+                writeAccess = `✅ Solo en: ${cfg.whitelistTables}`;
+            } else {
+                writeAccess = '✅ Todas las tablas';
+            }
+            document.getElementById('sumWriteAccess').textContent = writeAccess;
+
+            // Destructive
+            let destructive = '⚠️ Requiere confirmar';
+            if (cfg.autopilot) {
+                destructive = '✅ Sin confirmar';
+            } else if (!cfg.confirmDestructive) {
+                destructive = '⚠️ Sin confirmar';
+            }
+            document.getElementById('sumDestructive').textContent = destructive;
+        }
+
+        function generateOutput() {
+            const cfg = getConfig();
+
+            const encryptParam = cfg.encrypt === 'disable'
+                ? 'encrypt=disable&trustservercertificate=true'
+                : 'encrypt=true';
+
+            const connectionString = `sqlserver://${cfg.username}:${cfg.password}@${cfg.server}:${cfg.port}?database=${cfg.database}&${encryptParam}`;
+
+            const env = {
+                'MSSQL_CONNECTION_STRING': connectionString,
+                'DEVELOPER_MODE': cfg.developerMode.toString(),
+                'MSSQL_READ_ONLY': cfg.readOnly.toString(),
+                'MSSQL_AUTOPILOT': cfg.autopilot.toString(),
+                'MSSQL_CONFIRM_DESTRUCTIVE': cfg.confirmDestructive.toString()
+            };
+
+            if (cfg.whitelistTables) {
+                env['MSSQL_WHITELIST_TABLES'] = cfg.whitelistTables;
+            }
+
+            // Generate JSON config
+            const configObj = {
+                [`mssql-${cfg.database}`]: {
+                    command: 'C:\\\\MCPs\\\\clone\\\\mcp-go-mssql\\\\build\\\\mcp-go-mssql.exe',
+                    args: [],
+                    env: {
+                        'MSSQL_CONNECTION_STRING': connectionString,
+                        'DEVELOPER_MODE': cfg.developerMode.toString()
+                    }
+                }
+            };
+
+            if (cfg.readOnly) {
+                configObj[`mssql-${cfg.database}`].env['MSSQL_READ_ONLY'] = 'true';
+            }
+
+            if (cfg.whitelistTables) {
+                configObj[`mssql-${cfg.database}`].env['MSSQL_WHITELIST_TABLES'] = cfg.whitelistTables;
+            }
+
+            if (cfg.autopilot) {
+                configObj[`mssql-${cfg.database}`].env['MSSQL_AUTOPILOT'] = 'true';
+            }
+
+            if (!cfg.confirmDestructive) {
+                configObj[`mssql-${cfg.database}`].env['MSSQL_CONFIRM_DESTRUCTIVE'] = 'false';
+            }
+
+            const jsonStr = JSON.stringify(configObj, null, 2);
+
+            // Generate .env
+            const envLines = Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n');
+
+            document.getElementById('outputJson').textContent = jsonStr;
+            document.getElementById('outputEnv').textContent = envLines;
+        }
+
+        function copyToClipboard() {
+            const text = document.getElementById('outputJson').textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = '✅ ¡Copiado!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = '📋 Copiar';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function copyEnv() {
+            const text = document.getElementById('outputEnv').textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.querySelectorAll('.copy-btn')[1];
+                btn.textContent = '✅ ¡Copiado!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = '📋 Copiar';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function startOver() {
+            currentStep = 1;
+            document.querySelectorAll('input').forEach(input => {
+                if (input.type === 'checkbox' || input.type === 'radio') {
+                    input.checked = input.type === 'checkbox' ? input.defaultChecked : false;
+                } else {
+                    input.value = input.defaultValue || '';
+                }
+            });
+            document.querySelectorAll('.choice-card').forEach(card => card.classList.remove('selected'));
+            selectedUsage = null;
+            document.getElementById('whitelistSection').style.display = 'none';
+            updateProgress();
+        }
+
+        // Initialize
+        updateProgress();
+    </script>
+</body>
+</html>

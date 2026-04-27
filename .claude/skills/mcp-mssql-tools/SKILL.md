@@ -23,6 +23,15 @@ description: >
 | Run any SQL (SELECT, INSERT, UPDATE, DELETE) | `query_database` | `query` |
 | Run a whitelisted stored procedure | `execute_procedure` | `procedure_name` |
 | Analyze query performance without executing | `explain_query` | `query` |
+| Confirm a destructive DDL operation | `confirm_operation` | `token` |
+
+## Aliases (alternative names the AI may use)
+
+- `query_database`: run_sql, execute_sql, db_query, sql_execute, sql_query, run_query, exec_query
+- `get_database_info`: server_info, db_status, db_info, connection_status
+- `explore`: list_tables, list_views, list_procedures, show_tables, show_views, db_explore, find_tables, search_tables
+- `inspect`: describe_table, table_structure, schema_info, show_columns, table_info, column_info, index_info
+- `explain_query`: show_plan, explain_plan, sql_explain, analyze_query, query_plan, plan_analysis
 
 ## Workflow: First Contact with a Database
 
@@ -45,4 +54,5 @@ For complete parameter reference, examples, and usage patterns see [tools-refere
 - **Read-only mode**: When `MSSQL_READ_ONLY=true`, only SELECT is allowed except on whitelisted tables
 - **Cross-database**: `MSSQL_ALLOWED_DATABASES` tables are always read-only
 - **Prepared statements**: All queries use parameterized execution — SQL injection is blocked at server level
-- **Schema validation**: The server validates that referenced tables exist before executing
+- **Schema validation**: The server validates that referenced tables exist before executing (skipped when `MSSQL_AUTOPILOT=true`)
+- **Destructive confirmation**: DDL operations (DROP, ALTER, CREATE TABLE) ALWAYS require `confirm_operation` — AUTOPILOT does NOT skip this

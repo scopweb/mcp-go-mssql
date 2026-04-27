@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP-Go-MSSQL Config Builder</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>MCP-Go-MSSQL</h1>
+            <p class="subtitle">Configurador del conector para Claude</p>
+        </header>
+
+        <main>
+            <!-- Connection Section -->
+            <section class="config-section">
+                <h2><span class="section-icon">&#128274;</span> Conexion</h2>
+
+                <div class="form-group">
+                    <label for="server">Servidor *</label>
+                    <input type="text" id="server" placeholder="localhost o servidor.database.windows.net">
+                </div>
+
+                <div class="form-group">
+                    <label for="database">Base de datos *</label>
+                    <input type="text" id="database" placeholder="MiBaseDeDatos">
+                    <p class="info-text">Nombre de la base de datos SQL Server a la que te conectaras.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="port">Puerto</label>
+                    <input type="text" id="port" value="1433" placeholder="1433">
+                    <p class="info-text">Por defecto 1433. Solo cambialo si tu SQL Server usa otro puerto.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="auth">Tipo de autenticacion</label>
+                    <select id="auth">
+                        <option value="sql">SQL Server (usuario y contrasena)</option>
+                        <option value="integrated">Windows Integrated (SSPI)</option>
+                        <option value="azure">Azure AD</option>
+                    </select>
+                    <p class="info-text">
+                        <strong>SQL:</strong> Usuario y contrasena tradicionales.
+                        <strong>Integrated:</strong> Usa tus credenciales de Windows (SSPI).
+                        <strong>Azure:</strong> Para Azure SQL Database con autenticacion de Azure Active Directory.
+                    </p>
+                </div>
+
+                <div id="sql-auth-fields">
+                    <div class="form-group">
+                        <label for="user">Usuario SQL *</label>
+                        <input type="text" id="user" placeholder="sa o usuario@servidor">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password">Contrasena SQL *</label>
+                        <input type="password" id="password" placeholder="Tu contrasena">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Mode Section -->
+            <section class="config-section">
+                <h2><span class="section-icon">&#9881;</span> Modo de operacion</h2>
+
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="developer-mode">
+                    <label for="developer-mode">DEVELOPER_MODE</label>
+                </div>
+                <p class="info-text">
+                    <strong>Desarrollo:</strong> Errores detallados, certificados auto-firmados permitidos, TLS opcional.
+                    <strong>Produccion:</strong> Errores genéricos al cliente, TLS obligatorio, certificates validados.
+                </p>
+
+                <div class="form-group checkbox-group" style="margin-top: 1rem;">
+                    <input type="checkbox" id="encrypt">
+                    <label for="encrypt">MSSQL_ENCRYPT</label>
+                </div>
+                <p class="info-text">
+                    <strong>Desarrollo:</strong> Puedes desactivar TLS para SQL Server 2008/2012 (no soportan TLS 1.2).
+                    <strong>Produccion:</strong> SIEMPRE activado. No se puede desactivar.
+                </p>
+
+                <div id="encrypt-warning" class="warning hidden">
+                    AVISO: MSSQL_ENCRYPT=false solo funciona con DEVELOPER_MODE=true
+                </div>
+            </section>
+
+            <!-- Security Section -->
+            <section class="config-section">
+                <h2><span class="section-icon">&#128274;</span> Seguridad</h2>
+
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="read-only" checked>
+                    <label for="read-only">MSSQL_READ_ONLY</label>
+                </div>
+                <p class="info-text">
+                    <strong>Activado:</strong> Solo SELECT permitido. Modificaciones (INSERT/UPDATE/DELETE/CREATE/DROP) bloqueadas excepto en tablas de la whitelist.
+                    <strong>Desactivado:</strong> Acceso completo a la base de datos.
+                </p>
+
+                <div class="form-group">
+                    <label for="whitelist">MSSQL_WHITELIST_TABLES</label>
+                    <input type="text" id="whitelist" placeholder="temp_ai, v_temp_ia, mi_vista">
+                    <p class="info-text">
+                        Tablas y vistas que pueden ser modificadas en modo solo lectura.
+                        Separadas por comas. Ejemplo: temp_ai, v_temp_ia, mi_vista
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="allowed-databases">MSSQL_ALLOWED_DATABASES</label>
+                    <input type="text" id="allowed-databases" placeholder="OtraBD1, OtraBD2">
+                    <p class="info-text">
+                        Otras bases de datos en el mismo servidor que puedes consultar.
+                        Habilita: SELECT * FROM OtraBD.dbo.Tabla
+                    </p>
+                </div>
+
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="confirm-destructive" checked>
+                    <label for="confirm-destructive">MSSQL_CONFIRM_DESTRUCTIVE</label>
+                </div>
+                <p class="info-text">
+                    <strong>Activado (default):</strong> Pide confirmacion antes de DROP TABLE, ALTER VIEW, TRUNCATE, etc. en objetos existentes.
+                    <strong>Desactivado:</strong> Ejecuta sin preguntar. Usa solo en CI/CD automatizado.
+                </p>
+            </section>
+
+            <!-- Autopilot Section -->
+            <section class="config-section highlight">
+                <h2><span class="section-icon">&#129302;</span> Modo Autopilot</h2>
+
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="autopilot">
+                    <label for="autopilot">MSSQL_AUTOPILOT</label>
+                </div>
+                <p class="info-text">
+                    Modo autonomo para desarrollo con IA. Omite confirmacion de operaciones destructivas Y validacion de schema.
+                    La whitelist sigue protegiendo. Ideal cuando la IA necesita operar sin interrupciones.
+                </p>
+
+                <div id="autopilot-info" class="info-box hidden">
+                    <strong>Autopilot activo:</strong>
+                    <ul>
+                        <li>Sin confirmacion para DDL destructivo</li>
+                        <li>Sin validacion de schema</li>
+                        <li>Whitelist sigue protegiendo</li>
+                    </ul>
+                </div>
+            </section>
+
+            <!-- Output Section -->
+            <section class="config-section output-section">
+                <h2><span class="section-icon">&#128203;</span> Configuracion Generated</h2>
+
+                <div class="form-group">
+                    <label for="config-name">Nombre del conector</label>
+                    <input type="text" id="config-name" value="mcp-go-mssql" placeholder="mi-conector">
+                </div>
+
+                <textarea id="output" readonly></textarea>
+
+                <div class="button-group">
+                    <button type="button" id="copy-btn" class="btn btn-primary">Copiar al portapapeles</button>
+                    <button type="button" id="download-btn" class="btn btn-secondary">Descargar .mcp.json</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>MCP-Go-MSSQL Configuration Builder | <a href="https://github.com/jotajotape/mcp-go-mssql">GitHub</a></p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
