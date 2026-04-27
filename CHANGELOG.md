@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Configuration — Decoupled SKIP_SCHEMA_VALIDATION flag
+
+- 🆕 **`MSSQL_SKIP_SCHEMA_VALIDATION` is now a real, independent flag** (default `false`). Until now it was documented but only its behavior was implemented (coupled to `MSSQL_AUTOPILOT`).
+- 🔁 **Effective skip rule**: schema validation is now skipped if `AUTOPILOT=true` **OR** `SKIP_SCHEMA_VALIDATION=true`. Existing `AUTOPILOT=true` configs keep working identically — no breakage.
+- 📝 **Doc fixes**: `CLAUDE.md` and `docs/config-visual.md` previously claimed `AUTOPILOT` skipped destructive confirmation. The code does the opposite (`AUTOPILOT does NOT skip destructive confirmation`). Docs now reflect the actual code behavior.
+
+### Cleanup — Connector and tool duplications removed
+
+- 🧹 **Deleted `pkg/connector/`**: was a stale fork of `claude-code/db-connector.go` (still contained the literal `// (rest of functions copied from original claude-code/db-connector.go)` marker). The canonical version in `claude-code/` had a small UX improvement (`(default/all available)` label for empty database) that `pkg/connector/` lacked. Nothing functional lost.
+- 🧹 **Deleted `tools/test/` and `tools/debug/`**: the relevant Windows Auth additions (`MSSQL_AUTH=integrated|windows` branch, `getEnvOrDefault` helper, integrated-auth connection-string variant in debug) were merged into `test/test-connection.go` and `debug/debug-connection.go` before deletion, so no functionality is lost. Documented paths in `CLAUDE.md`, `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/*`, and the public website are unchanged.
+- 📉 **Net result**: the same code now lives in one place. Future bugfixes (like the encryption-default fix tracked in this CHANGELOG, which previously had to be applied to three files) only need to be applied once.
+
 ### Security — Destructive Operation Confirmation
 
 - 🛡️ **Confirmation required for destructive DDL**: Operations that modify or destroy existing database objects (`ALTER VIEW`, `DROP TABLE`, `DROP VIEW`, `DROP PROCEDURE`, `DROP FUNCTION`, `ALTER TABLE`, `TRUNCATE TABLE`) now require explicit user confirmation before execution
@@ -16,11 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔒 **One-time use tokens**: Tokens are deleted after execution or expiration to prevent replay attacks
 - 🌐 **`MSSQL_CONFIRM_DESTRUCTIVE` env var**: Set to `"false"` to disable confirmation (for CI/CD automation)
 - 📊 **Security logging**: All destructive operation warnings and confirmations are logged via `secLogger.Printf`
-- 🚀 **`MSSQL_AUTOPILOT` mode**: New autonomous AI mode for development workflows
-  - Skips destructive DDL confirmation (ALTER VIEW, DROP TABLE, etc.)
+- 🚀 **`MSSQL_AUTOPILOT` mode**: Autonomous AI mode for development workflows
   - Skips schema validation (tables/views don't need to exist)
+  - Does NOT skip destructive DDL confirmation (ALTER VIEW, DROP TABLE, etc. still require `confirm_operation`)
   - Whitelist protection still active: only whitelisted tables can be modified
-  - Ideal when AI needs full autonomy within a limited, controlled scope
+  - Ideal when AI needs flexibility around schema checks within a controlled scope
   - Example: `MSSQL_AUTOPILOT=true` + `MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia`
 
 ### Security — AI-Powered Attack Hardening

@@ -50,7 +50,7 @@ MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
 
 **New variables:**
 - `MSSQL_CONFIRM_DESTRUCTIVE` (default: `true`) — Require confirmation for `ALTER VIEW`, `DROP TABLE`, etc. on existing objects
-- `MSSQL_AUTOPILOT` (default: `false`) — Autonomous mode: skip confirmation + skip schema validation. Whitelist still active
+- `MSSQL_AUTOPILOT` (default: `false`) — Autonomous mode: skips schema validation (does NOT skip destructive confirmation or READ_ONLY). Whitelist still active
 
 **New tool:** `confirm_operation` — Confirm pending destructive operations with token.
 

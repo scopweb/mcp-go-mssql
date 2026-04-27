@@ -256,6 +256,13 @@ func TestMCPVersionNegotiation(t *testing.T) {
 func TestMCPToolsList(t *testing.T) {
 	setupTestEnv()
 
+	// Simulate Claude Desktop config: MSSQL_SERVER set → direct mode, dynamic tools NOT registered
+	t.Setenv("MSSQL_SERVER", "testserver")
+	t.Setenv("MSSQL_DATABASE", "testdb")
+	t.Setenv("MSSQL_USER", "testuser")
+	t.Setenv("MSSQL_PASSWORD", "testpass")
+	t.Setenv("MSSQL_AUTH", "sql")
+
 	server := newTestMCPServer()
 
 	req := MCPRequest{
@@ -285,8 +292,9 @@ func TestMCPToolsList(t *testing.T) {
 		t.Fatalf("Failed to unmarshal tools result: %v", err)
 	}
 
+	// Direct mode (MSSQL_SERVER set): only 7 core tools — no dynamic_* tools
 	expectedTools := []string{
-		"query_database", "get_database_info", "explore", "inspect", "execute_procedure", "explain_query", "confirm_operation", "dynamic_connect", "dynamic_list", "dynamic_disconnect",
+		"query_database", "get_database_info", "explore", "inspect", "execute_procedure", "explain_query", "confirm_operation",
 	}
 	if len(toolsResult.Tools) != len(expectedTools) {
 		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(toolsResult.Tools))

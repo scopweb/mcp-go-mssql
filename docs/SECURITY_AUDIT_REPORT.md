@@ -32,8 +32,7 @@ No vulnerabilities found.
 **Status:** ✅ **PASSED**
 
 **Summary:**
-- **Files Analyzed:** 7
-- **Lines of Code:** 2,364
+- **Files Analyzed:** 4
 - **Issues Found:** 0
 - **Severity Level:** N/A (No issues)
 
@@ -42,9 +41,8 @@ No vulnerabilities found.
 2. `/claude-code/db-connector.go` - Claude Code CLI tool
 3. `/test/test-connection.go` - Connection testing utility
 4. `/debug/debug-connection.go` - Debug utilities
-5. `/tools/debug/debug-connection.go` - Additional debug tools
-6. `/tools/test/test-connection.go` - Additional test utilities
-7. `/pkg/connector/db-connector.go` - Database connector package
+
+> **Note (post-consolidation):** Previous audits also covered `/pkg/connector/db-connector.go`, `/tools/debug/debug-connection.go` and `/tools/test/test-connection.go`. Those files were duplicates of the canonical ones above and have been removed; their relevant Windows Auth improvements were merged into `/test/` and `/debug/`. See CHANGELOG for the consolidation entry.
 
 **What it checks:**
 - SQL injection vulnerabilities

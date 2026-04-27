@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [master]
+
+# Cancel any in-progress runs of this workflow on the same ref. Saves CI minutes
+# when several pushes land in quick succession.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          # Pin to a specific v2 release. Required because .golangci.yml uses
+          # the v2 schema (`version: "2"`) which v1.x cannot parse. Bump with
+          # intent — newer minors can change default linter behavior.
+          version: v2.0.2
+          # Config lives at .golangci.yml in the repo root.
+          # only-new-issues=true makes the linter blocking only for code
+          # introduced in the PR; preexisting findings in main.go don't fail
+          # CI. Switch to false once the codebase has been cleaned up.
+          only-new-issues: true
+
+  test:
+    name: Test (race + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Go mod tidy check
+        run: |
+          # Fail if go.mod or go.sum would change after `go mod tidy`. This
+          # catches unintended dependency drift in PRs.
+          go mod tidy
+          git diff --exit-code go.mod go.sum || (
+            echo "::error::go.mod / go.sum are not tidy. Run 'go mod tidy' locally and commit the result." && exit 1
+          )
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run tests with race detector and coverage
+        # -race catches data races in pendingOps / dbMu / dynamic connections.
+        # -coverprofile produces a profile we upload as an artifact for inspection.
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Coverage summary
+        run: |
+          go tool cover -func=coverage.out | tail -n 20
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  security:
+    name: Security (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        # Limit to the main module — the mssql driver's winsspi package is
+        # Windows-only and breaks on linux runners when scanning ./...
+        run: govulncheck .

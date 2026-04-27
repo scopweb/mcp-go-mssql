@@ -6,26 +6,37 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
 )
 
-func main() {
-	// Test connection parameters from environment variables
-	server := os.Getenv("MSSQL_SERVER")
-	database := os.Getenv("MSSQL_DATABASE")
-	user := os.Getenv("MSSQL_USER")
-	password := os.Getenv("MSSQL_PASSWORD")
-	port := os.Getenv("MSSQL_PORT")
-	
-	// Check required environment variables
-	if server == "" || database == "" || user == "" || password == "" {
-		log.Fatal("Missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE, MSSQL_USER, MSSQL_PASSWORD")
+// Helper function to get env variable or default value
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
-	
-	if port == "" {
-		port = "1433"
+	return defaultValue
+}
+
+func main() {
+	// Load from .env file or environment variables
+	server := getEnvOrDefault("MSSQL_SERVER", "localhost")
+	database := getEnvOrDefault("MSSQL_DATABASE", "master")
+	user := getEnvOrDefault("MSSQL_USER", "sa")
+	password := getEnvOrDefault("MSSQL_PASSWORD", "")
+	auth := strings.ToLower(getEnvOrDefault("MSSQL_AUTH", "sql"))
+	port := getEnvOrDefault("MSSQL_PORT", "1433")
+
+	// Check required environment variables based on auth mode
+	if server == "" || database == "" {
+		log.Fatal("Missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE")
+	}
+	if auth == "sql" {
+		if user == "" || password == "" {
+			log.Fatal("Missing required environment variables for SQL auth: MSSQL_USER, MSSQL_PASSWORD")
+		}
 	}
 
 	// Build connection string with appropriate certificate trust setting
@@ -33,9 +44,15 @@ func main() {
 	if os.Getenv("DEVELOPER_MODE") == "true" {
 		trustCert = "true"
 	}
-	
-	connStr := fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=true;trustservercertificate=%s;connection timeout=30;command timeout=30",
-		server, database, user, password, port, trustCert)
+
+	var connStr string
+	if auth == "integrated" || auth == "windows" {
+		connStr = fmt.Sprintf("server=%s;database=%s;port=%s;encrypt=true;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
+			server, database, port, trustCert)
+	} else {
+		connStr = fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=true;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			server, database, user, password, port, trustCert)
+	}
 
 	fmt.Printf("Testing connection to: %s:%s\n", server, port)
 	fmt.Printf("Database: %s\n", database)

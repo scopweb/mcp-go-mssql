@@ -52,4 +52,6 @@ This project implements multiple security layers:
 - Security event logging with credential sanitization
 - Input validation and SQL injection protection
 
-For details, see [docs/SECURITY_ANALYSIS.md](docs/SECURITY_ANALYSIS.md).
+For configuration details (which flag controls which protection, and what is **always** enforced regardless of flags), see **[docs/CONFIG_MATRIX.md](docs/CONFIG_MATRIX.md)** — this is the canonical reference and matches the code line-by-line.
+
+For broader analysis, see [docs/SECURITY_ANALYSIS.md](docs/SECURITY_ANALYSIS.md).

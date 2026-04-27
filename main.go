@@ -776,6 +776,7 @@ type serverConfig struct {
 	allowedDatabases    []string // additional databases this connector can query (cross-database)
 	confirmDestructive  bool     // require confirmation for destructive DDL operations
 	autopilot bool     // skip schema validation for autonomous operation (destructive confirmation still enforced)
+	skipSchemaValidation bool    // skip schema validation independently of autopilot (effective skip = autopilot OR skipSchemaValidation)
 }
 
 // pendingOperation represents a destructive operation awaiting user confirmation.
@@ -803,9 +804,10 @@ type ConnectionInfo struct {
 	User      string
 	CreatedAt time.Time
 	// Per-connection security config
-	readOnly          bool
-	whitelistTables   []string
-	autopilot         bool
+	readOnly             bool
+	whitelistTables      []string
+	autopilot            bool
+	skipSchemaValidation bool
 }
 
 // MSSQL Server
@@ -2514,9 +2516,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 		// Best-effort schema validation: check that referenced tables exist.
 		// If INFORMATION_SCHEMA is not accessible (permissions), validation is silently skipped.
-		// Skipped in autopilot mode only.
-		s.secLogger.Printf("SCHEMA_VALIDATION: autopilot=%v", s.config.autopilot)
-		if !s.config.autopilot {
+		// Skipped when AUTOPILOT or SKIP_SCHEMA_VALIDATION is enabled (effective skip = autopilot OR skipSchemaValidation).
+		s.secLogger.Printf("SCHEMA_VALIDATION: autopilot=%v skip_schema_validation=%v", s.config.autopilot, s.config.skipSchemaValidation)
+		if !s.config.autopilot && !s.config.skipSchemaValidation {
 			if validationErr := s.validateTablesExist(ctx, query); validationErr != nil {
 				return &MCPResponse{
 					JSONRPC: "2.0",
@@ -3733,8 +3735,9 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			Database:  database,
 			User:      user,
 			CreatedAt: time.Now(),
-			readOnly:  strings.ToLower(os.Getenv(prefix+"READ_ONLY")) == "true",
-			autopilot: strings.ToLower(os.Getenv(prefix+"AUTOPILOT")) == "true",
+			readOnly:             strings.ToLower(os.Getenv(prefix+"READ_ONLY")) == "true",
+			autopilot:            strings.ToLower(os.Getenv(prefix+"AUTOPILOT")) == "true",
+			skipSchemaValidation: strings.ToLower(os.Getenv(prefix+"SKIP_SCHEMA_VALIDATION")) == "true",
 		}
 		if wl := os.Getenv(prefix + "WHITELIST_TABLES"); wl != "" {
 			connInfo.whitelistTables = parseWhitelistTables(wl)
@@ -4355,12 +4358,13 @@ func main() {
 
 	// Cache configuration once at startup (avoid os.Getenv on every request)
 	cfg := serverConfig{
-		readOnly:          strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
-		whitelistTables:   parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
-		whitelistProcs:    os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
-		allowedDatabases:   parseAllowedDatabases(os.Getenv("MSSQL_ALLOWED_DATABASES")),
-		confirmDestructive: strings.ToLower(os.Getenv("MSSQL_CONFIRM_DESTRUCTIVE")) != "false", // default true
-		autopilot:         strings.ToLower(os.Getenv("MSSQL_AUTOPILOT")) == "true",
+		readOnly:             strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
+		whitelistTables:      parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
+		whitelistProcs:       os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
+		allowedDatabases:     parseAllowedDatabases(os.Getenv("MSSQL_ALLOWED_DATABASES")),
+		confirmDestructive:   strings.ToLower(os.Getenv("MSSQL_CONFIRM_DESTRUCTIVE")) != "false", // default true
+		autopilot:            strings.ToLower(os.Getenv("MSSQL_AUTOPILOT")) == "true",
+		skipSchemaValidation: strings.ToLower(os.Getenv("MSSQL_SKIP_SCHEMA_VALIDATION")) == "true",
 	}
 
 	// Dynamic multi-connection mode configuration
@@ -4390,6 +4394,7 @@ func main() {
 	secLogger.Printf("=== SERVER CONFIGURATION ===")
 	secLogger.Printf("DEVELOPER_MODE=%v", devMode)
 	secLogger.Printf("AUTOPILOT=%v (skips schema validation; destructive confirmation always enforced)", cfg.autopilot)
+	secLogger.Printf("SKIP_SCHEMA_VALIDATION=%v (independent flag; effective skip = AUTOPILOT OR SKIP_SCHEMA_VALIDATION)", cfg.skipSchemaValidation)
 	secLogger.Printf("CONFIRM_DESTRUCTIVE=%v", cfg.confirmDestructive)
 	secLogger.Printf("READ_ONLY=%v", cfg.readOnly)
 	wl := strings.Join(cfg.whitelistTables, ",")

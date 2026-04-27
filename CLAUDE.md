@@ -136,15 +136,16 @@ The server reads database connection from these environment variables. See `.env
   - `"true"`: DDL operations on existing objects (ALTER VIEW, DROP TABLE, etc.) require confirmation via `confirm_operation` tool
   - `"false"`: No confirmation required (for CI/CD automation)
 - `MSSQL_AUTOPILOT`: Enable autonomous AI mode (default: false)
-  - `"true"`: Skip destructive confirmation AND schema validation — AI operates without interruptions
-  - Whitelist protection still applies: only whitelisted tables can be modified
-  - Ideal for development with AI assistants that need full autonomy within a limited scope
+  - `"true"`: Skip schema validation — AI can run queries against tables that don't exist without being interrupted
+  - Does NOT skip destructive confirmation: DDL on existing objects still requires `confirm_operation`
+  - Does NOT skip whitelist protection: only whitelisted tables can be modified
+  - Ideal for development with AI assistants that need flexibility around schema checks
   - Combines with `MSSQL_WHITELIST_TABLES` to delimit the AI's operational scope
 - `MSSQL_SKIP_SCHEMA_VALIDATION`: Skip table existence validation (default: false)
   - `"true"`: Disables validation that tables referenced in queries actually exist
-  - Useful when AI needs flexibility to query non-existent tables (development mode)
+  - Independent flag — effective skip is `AUTOPILOT OR SKIP_SCHEMA_VALIDATION`
+  - Useful when you want to disable schema checks without enabling other AUTOPILOT semantics (currently AUTOPILOT only governs schema validation, but this flag stays decoupled in case AUTOPILOT grows)
   - Does NOT skip whitelist protection or destructive operation confirmation
-  - Simpler than AUTOPILOT when you only need to disable schema checks
 - `MSSQL_DYNAMIC_MODE`: Enable dynamic multi-database connections (default: false)
   - `"true"`: Enables runtime database connections via `dynamic_connect` tool
   - Allows connecting to multiple databases from a single MCP server instance
