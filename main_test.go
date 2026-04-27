@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,35 +11,6 @@ import (
 
 	_ "github.com/microsoft/go-mssqldb"
 )
-
-// loadEnvFile loads environment variables from a file if it exists
-func loadEnvFile(filePath string) error {
-	file, err := os.Open(filePath) // #nosec G304 - paths are hardcoded test fixtures
-	if err != nil {
-		// File doesn't exist, which is ok - environment vars may be set elsewhere
-		return nil
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Parse KEY=VALUE format
-		if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			// Only set if not already set
-			if os.Getenv(key) == "" {
-				os.Setenv(key, value)
-			}
-		}
-	}
-	return scanner.Err()
-}
 
 // Test configuration
 // SECURITY: Do NOT hardcode credentials here. Tests must load from .env.test

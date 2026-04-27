@@ -15,7 +15,7 @@ Cuando `MSSQL_DYNAMIC_MODE=true` está habilitado, el servidor puede conectar a 
 - `MSSQL_DYNAMIC_MODE` (default: `false`) — Habilita conexiones dinámicas
 - `MSSQL_DYNAMIC_MAX_CONNECTIONS` (default: `10`) — Máximo de conexiones activas
 
-**Nuevas herramientas:** `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
+**Nuevas herramientas:** `dynamic_available`, `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
 
 **Configuración de conexiones (`.env`):**
 ```bash
@@ -35,6 +35,12 @@ MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
 {"MSSQL_DYNAMIC_MODE": "true"}
 ```
 (sin credenciales en el JSON)
+
+**Arquitectura dual:**
+- `MSSQL_SERVER` configurado → modo conexión directa (legacy), `.env` NO se carga, sin herramientas dinámicas
+- `MSSQL_SERVER` no configurado → carga `.env`, habilita herramientas dinámicas si `MSSQL_DYNAMIC_MODE=true`
+
+**`dynamic_available`** lee `.env` directamente para descubrir aliases disponibles
 
 ---
 

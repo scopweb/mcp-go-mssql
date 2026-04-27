@@ -38,6 +38,37 @@ type MCPResponse struct {
 	Error   *MCPError   `json:"error,omitempty"`
 }
 
+// loadEnvFile reads a .env file and sets environment variables from KEY=VALUE lines.
+// Empty lines and lines starting with # are skipped.
+// Only sets variables that are not already set (existing env vars take precedence).
+func loadEnvFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		// File doesn't exist - that's ok, env vars may be set elsewhere
+		return nil
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Parse KEY=VALUE format
+		if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			// Only set if not already set
+			if os.Getenv(key) == "" {
+				os.Setenv(key, value)
+			}
+		}
+	}
+	return scanner.Err()
+}
+
 type MCPError struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
@@ -3765,6 +3796,77 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			},
 		}
 
+	case "dynamic_available":
+		// List all pre-configured connections from .env file directly (without connecting)
+		// This helps the AI discover what aliases are available without exposing credentials
+		var info strings.Builder
+		found := false
+		info.WriteString("Available dynamic connections (use dynamic_connect to activate):\n")
+
+		// Read .env file directly to discover configured aliases
+		envFile, err := os.Open(".env")
+		if err == nil {
+			defer envFile.Close()
+			scanner := bufio.NewScanner(envFile)
+			knownAliases := make(map[string]bool)
+			for scanner.Scan() {
+				line := scanner.Text()
+				// Parse KEY=VALUE lines
+				if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+					key := strings.TrimSpace(parts[0])
+					value := strings.TrimSpace(parts[1])
+					// Track which aliases have SERVER defined
+					if strings.HasPrefix(key, "MSSQL_DYNAMIC_") && strings.HasSuffix(key, "_SERVER") && value != "" {
+						alias := strings.TrimPrefix(strings.TrimSuffix(key, "_SERVER"), "MSSQL_DYNAMIC_")
+						knownAliases[alias] = true
+					}
+				}
+			}
+			// Now output aliases that have SERVER configured
+			for alias := range knownAliases {
+				dbName := ""
+				serverVal := ""
+				// Re-scan to get DATABASE for this alias (we need to store it from scan above)
+				envFile.Seek(0, 0)
+				scanner := bufio.NewScanner(envFile)
+				for scanner.Scan() {
+					line := scanner.Text()
+					if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+						key := strings.TrimSpace(parts[0])
+						value := strings.TrimSpace(parts[1])
+						if key == "MSSQL_DYNAMIC_"+alias+"_DATABASE" {
+							dbName = value
+						}
+						if key == "MSSQL_DYNAMIC_"+alias+"_SERVER" {
+							serverVal = value
+						}
+					}
+				}
+				if serverVal != "" {
+					info.WriteString(fmt.Sprintf("- %s (%s/%s)\n", alias, serverVal, dbName))
+					found = true
+				}
+			}
+		}
+
+		if !found {
+			info.WriteString("No dynamic connections configured. Add MSSQL_DYNAMIC_<ALIAS>_SERVER to .env")
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type:        "text",
+						Text:        info.String(),
+						Annotations: annBothQuery,
+					},
+				},
+			},
+		}
+
 	case "dynamic_disconnect":
 		alias, ok := params.Arguments["alias"].(string)
 		if !ok || alias == "" {
@@ -4095,43 +4197,23 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					OpenWorldHint:   boolPtr(false),
 				},
 			},
-			{
+		}
+
+		// Append dynamic tools only when dynamic mode is enabled
+		if s.dynamicMode {
+			tools = append(tools, Tool{
 				Name:        "dynamic_connect",
 				Title:       "Dynamic Connect",
-				Description: "Establish a named database connection for multi-database mode. Use this to connect to additional databases beyond the default connection. Aliases: connect_db, db_connect. Requires MSSQL_DYNAMIC_MODE=true.",
+				Description: "Activate a pre-configured dynamic database connection. Credentials are read from .env (MSSQL_DYNAMIC_<ALIAS>_* vars). Use dynamic_list to see available connections. Requires MSSQL_DYNAMIC_MODE=true.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"alias": {
 							Type:        "string",
-							Description: "Name for this connection (used in queries with connection parameter)",
-						},
-						"server": {
-							Type:        "string",
-							Description: "SQL Server hostname or IP address",
-						},
-						"database": {
-							Type:        "string",
-							Description: "Database name",
-						},
-						"user": {
-							Type:        "string",
-							Description: "Username for SQL Server authentication",
-						},
-						"password": {
-							Type:        "string",
-							Description: "Password for SQL Server authentication",
-						},
-						"port": {
-							Type:        "integer",
-							Description: "SQL Server port (default: 1433)",
-						},
-						"encrypt": {
-							Type:        "boolean",
-							Description: "Enable TLS encryption (default: true in prod, false in dev)",
+							Description: "Connection alias from .env configuration (e.g., 'identity', 'ferratge')",
 						},
 					},
-					Required: []string{"alias", "server", "database", "user", "password"},
+					Required: []string{"alias"},
 				},
 				Annotations: &ToolAnnotations{
 					ReadOnlyHint:    boolPtr(false),
@@ -4139,11 +4221,10 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					IdempotentHint:  boolPtr(true),
 					OpenWorldHint:   boolPtr(false),
 				},
-			},
-			{
+			}, Tool{
 				Name:        "dynamic_list",
 				Title:       "Dynamic List Connections",
-				Description: "List all active dynamic database connections. Shows alias, server, database, and connection age. Aliases: list_connections, list_conns, connections.",
+				Description: "List all active (connected) dynamic database connections. Use dynamic_available to see all configured connections.",
 				InputSchema: InputSchema{
 					Type:       "object",
 					Properties: map[string]Property{},
@@ -4155,8 +4236,22 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					IdempotentHint:  boolPtr(true),
 					OpenWorldHint:   boolPtr(false),
 				},
-			},
-			{
+			}, Tool{
+				Name:        "dynamic_available",
+				Title:       "Dynamic Available Connections",
+				Description: "List all pre-configured dynamic connections available in .env. Use this first to discover which aliases you can connect with via dynamic_connect.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+					Required:   []string{},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(true),
+					DestructiveHint: boolPtr(false),
+					IdempotentHint:  boolPtr(true),
+					OpenWorldHint:   boolPtr(false),
+				},
+			}, Tool{
 				Name:        "dynamic_disconnect",
 				Title:       "Dynamic Disconnect",
 				Description: "Close a named dynamic database connection. Aliases: disconnect_db, db_disconnect.",
@@ -4176,7 +4271,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					IdempotentHint:  boolPtr(false),
 					OpenWorldHint:   boolPtr(false),
 				},
-			},
+			})
 		}
 
 		return &MCPResponse{
@@ -4241,6 +4336,13 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 }
 
 func main() {
+	// Load .env file ONLY if no direct server is configured via environment variables
+	// If MSSQL_SERVER or MSSQL_CONNECTION_STRING is set (e.g., from Claude Desktop JSON config), skip .env entirely
+	// This allows two modes: direct connection (MSSQL_SERVER/MSSQL_CONNECTION_STRING set) vs dynamic multi-connection (.env)
+	if os.Getenv("MSSQL_SERVER") == "" && os.Getenv("MSSQL_CONNECTION_STRING") == "" {
+		loadEnvFile(".env")
+	}
+
 	// Initialize security logger
 	secLogger := NewSecurityLogger()
 	secLogger.Printf("Starting secure MCP-MSSQL server")
@@ -4262,7 +4364,9 @@ func main() {
 	}
 
 	// Dynamic multi-connection mode configuration
-	dynamicMode := strings.ToLower(os.Getenv("MSSQL_DYNAMIC_MODE")) == "true"
+	// Only enable if no direct server is configured (MSSQL_SERVER not set)
+	// AND MSSQL_DYNAMIC_MODE=true
+	dynamicMode := os.Getenv("MSSQL_SERVER") == "" && strings.ToLower(os.Getenv("MSSQL_DYNAMIC_MODE")) == "true"
 	maxDynamicConns := 10
 	if envMax := os.Getenv("MSSQL_DYNAMIC_MAX_CONNECTIONS"); envMax != "" {
 		if parsed, err := strconv.Atoi(envMax); err == nil && parsed > 0 {

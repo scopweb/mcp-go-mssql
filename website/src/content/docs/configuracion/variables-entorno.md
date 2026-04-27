@@ -133,9 +133,19 @@ Cada conexión dinámica puede tener su propia configuración de seguridad:
 
 ### Herramientas disponibles
 
+- `dynamic_available` — Descubrir alias disponibles (lee `.env` directamente)
 - `dynamic_connect` — Activar una conexión por alias (sin credenciales en params)
 - `dynamic_list` — Listar conexiones activas (muestra alias, server, BD — sin passwords)
 - `dynamic_disconnect` — Cerrar una conexión dinámica
+
+### Arquitectura dual
+
+El servidor detecta automáticamente el modo según si `MSSQL_SERVER` está configurado:
+
+| Config JSON | .env | Herramientas dinámicas |
+|-------------|------|----------------------|
+| `{MSSQL_SERVER: "...", ...}` | ❌ no carga | ❌ no disponibles |
+| `{}` o solo `MSSQL_DYNAMIC_MODE=true` | ✅ carga | ✅ si `MSSQL_DYNAMIC_MODE=true` |
 
 ### Ejemplo de uso
 

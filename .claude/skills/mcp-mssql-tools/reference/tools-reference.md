@@ -251,3 +251,123 @@ query_database(query="CREATE TABLE temp_ai (...)")
 query_database(query="INSERT INTO temp_ai SELECT ... FROM SourceTable")
 query_database(query="SELECT * FROM temp_ai") → verify results
 ```
+
+---
+
+## 11. `dynamic_available`
+
+Discover pre-configured dynamic connections from `.env` (without connecting).
+
+**Parameters:** none
+
+**Annotations:** read-only, non-destructive, idempotent
+
+**Examples:**
+
+```
+# List all configured aliases (no credentials shown)
+dynamic_available()
+```
+
+**Notes:**
+- Reads `.env` directly, not from environment variables
+- Shows: alias, server, database — NO passwords or users
+- Only available when `MSSQL_DYNAMIC_MODE=true` and `MSSQL_SERVER` is not set
+
+---
+
+## 12. `dynamic_connect`
+
+Activate a pre-configured dynamic database connection.
+
+**Parameters:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `alias` | string | Yes | Connection alias from `.env` (e.g., `ferratge`, `identity`) |
+
+**Annotations:** non-destructive, idempotent (reconnecting overwrites existing)
+
+**Examples:**
+
+```
+# Connect to a dynamic database
+dynamic_connect(alias="ferratge")
+```
+
+**Notes:**
+- Credentials come from `.env` (MSSQL_DYNAMIC_<ALIAS>_*)
+- Connection inherits security config: READ_ONLY, WHITELIST_TABLES, AUTOPILOT
+- If already connected, replaces the existing connection
+
+---
+
+## 13. `dynamic_list`
+
+List all active (connected) dynamic database connections.
+
+**Parameters:** none
+
+**Annotations:** read-only, non-destructive, idempotent
+
+**Examples:**
+
+```
+# List active connections
+dynamic_list()
+```
+
+**Response example:**
+```
+Active dynamic connections:
+- ferratge (SQL01/JJP_Ferratge_DEV) - connected 5m ago
+- identity (10.203.3.11/JJP_CRM_IDENTITY) - connected 1h ago
+```
+
+---
+
+## 14. `dynamic_disconnect`
+
+Close an active dynamic database connection.
+
+**Parameters:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `alias` | string | Yes | Connection alias to close |
+
+**Annotations:** non-destructive, idempotent (closing non-existent is no-op)
+
+**Examples:**
+
+```
+# Close a connection
+dynamic_disconnect(alias="ferratge")
+```
+
+---
+
+## 15. `query_database` with `connection` param
+
+When a dynamic connection is active, target it with the `connection` parameter.
+
+**Additional Parameter:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `connection` | string | No | Dynamic connection alias to use instead of default |
+
+**Examples:**
+
+```
+# Query using the default connection (from env vars)
+query_database(query="SELECT TOP 10 * FROM customers")
+
+# Query using a dynamic connection
+query_database(query="SELECT TOP 10 * FROM orders", connection="ferratge")
+```
+
+**Notes:**
+- If `connection` is omitted, uses the default connection from environment variables
+- Security validations (whitelist, read-only) apply per the dynamic connection's config
+- Cross-database queries blocked for dynamic connections (same as primary)

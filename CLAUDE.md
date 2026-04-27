@@ -148,10 +148,11 @@ The server reads database connection from these environment variables. See `.env
 - `MSSQL_DYNAMIC_MODE`: Enable dynamic multi-database connections (default: false)
   - `"true"`: Enables runtime database connections via `dynamic_connect` tool
   - Allows connecting to multiple databases from a single MCP server instance
-  - Tools: `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
+  - Tools: `dynamic_available`, `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
   - In `query_database`, use parameter `connection=<alias>` to query a specific dynamic connection
   - If not specified, queries use the default database connection from environment variables
   - `MSSQL_DYNAMIC_MAX_CONNECTIONS`: Maximum number of dynamic connections (default: 10)
+  - **Dual-mode architecture**: If `MSSQL_SERVER` is set (from Claude Desktop JSON config), the server works in direct mode without loading `.env` or registering dynamic tools. If `MSSQL_SERVER` is not set, it loads `.env` and enables dynamic tools if `MSSQL_DYNAMIC_MODE=true`
 
 **Configuration Examples:**
 ```bash

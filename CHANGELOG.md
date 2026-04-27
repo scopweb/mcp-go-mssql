@@ -57,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔌 **Dynamic Multi-Connection Mode (`MSSQL_DYNAMIC_MODE`)**:
   - New optional mode allows connecting to multiple databases from a single MCP server instance
   - Environment variables: `MSSQL_DYNAMIC_MODE=true` (default: false), `MSSQL_DYNAMIC_MAX_CONNECTIONS=10`
-  - Three new tools: `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
+  - Four new tools: `dynamic_available`, `dynamic_connect`, `dynamic_list`, `dynamic_disconnect`
   - `query_database` gains optional `connection` parameter to specify which dynamic connection to use
   - **Security-first design**: All credentials stored in `.env` with prefix `MSSQL_DYNAMIC_<ALIAS>_`
   - AI only sees connection aliases (server/database names) — NO passwords or users exposed
@@ -70,6 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
     ```
   - Claude Desktop config needs only `MSSQL_DYNAMIC_MODE=true` — no credentials in JSON
+  - **Dual-mode architecture**: Server auto-detects mode based on whether `MSSQL_SERVER` is set:
+    - `MSSQL_SERVER` set → direct connection mode (legacy), `.env` NOT loaded, no dynamic tools
+    - `MSSQL_SERVER` not set → loads `.env`, enables dynamic tools if `MSSQL_DYNAMIC_MODE=true`
+  - `dynamic_available` reads `.env` directly (not from `os.Environ`) to discover configured aliases
 
 ### Added
 - 🌐 **Cross-database queries (`MSSQL_ALLOWED_DATABASES`)**:

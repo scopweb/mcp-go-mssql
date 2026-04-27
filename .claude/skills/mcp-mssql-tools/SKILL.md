@@ -10,7 +10,7 @@ description: >
 
 # MCP MSSQL Tools — Quick Reference
 
-6 tools available via the `mcp-go-mssql` MCP server. Always prefer the most specific tool for the task.
+10 tools available via the `mcp-go-mssql` MCP server. Always prefer the most specific tool for the task.
 
 ## Tool Selection Guide
 
@@ -24,6 +24,10 @@ description: >
 | Run a whitelisted stored procedure | `execute_procedure` | `procedure_name` |
 | Analyze query performance without executing | `explain_query` | `query` |
 | Confirm a destructive DDL operation | `confirm_operation` | `token` |
+| Discover available dynamic connections | `dynamic_available` | — |
+| Connect to a dynamic database alias | `dynamic_connect` | `alias` |
+| List active dynamic connections | `dynamic_list` | — |
+| Close a dynamic connection | `dynamic_disconnect` | `alias` |
 
 ## Aliases (alternative names the AI may use)
 
@@ -56,3 +60,19 @@ For complete parameter reference, examples, and usage patterns see [tools-refere
 - **Prepared statements**: All queries use parameterized execution — SQL injection is blocked at server level
 - **Schema validation**: The server validates that referenced tables exist before executing (skipped when `MSSQL_AUTOPILOT=true`)
 - **Destructive confirmation**: DDL operations (DROP, ALTER, CREATE TABLE) ALWAYS require `confirm_operation` — AUTOPILOT does NOT skip this
+
+## Dynamic Multi-Connection Mode
+
+When `MSSQL_DYNAMIC_MODE=true` (and `MSSQL_SERVER` is not set), the server supports multiple database connections:
+
+- `dynamic_available` — Discover configured aliases from `.env` (no credentials shown)
+- `dynamic_connect` — Activate a connection by alias
+- `dynamic_list` — List active connections (alias, server, database — no passwords)
+- `dynamic_disconnect` — Close an active connection
+- `query_database` — Use `connection` param to target a specific dynamic connection
+
+Credentials are stored in `.env` with prefix `MSSQL_DYNAMIC_<ALIAS>_`. The AI only sees aliases.
+
+**Dual-mode architecture:**
+- `MSSQL_SERVER` set → direct connection mode, no dynamic tools
+- `MSSQL_SERVER` not set → loads `.env`, enables dynamic tools if `MSSQL_DYNAMIC_MODE=true`
