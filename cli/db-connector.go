@@ -1,18 +1,70 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/user"
+	osuser "os/user"
+	"path/filepath"
 	"strings"
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
 	_ "github.com/microsoft/go-mssqldb/integratedauth/winsspi"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
+
+// fileExists reports whether the named file exists.
+func fileExists(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil
+}
+
+// getExecutableDir returns the directory containing the current executable.
+func getExecutableDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+// securityLogger implements sqlguard.Logger for CLI output
+type securityLogger struct{}
+
+func (securityLogger) Printf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[SECURITY] "+format+"\n", args...)
+}
+
+// loadEnvFile reads a .env file and sets environment variables from KEY=VALUE lines.
+// Empty lines and lines starting with # are skipped.
+func loadEnvFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			if os.Getenv(key) == "" {
+				os.Setenv(key, value)
+			}
+		}
+	}
+	return scanner.Err()
+}
 
 // DatabaseConfig holds connection configuration
 type DatabaseConfig struct {
@@ -34,6 +86,16 @@ type QueryResult struct {
 }
 
 func main() {
+	// Load .env from executable directory first, fallback to current directory
+	exeDir := getExecutableDir()
+	if exeDir != "" {
+		if envPath := filepath.Join(exeDir, ".env"); fileExists(envPath) {
+			loadEnvFile(envPath)
+		}
+	} else {
+		loadEnvFile(".env")
+	}
+
 	if len(os.Args) < 2 {
 		fmt.Println("Usage:")
 		fmt.Println("  go run db-connector.go test                    # Test connection")
@@ -46,7 +108,7 @@ func main() {
 
 	command := os.Args[1]
 
-	config, err := loadConfig()
+	config, guard, err := loadConfig()
 	if err != nil {
 		printError("Configuration error: %v", err)
 		os.Exit(1)
@@ -69,22 +131,22 @@ func main() {
 			printError("Query command requires SQL statement")
 			os.Exit(1)
 		}
-		executeQuery(db, os.Args[2])
+		executeQuery(db, os.Args[2], guard)
 	case "tables":
-		listTables(db)
+		listTables(db, guard)
 	case "describe":
 		if len(os.Args) < 3 {
 			printError("Describe command requires table name")
 			os.Exit(1)
 		}
-		describeTable(db, os.Args[2])
+		describeTable(db, os.Args[2], guard)
 	default:
 		printError("Unknown command: %s", command)
 		os.Exit(1)
 	}
 }
 
-func loadConfig() (*DatabaseConfig, error) {
+func loadConfig() (*DatabaseConfig, *sqlguard.Guard, error) {
 	config := &DatabaseConfig{
 		Server:   os.Getenv("MSSQL_SERVER"),
 		Database: os.Getenv("MSSQL_DATABASE"),
@@ -100,17 +162,17 @@ func loadConfig() (*DatabaseConfig, error) {
 	}
 
 	if config.Server == "" {
-		return nil, fmt.Errorf("missing required environment variable: MSSQL_SERVER")
+		return nil, nil, fmt.Errorf("missing required environment variable: MSSQL_SERVER")
 	}
 
 	// For Windows Auth, database is optional (allows exploring all databases)
 	// For SQL Auth, database is required
 	if config.Auth == "sql" {
 		if config.Database == "" {
-			return nil, fmt.Errorf("missing required environment variable for SQL auth: MSSQL_DATABASE")
+			return nil, nil, fmt.Errorf("missing required environment variable for SQL auth: MSSQL_DATABASE")
 		}
 		if config.User == "" || config.Password == "" {
-			return nil, fmt.Errorf("missing required environment variables for SQL auth: MSSQL_USER, MSSQL_PASSWORD")
+			return nil, nil, fmt.Errorf("missing required environment variables for SQL auth: MSSQL_USER, MSSQL_PASSWORD")
 		}
 	}
 
@@ -118,7 +180,14 @@ func loadConfig() (*DatabaseConfig, error) {
 		config.Port = "1433"
 	}
 
-	return config, nil
+	// Create security guard
+	guard := sqlguard.New(sqlguard.Config{
+		ReadOnly:  strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
+		Whitelist: sqlguard.ParseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
+		Logger:    securityLogger{},
+	})
+
+	return config, guard, nil
 }
 
 func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
@@ -202,7 +271,7 @@ func testConnection(db *sql.DB, config *DatabaseConfig) {
 	var version string
 	userDisplay := config.User
 	if strings.ToLower(config.Auth) == "integrated" || strings.ToLower(config.Auth) == "windows" {
-		if u, err := user.Current(); err == nil {
+		if u, err := osuser.Current(); err == nil {
 			userDisplay = fmt.Sprintf("Integrated (%s)", u.Username)
 		} else {
 			userDisplay = "Integrated"
@@ -252,8 +321,23 @@ func showDatabaseInfo(db *sql.DB, config *DatabaseConfig) {
 	printResult(result)
 }
 
-func executeQuery(db *sql.DB, query string) {
+func executeQuery(db *sql.DB, query string, guard *sqlguard.Guard) {
 	result := QueryResult{Success: true}
+
+	// Security validation before execution
+	if err := guard.ValidateReadOnly(query); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		printResult(result)
+		return
+	}
+
+	if err := guard.ValidateTablePermissions(query); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		printResult(result)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -331,20 +415,20 @@ func executeNonSelectQuery(db *sql.DB, ctx context.Context, query string, result
 	}
 }
 
-func listTables(db *sql.DB) {
+func listTables(db *sql.DB, guard *sqlguard.Guard) {
 	query := `
-		SELECT 
+		SELECT
 			TABLE_SCHEMA as schema_name,
 			TABLE_NAME as table_name,
 			TABLE_TYPE as table_type
-		FROM INFORMATION_SCHEMA.TABLES 
+		FROM INFORMATION_SCHEMA.TABLES
 		WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
 		ORDER BY TABLE_SCHEMA, TABLE_NAME
 	`
-	executeQuery(db, query)
+	executeQuery(db, query, guard)
 }
 
-func describeTable(db *sql.DB, tableName string) {
+func describeTable(db *sql.DB, tableName string, guard *sqlguard.Guard) {
 	query := `
 		SELECT
 			COLUMN_NAME as column_name,

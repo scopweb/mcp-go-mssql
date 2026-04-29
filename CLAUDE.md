@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a **secure** Go-based solution that provides MSSQL database connectivity for critical data environments in two ways:
 
 1. **MCP Server** (`main.go`): For Claude Desktop integration via Model Context Protocol
-2. **CLI Tool** (`claude-code/db-connector.go`): For Claude Code direct database access
+2. **CLI Tool** (`cli/db-connector.go`): For direct database access via command line
 
 Both implementations serve as hardened bridges to Microsoft SQL Server databases, with comprehensive security features including TLS encryption, input validation, and connection pooling.
 
@@ -443,8 +443,8 @@ When Claude Code needs to connect to the database:
    - **Claude Desktop operations**: Use the MCP tools directly (query_database, explore, inspect, etc.)
 
 ### Available Claude Code Database Commands
-- `go run claude-code/db-connector.go test` - Test connection
-- `go run claude-code/db-connector.go info` - Database information  
-- `go run claude-code/db-connector.go tables` - List all tables
-- `go run claude-code/db-connector.go describe TABLE_NAME` - Table structure
-- `go run claude-code/db-connector.go query "SQL_STATEMENT"` - Execute queries
+- `go run cli/db-connector.go test` - Test connection
+- `go run cli/db-connector.go info` - Database information  
+- `go run cli/db-connector.go tables` - List all tables
+- `go run cli/db-connector.go describe TABLE_NAME` - Table structure
+- `go run cli/db-connector.go query "SQL_STATEMENT"` - Execute queries

@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "mssql": {
-      "command": "C:\\MCPs\\clone\\mcp-go-mssql\\build\\mcp-go-mssql.exe"      
+      "command": "C:\\MCPs\\clone\\mcp-go-mssql\\build\\mcp-go-mssql-secure.exe"      
     },
      "mssql-TEST2": {
       "command": "C:\\MCPs\\clone\\mcp-go-mssql\\build\\mcp-go-mssql.exe", 
