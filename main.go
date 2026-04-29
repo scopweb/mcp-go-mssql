@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	osuser "os/user"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1363,6 +1364,21 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 	}
 }
 
+// fileExists reports whether the named file exists.
+func fileExists(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil
+}
+
+// getExecutableDir returns the directory containing the current executable.
+func getExecutableDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
 // getenvBool reads an env var and treats it as a bool. Comparison is
 // case-insensitive against "true". Anything else (including unset, empty,
 func main() {
@@ -1370,7 +1386,15 @@ func main() {
 	// If MSSQL_SERVER or MSSQL_CONNECTION_STRING is set (e.g., from Claude Desktop JSON config), skip .env entirely
 	// This allows two modes: direct connection (MSSQL_SERVER/MSSQL_CONNECTION_STRING set) vs dynamic multi-connection (.env)
 	if os.Getenv("MSSQL_SERVER") == "" && os.Getenv("MSSQL_CONNECTION_STRING") == "" {
-		loadEnvFile(".env")
+		// Try .env next to executable first, then fall back to current directory
+		exeDir := getExecutableDir()
+		if exeDir != "" {
+			if envPath := filepath.Join(exeDir, ".env"); fileExists(envPath) {
+				loadEnvFile(envPath)
+			}
+		} else {
+			loadEnvFile(".env")
+		}
 	}
 
 	// Initialize security logger

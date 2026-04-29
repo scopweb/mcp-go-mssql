@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -245,8 +246,17 @@ func (s *MCPMSSQLServer) handleDynamicAvailable(id interface{}, params CallToolP
 	found := false
 	info.WriteString("Available dynamic connections (use dynamic_connect to activate):\n")
 
+	// Find .env - check next to executable first, then current directory
+	envPath := ".env"
+	exeDir := getExecutableDir()
+	if exeDir != "" {
+		if execEnvPath := filepath.Join(exeDir, ".env"); fileExists(execEnvPath) {
+			envPath = execEnvPath
+		}
+	}
+
 	// Read .env file directly to discover configured aliases
-	envFile, err := os.Open(".env")
+	envFile, err := os.Open(envPath)
 	if err == nil {
 		defer envFile.Close()
 		scanner := bufio.NewScanner(envFile)

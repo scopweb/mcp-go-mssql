@@ -10,7 +10,7 @@ description: >
 
 # MCP MSSQL Tools — Quick Reference
 
-10 tools available via the `mcp-go-mssql` MCP server. Always prefer the most specific tool for the task.
+11 tools available via the `mcp-go-mssql` MCP server (7 base + 4 dynamic when `MSSQL_DYNAMIC_MODE=true`). Always prefer the most specific tool for the task.
 
 ## Tool Selection Guide
 
@@ -72,6 +72,8 @@ When `MSSQL_DYNAMIC_MODE=true` (and `MSSQL_SERVER` is not set), the server suppo
 - `query_database` — Use `connection` param to target a specific dynamic connection
 
 Credentials are stored in `.env` with prefix `MSSQL_DYNAMIC_<ALIAS>_`. The AI only sees aliases.
+
+**.env search order:** The server first looks for `.env` next to the executable, then falls back to the current working directory.
 
 **Dual-mode architecture:**
 - `MSSQL_SERVER` set → direct connection mode, no dynamic tools

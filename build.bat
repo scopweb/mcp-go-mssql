@@ -45,36 +45,42 @@ echo ========================================
 echo   Build Produccion (SEGURO)
 echo ========================================
 echo.
-echo Generando executable seguro para produccion...
+echo Generando executables para produccion...
 echo.
+
+REM Build normal
+echo Building mcp-go-mssql.exe...
 go build -ldflags "-w -s" -o build\mcp-go-mssql.exe -v
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] Build fallido
+    echo [ERROR] Build mcp-go-mssql.exe fallido
     pause
     exit /b 1
 )
-for /F %%A in ('dir /b build\mcp-go-mssql.exe') do (
-    for /F "usebackq" %%B in (`dir /-C "build\%%A" ^| find "mcp-go-mssql.exe"`) do (
-        echo.
-        echo Tamanio: %%B bytes (~7MB)
-    )
+
+REM Build secure
+echo Building mcp-go-mssql-secure.exe...
+go build -ldflags "-w -s" -o build\mcp-go-mssql-secure.exe -v
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Build mcp-go-mssql-secure.exe fallido
+    pause
+    exit /b 1
 )
+
 echo.
 echo ========================================
 echo   Build Produccion exitoso
 echo ========================================
 echo.
-echo Ubicacion: build\mcp-go-mssql.exe
+echo Ubicaciones:
+echo   - build\mcp-go-mssql.exe
+echo   - build\mcp-go-mssql-secure.exe
 echo.
 echo Caracteristicas:
-echo   - Binary pequeno (~7MB)
+echo   - Binaryes pequenos (~7MB cada uno)
 echo   - Sin symbol table ni debug info (stripped)
 echo   - OPTIMIZADO PARA PRODUCCION
-echo.
-echo Limitaciones en produccion:
-echo   - Stack traces sin nombres de funciones
-echo   - Necesitas este binary + logs del servidor para debuggear
 echo.
 pause
 goto :menu

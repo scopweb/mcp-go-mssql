@@ -270,7 +270,8 @@ dynamic_available()
 ```
 
 **Notes:**
-- Reads `.env` directly, not from environment variables
+- Reads `.env` directly (not from environment variables)
+- **`.env` search order:** first looks next to the executable, then current working directory
 - Shows: alias, server, database — NO passwords or users
 - Only available when `MSSQL_DYNAMIC_MODE=true` and `MSSQL_SERVER` is not set
 
