@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "mssql": {
+      "command": "C:\\MCPs\\clone\\mcp-go-mssql\\build\\mcp-go-mssql.exe"      
+    },
+     "mssql-TEST2": {
+      "command": "C:\\MCPs\\clone\\mcp-go-mssql\\build\\mcp-go-mssql.exe", 
+      "env": {
+        "MSSQL_CONNECTION_STRING": "Data Source=JJPT002NOU;Database=TEST2;Integrated Security=True;Encrypt=False;TrustServerCertificate=True",
+        "MSSQL_READ_ONLY": "true",
+        "MSSQL_WHITELIST_TABLES": "*",
+        "MSSQL_AUTOPILOT": "true",
+        "DEVELOPER_MODE": "true"
+      }
+    }
+  }
+}
