@@ -204,6 +204,8 @@ All database connections use environment variables for security. See `.env.examp
   - `integrated` or `windows` - Windows Integrated Authentication (SSPI). Only supported on Windows; the process runs under the current Windows user's credentials and must have proper DB permissions. `MSSQL_DATABASE` is optional - if omitted, connects to the user's default database. **Key benefits:** No passwords in config files, uses Active Directory/Windows security, seamless single sign-on.
   - `azure` - Azure Active Directory authentication (advanced; may require additional config and is not fully implemented by default).
 - `MSSQL_READ_ONLY`: **Security restriction** (`"true"` allows only SELECT queries, `"false"` allows all operations)
+- `MSSQL_AUTOPILOT`: **Autonomous AI mode** (default: `"false"`). `"true"` skips schema validation — AI can query tables that don't exist yet without interruption. **Complements `READ_ONLY`**: when both are enabled, modifications are restricted to whitelist tables while allowing flexible development without schema interruptions. Does NOT skip whitelist protection or destructive operation confirmation.
+  - Example: `READ_ONLY=true` + `AUTOPILOT=true` + `WHITELIST_TABLES=temp_ai` → AI can modify `temp_ai` and query non-existent tables freely, but cannot touch other tables
 - `MSSQL_WHITELIST_TABLES`: **Granular permissions** (comma-separated list of tables/views allowed for modification when `MSSQL_READ_ONLY=true`)
   - Example: `"temp_ai,v_temp_ia"`
   - Enables AI to modify specific tables while protecting production data

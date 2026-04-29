@@ -10,6 +10,8 @@ import (
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
 
 // Test configuration
@@ -38,7 +40,9 @@ func setupTestEnv() {
 	}
 }
 
-// newTestMCPServer creates an MCPMSSQLServer with rate limiter initialized for testing.
+// newTestMCPServer creates an MCPMSSQLServer with rate limiter and a default
+// sqlguard.Guard initialized for testing. Tests that need different policy
+// settings should rebuild s.guard via newTestGuard(s).
 func newTestMCPServer() *MCPMSSQLServer {
 	s := &MCPMSSQLServer{
 		secLogger: NewSecurityLogger(),
@@ -48,7 +52,19 @@ func newTestMCPServer() *MCPMSSQLServer {
 	s.rateLimiter.tokens = 1000
 	s.rateLimiter.lastReset = time.Now()
 	s.rateLimiter.interval = time.Minute
+	newTestGuard(s)
 	return s
+}
+
+// newTestGuard rebuilds s.guard from the current s.config. Call after mutating
+// s.config in a test so the guard observes the new policy.
+func newTestGuard(s *MCPMSSQLServer) {
+	s.guard = sqlguard.New(sqlguard.Config{
+		ReadOnly:         s.config.readOnly,
+		Whitelist:        s.config.whitelistTables,
+		AllowedDatabases: s.config.allowedDatabases,
+		Logger:           s.secLogger,
+	})
 }
 
 func TestSecurityLoggerSanitization(t *testing.T) {
@@ -450,6 +466,7 @@ func TestReadOnlyValidation(t *testing.T) {
 
 	// Test with read-only mode disabled (cached config)
 	server.config.readOnly = false
+	newTestGuard(server)
 
 	testCases := []struct {
 		name    string
@@ -470,7 +487,7 @@ func TestReadOnlyValidation(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := server.validateReadOnlyQuery(tc.query)
+			err := server.guard.ValidateReadOnly(tc.query)
 			if tc.wantErr && err == nil {
 				t.Errorf("Expected error for query: %s", tc.query)
 			}
@@ -482,6 +499,7 @@ func TestReadOnlyValidation(t *testing.T) {
 
 	// Test with read-only mode enabled (cached config)
 	server.config.readOnly = true
+	newTestGuard(server)
 
 	readOnlyTestCases := []struct {
 		name    string
@@ -532,7 +550,7 @@ func TestReadOnlyValidation(t *testing.T) {
 
 	for _, tc := range readOnlyTestCases {
 		t.Run(tc.name+"_readonly", func(t *testing.T) {
-			err := server.validateReadOnlyQuery(tc.query)
+			err := server.guard.ValidateReadOnly(tc.query)
 			if tc.wantErr && err == nil {
 				t.Errorf("Expected error for query in read-only mode: %s", tc.query)
 			}
@@ -649,9 +667,10 @@ func TestPerformanceOptimizations(t *testing.T) {
 		t.Errorf("Expected compiled regex patterns to be available")
 	}
 
-	// Test that table extraction regex patterns are pre-compiled
-	if len(tableExtractionPatterns) == 0 {
-		t.Errorf("Expected table extraction regex patterns to be pre-compiled")
+	// Test that table extraction is handled by sqlguard package
+	refs := sqlguard.ExtractTableRefs("SELECT * FROM users")
+	if len(refs) == 0 {
+		t.Errorf("Expected sqlguard.ExtractTableRefs to return table refs")
 	}
 
 	// Test performance of sanitization
@@ -686,8 +705,8 @@ func TestExplainQueryValidation(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// explain_query uses extractOperation to enforce SELECT-only
-			op := server.extractOperation(tc.query)
+			// explain_query uses sqlguard.ExtractOperation to enforce SELECT-only
+			op := sqlguard.ExtractOperation(tc.query)
 			isSelect := op == "SELECT"
 			if isSelect != tc.wantSELECT {
 				t.Errorf("query %q: got op=%s (isSelect=%v), want isSelect=%v", tc.query, op, isSelect, tc.wantSELECT)

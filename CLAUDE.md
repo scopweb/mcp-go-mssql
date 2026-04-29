@@ -94,19 +94,23 @@ go build -ldflags "-w -s" -o mcp-go-mssql-secure
 This server now implements the proper MCP (Model Context Protocol) using stdin/stdout JSON-RPC communication, compatible with Claude Desktop.
 
 ### For Claude Desktop Integration
-1. Use `config.example.json` as template for Claude Desktop configuration
+1. Use `.mcp.json` as template for Claude Desktop configuration (see examples below)
 2. **NEVER commit sensitive credentials to version control**
 3. Place the compiled `mcp-go-mssql.exe` in the same directory
 4. Configuration uses environment variables passed through Claude Desktop MCP settings
+5. Alternatively, use `MSSQL_CONNECTION_STRING` for a complete connection string instead of individual env vars
 
 ### Environment Variables
 The server reads database connection from these environment variables. See `.env.example` for complete configuration templates.
 
-**Required Variables:**
+**Required Variables (choose one):**
+- `MSSQL_SERVER`, `MSSQL_DATABASE`, `MSSQL_USER`, `MSSQL_PASSWORD`: Individual connection parameters
+- `MSSQL_CONNECTION_STRING`: Complete SQL Server connection string (alternative to individual vars)
+
+**Required for Windows Integrated Auth:**
 - `MSSQL_SERVER`: SQL Server hostname/IP address
 - `MSSQL_DATABASE`: Database name to connect to
-- `MSSQL_USER`: Username for SQL Server authentication
-- `MSSQL_PASSWORD`: Password for SQL Server authentication
+- `MSSQL_AUTH`: Set to `"integrated"` or `"windows"` for Windows Authentication
 
 **Optional Variables:**
 - `MSSQL_PORT`: SQL Server port (defaults to 1433)
@@ -193,6 +197,12 @@ DEVELOPER_MODE=true
 MSSQL_ENCRYPT=false
 # No user/password needed — uses Windows credentials
 # MSSQL_ENCRYPT=false is required because SQL 2008 doesn't support TLS 1.2
+
+# Using Connection String (alternative to individual vars)
+MSSQL_CONNECTION_STRING=Data Source=myServer;Database=myDB;Integrated Security=True;Encrypt=False;TrustServerCertificate=True
+DEVELOPER_MODE=true
+# Connection string includes server, database, and all connection options
+# Useful for complex connection strings or integrated Windows authentication
 
 # Cross-Database Access (query multiple databases from one connector)
 MSSQL_SERVER=prod-server.database.windows.net
@@ -282,6 +292,28 @@ MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia,mi_vista
         "DEVELOPER_MODE": "true",
         "MSSQL_AUTOPILOT": "true",
         "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia"
+      }
+    },
+    "dev-db-fullaccess": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_CONNECTION_STRING": "Data Source=dev-server.local;Database=DevDatabase;User Id=dev_user;Password=dev_password;Encrypt=False;TrustServerCertificate=True",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_AUTOPILOT": "true",
+        "MSSQL_WHITELIST_TABLES": "*"
+      }
+    },
+    "dev-windows-auth": {
+      "command": "mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "dev-server.local",
+        "MSSQL_DATABASE": "DevDatabase",
+        "MSSQL_AUTH": "integrated",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_AUTOPILOT": "true",
+        "MSSQL_WHITELIST_TABLES": "*"
       }
     },
     "dev-db-dynamic": {
@@ -408,7 +440,7 @@ When Claude Code needs to connect to the database:
 
 3. **Use the appropriate tool:**
    - **Connection testing**: `go run test/test-connection.go`
-   - **Claude Code operations**: `go run claude-code/db-connector.go [command]`
+   - **Claude Desktop operations**: Use the MCP tools directly (query_database, explore, inspect, etc.)
 
 ### Available Claude Code Database Commands
 - `go run claude-code/db-connector.go test` - Test connection

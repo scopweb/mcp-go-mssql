@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"unicode/utf8"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
 
 func FuzzValidateBasicInput(f *testing.F) {
@@ -41,17 +43,11 @@ func FuzzValidateReadOnlyQuery(f *testing.F) {
 	f.Add("UPDATE users SET x=1")
 	f.Add("DELETE FROM users")
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-		config: serverConfig{
-			readOnly: true,
-		},
-	}
+	guard := sqlguard.New(sqlguard.Config{ReadOnly: true})
 
 	f.Fuzz(func(t *testing.T, query string) {
 		// Should not panic
-		_ = server.validateReadOnlyQuery(query)
+		_ = guard.ValidateReadOnly(query)
 	})
 }
 
@@ -82,7 +78,7 @@ func FuzzStripLeadingComments(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, input string) {
 		// Should not panic
-		result := stripLeadingComments(input)
+		result := sqlguard.StripLeadingComments(input)
 		if !utf8.ValidString(result) {
 			t.Errorf("result is not valid UTF-8 for input: %q", input)
 		}
@@ -97,13 +93,8 @@ func FuzzExtractOperation(f *testing.F) {
 	f.Add("-- comment\nDROP TABLE t")
 	f.Add("WITH cte AS (SELECT 1) UPDATE t SET x=1")
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-	}
-
 	f.Fuzz(func(t *testing.T, query string) {
-		op := server.extractOperation(query)
+		op := sqlguard.ExtractOperation(query)
 		validOps := map[string]bool{
 			"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": true,
 			"DROP": true, "CREATE": true, "ALTER": true, "TRUNCATE": true, "MERGE": true,
@@ -141,14 +132,10 @@ func FuzzValidateTablePermissions(f *testing.F) {
 	f.Add("DELETE temp_ai FROM temp_ai JOIN users ON 1=1")
 	f.Add("INSERT INTO temp_ai SELECT * FROM secrets")
 
-	server := &MCPMSSQLServer{
-		secLogger: NewSecurityLogger(),
-		devMode:   true,
-		config: serverConfig{
-			readOnly:        true,
-			whitelistTables: []string{"temp_ai"},
-		},
-	}
+	guard := sqlguard.New(sqlguard.Config{
+		ReadOnly:  true,
+		Whitelist: []string{"temp_ai"},
+	})
 
 	// Set env for any remaining os.Getenv calls
 	os.Setenv("MSSQL_READ_ONLY", "true")
@@ -156,6 +143,6 @@ func FuzzValidateTablePermissions(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, query string) {
 		// Should not panic
-		_ = server.validateTablePermissions(query)
+		_ = guard.ValidateTablePermissions(query)
 	})
 }

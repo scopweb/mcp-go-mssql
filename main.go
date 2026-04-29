@@ -15,768 +15,24 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
 	"sync"
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
 	_ "github.com/microsoft/go-mssqldb/integratedauth/winsspi"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
-
-// MCP Protocol structures
-type MCPRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-type MCPResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *MCPError   `json:"error,omitempty"`
-}
-
-// loadEnvFile reads a .env file and sets environment variables from KEY=VALUE lines.
-// Empty lines and lines starting with # are skipped.
-// Only sets variables that are not already set (existing env vars take precedence).
-func loadEnvFile(filePath string) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		// File doesn't exist - that's ok, env vars may be set elsewhere
-		return nil
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Parse KEY=VALUE format
-		if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			// Only set if not already set
-			if os.Getenv(key) == "" {
-				os.Setenv(key, value)
-			}
-		}
-	}
-	return scanner.Err()
-}
-
-type MCPError struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
-}
-
-// ConfirmationRequiredError is returned when a destructive DDL operation
-// requires user confirmation before execution.
-type ConfirmationRequiredError struct {
-	Token     string // token to pass to confirm_operation
-	Operation string // human-readable operation type
-	Target    string // schema.object target
-	ExpiresIn string // time until token expires
-}
-
-func (e *ConfirmationRequiredError) Error() string {
-	return fmt.Sprintf("DESTRUCTIVE OPERATION REQUIRES CONFIRMATION: %s on %s. Use confirm_operation tool with token %s", e.Operation, e.Target, e.Token)
-}
-
-// DestructiveConfirmationCode is the JSON-RPC error code for destructive operation confirmation.
-const DestructiveConfirmationCode = -32000
-
-type InitializeParams struct {
-	ProtocolVersion string   `json:"protocolVersion"`
-	Capabilities    struct{} `json:"capabilities"`
-	ClientInfo      struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	} `json:"clientInfo"`
-}
-
-type InitializeResult struct {
-	ProtocolVersion string       `json:"protocolVersion"`
-	Capabilities    Capabilities `json:"capabilities"`
-	ServerInfo      ServerInfo   `json:"serverInfo"`
-	Instructions    string       `json:"instructions,omitempty"`
-}
-
-type Capabilities struct {
-	Tools   ToolsCapability        `json:"tools,omitempty"`
-	Logging map[string]interface{} `json:"logging"`
-}
-
-type ToolsCapability struct {
-	ListChanged bool `json:"listChanged,omitempty"`
-}
-
-type ToolAnnotations struct {
-	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
-	DestructiveHint *bool `json:"destructiveHint,omitempty"`
-	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
-	OpenWorldHint   *bool `json:"openWorldHint,omitempty"`
-}
-
-type Tool struct {
-	Name        string           `json:"name"`
-	Title       string           `json:"title,omitempty"`
-	Description string           `json:"description"`
-	InputSchema InputSchema      `json:"inputSchema"`
-	Annotations *ToolAnnotations `json:"annotations,omitempty"`
-}
-
-type InputSchema struct {
-	Type       string              `json:"type"`
-	Properties map[string]Property `json:"properties"`
-	Required   []string            `json:"required"`
-}
-
-type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
-}
-
-type ToolsListResult struct {
-	Tools      []Tool `json:"tools"`
-	NextCursor string `json:"nextCursor,omitempty"`
-}
-
-type CallToolParams struct {
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments"`
-}
-
-type CallToolResult struct {
-	Content []ContentItem          `json:"content"`
-	IsError bool                   `json:"isError,omitempty"`
-	Meta    map[string]interface{} `json:"_meta,omitempty"`
-}
-
-type ContentAnnotations struct {
-	Audience []string `json:"audience,omitempty"` // "user", "assistant", or both
-	Priority float64  `json:"priority,omitempty"` // 0.0 (least) to 1.0 (most important)
-}
-
-type ContentItem struct {
-	Type        string              `json:"type"`
-	Text        string              `json:"text"`
-	Annotations *ContentAnnotations `json:"annotations,omitempty"`
-}
-
-type ServerInfo struct {
-	Name    string `json:"name"`
-	Title   string `json:"title,omitempty"`
-	Version string `json:"version"`
-}
-
-// boolPtr is a helper to create *bool for tool annotations.
-func boolPtr(b bool) *bool { return &b }
-
-// Content annotation presets for MCP content items.
-// Priority scale: 0.0 (least) → 1.0 (most important / effectively required).
-var (
-	// annAssistantLow marks low-priority content for the LLM (status checks, reference info).
-	annAssistantLow = &ContentAnnotations{Audience: []string{"assistant"}, Priority: 0.3}
-	// annAssistantHigh marks high-priority content for the LLM (critical diagnostics).
-	annAssistantHigh = &ContentAnnotations{Audience: []string{"assistant"}, Priority: 1.0}
-	// annBothExplore marks explore results — discovery context, lower priority.
-	annBothExplore = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.4}
-	// annBothInspect marks inspect results — structural reference.
-	annBothInspect = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.5}
-	// annBothQuery marks query results — directly requested data.
-	annBothQuery = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.7}
-	// annBothProcedure marks procedure results — action with side effects.
-	annBothProcedure = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.8}
-	// annBothExplain marks explain results — secondary analysis.
-	annBothExplain = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 0.3}
-	// annBothHigh marks high-priority content for both audiences (errors).
-	annBothHigh = &ContentAnnotations{Audience: []string{"user", "assistant"}, Priority: 1.0}
-)
-
-// Security Logger — structured logging via log/slog (stdlib Go 1.21+)
-type SecurityLogger struct {
-	logger   *slog.Logger
-	levelVar *slog.LevelVar // dynamic level controlled by MCP logging/setLevel
-}
-
-func NewSecurityLogger() *SecurityLogger {
-	lvl := &slog.LevelVar{}
-	lvl.Set(slog.LevelInfo)
-	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: lvl,
-	})
-	return &SecurityLogger{
-		logger:   slog.New(handler).With(slog.String("component", "security")),
-		levelVar: lvl,
-	}
-}
-
-// Printf provides backward-compatible formatted logging.
-func (sl *SecurityLogger) Printf(format string, args ...interface{}) {
-	sl.logger.Info(fmt.Sprintf(format, args...))
-}
-
-func (sl *SecurityLogger) LogConnectionAttempt(success bool) {
-	sl.logger.Info("database connection attempt",
-		slog.Bool("success", success),
-	)
-}
-
-// Compiled regex patterns for better performance
-var sensitivePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(password|pwd|secret|key|token)=[^;\s]*`),
-	regexp.MustCompile(`(?i)(password|pwd)\s*=\s*[^;\s]*`),
-}
-
-// Pre-compiled word-boundary patterns for read-only keyword detection
-var dangerousKeywordPatterns = map[string]*regexp.Regexp{
-	"INSERT":   regexp.MustCompile(`(?i)\bINSERT\b`),
-	"UPDATE":   regexp.MustCompile(`(?i)\bUPDATE\b`),
-	"DELETE":   regexp.MustCompile(`(?i)\bDELETE\b`),
-	"DROP":     regexp.MustCompile(`(?i)\bDROP\b`),
-	"CREATE":   regexp.MustCompile(`(?i)\bCREATE\b`),
-	"ALTER":    regexp.MustCompile(`(?i)\bALTER\b`),
-	"TRUNCATE": regexp.MustCompile(`(?i)\bTRUNCATE\b`),
-	"MERGE":    regexp.MustCompile(`(?i)\bMERGE\b`),
-	"EXEC":     regexp.MustCompile(`(?i)\bEXEC\b`),
-	"EXECUTE":  regexp.MustCompile(`(?i)\bEXECUTE\b`),
-	"CALL":     regexp.MustCompile(`(?i)\bCALL\b`),
-	"BULK":     regexp.MustCompile(`(?i)\bBULK\b`),
-	"BCP":      regexp.MustCompile(`(?i)\bBCP\b`),
-}
-
-// destructiveOpPatterns detect DDL operations that modify/destroy existing database objects.
-// These require confirmation if the target object already exists.
-var destructiveOpPatterns = map[string]*regexp.Regexp{
-	"DROP_TABLE":    regexp.MustCompile(`(?i)\bDROP\s+TABLE\b`),
-	"DROP_VIEW":     regexp.MustCompile(`(?i)\bDROP\s+VIEW\b`),
-	"DROP_PROC":     regexp.MustCompile(`(?i)\bDROP\s+PROCEDURE\b`),
-	"DROP_FUNCTION": regexp.MustCompile(`(?i)\bDROP\s+FUNCTION\b`),
-	"ALTER_VIEW":    regexp.MustCompile(`(?i)\bALTER\s+VIEW\b`),
-	"ALTER_TABLE":   regexp.MustCompile(`(?i)\bALTER\s+TABLE\b`),
-	"TRUNCATE_TABLE": regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\b`),
-}
-
-// Pre-compiled patterns for table name extraction (performance optimization)
-// tableExtractionPatterns match table references with optional database and schema qualifiers.
-// Capture groups: 1=full prefix (e.g. "db.schema." or "schema."), 2=table name.
-// The prefix is parsed separately to extract database vs schema components.
-var tableExtractionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bFROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                          // FROM [db.][schema.]table
-	regexp.MustCompile(`(?i)\bJOIN\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                          // JOIN [db.][schema.]table
-	regexp.MustCompile(`(?i)\bINTO\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                          // INSERT INTO [db.][schema.]table
-	regexp.MustCompile(`(?i)\bUPDATE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                        // UPDATE [db.][schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),                 // DELETE FROM [db.][schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?\s+FROM`),                 // DELETE table FROM
-	regexp.MustCompile(`(?i)\b(?:CREATE|DROP|ALTER)\s+TABLE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`), // CREATE/DROP/ALTER TABLE
-	regexp.MustCompile(`(?i)\b(?:CREATE|DROP|ALTER)\s+VIEW\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),  // CREATE/DROP/ALTER VIEW
-	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+((?:\[?[\w]+\]?\.){0,2})\[?([\w]+)\]?`),              // TRUNCATE TABLE
-}
-
-// systemSchemas contains SQL Server system schemas whose objects should be
-// excluded from user-table validation (e.g. INFORMATION_SCHEMA.COLUMNS).
-var systemSchemas = map[string]bool{
-	"information_schema": true,
-	"sys":                true,
-}
-
-// sqlReservedWords contains SQL keywords that should never be treated as table names.
-// This acts as a safety net for regex-based table extraction.
-var sqlReservedWords = map[string]bool{
-	"as": true, "set": true, "return": true, "returns": true,
-	"select": true, "where": true, "and": true, "or": true,
-	"not": true, "null": true, "is": true, "in": true,
-	"on": true, "by": true, "order": true, "group": true,
-	"having": true, "case": true, "when": true, "then": true,
-	"else": true, "end": true, "begin": true, "declare": true,
-	"exec": true, "execute": true, "procedure": true, "function": true,
-	"trigger": true, "index": true, "cursor": true, "open": true,
-	"close": true, "fetch": true, "next": true, "values": true,
-	"output": true, "inserted": true, "deleted": true,
-}
-
-// Pre-compiled pattern for procedure name validation
-var validProcedureNamePattern = regexp.MustCompile(`^[\w.\[\]]+$`)
-
-// Pre-compiled pattern for removing ALL SQL comments (inline and leading)
-var inlineCommentPattern = regexp.MustCompile(`/\*.*?\*/`)
-
-// stripStringLiterals removes SQL string literal *contents* (both single and double quoted)
-// so that patterns appearing inside strings are not falsely detected as code.
-// The opening and closing quote characters are preserved as empty literals ('')
-// to maintain query structure, but all content between them is removed.
-// Handles escaped quotes: SQL uses '' for escaped single quotes within single-quoted strings.
-func stripStringLiterals(query string) string {
-	var result strings.Builder
-	result.Grow(len(query))
-
-	i := 0
-	for i < len(query) {
-		ch := query[i]
-
-		// Single-quoted string: write opening quote, skip content, write closing quote
-		if ch == '\'' {
-			result.WriteByte(ch) // opening quote
-			i++
-			for i < len(query) {
-				if query[i] == '\'' {
-					// Check for doubled quote (SQL escape for single quote)
-					if i+1 < len(query) && query[i+1] == '\'' {
-						// Escaped quote inside string — skip both (content removal)
-						i += 2
-					} else {
-						// End of string — write closing quote
-						result.WriteByte('\'')
-						i++
-						break
-					}
-				} else {
-					// Content inside string — skip (do not write)
-					i++
-				}
-			}
-			continue
-		}
-
-		// Double-quoted identifier: write opening quote, skip content, write closing quote
-		if ch == '"' {
-			result.WriteByte(ch) // opening quote
-			i++
-			for i < len(query) {
-				if query[i] == '"' {
-					// Check for doubled quote (escape)
-					if i+1 < len(query) && query[i+1] == '"' {
-						// Escaped quote — skip both
-						i += 2
-					} else {
-						// End of string — write closing quote
-						result.WriteByte('"')
-						i++
-						break
-					}
-				} else {
-					// Content inside string — skip
-					i++
-				}
-			}
-			continue
-		}
-
-		result.WriteByte(ch)
-		i++
-	}
-
-	return result.String()
-}
-
-// Pre-compiled pattern for CHAR/NCHAR string concatenation that can bypass keyword detection
-// Matches CHAR(n)+CHAR(n)+... or NCHAR(n)+NCHAR(n)+... patterns used to build keywords dynamically
-var charConcatenationPattern = regexp.MustCompile(`(?i)(CHAR|NCHAR)\s*\(\d+\)(\s*\+\s*(CHAR|NCHAR)\s*\(\d+\))*`)
-
-// Pre-compiled pattern for table/index hints that can enable dirty reads or other risky behavior
-// NOLOCK, READUNCOMMITTED, READUNCOMMITTED, TABLOCK, etc.
-var dangerousHintsPattern = regexp.MustCompile(`(?i)\b(WITH\s*\(\s*(NOLOCK|READUNCOMMITTED|READCOMMITTED|READCOMMITTEDLOCK|TABLOCK|UPDLOCK|HOLDLOCK|ROWLOCK)\s*\))`)
-
-// Pre-compiled pattern for WAITFOR DELAY which enables timing attacks to infer data existence
-var waitforPattern = regexp.MustCompile(`(?i)\bWAITFOR\b`)
-
-// Pre-compiled pattern for subqueries in SELECT, FROM, WHERE that might reference restricted tables
-// This complements the table extraction but specifically targets subquery contexts
-var subqueryPattern = regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE)\s*\([^)]*\s*FROM\b`)
-
-// Pre-compiled pattern for EXECUTE of string (dynamic SQL within stored procedures)
-var executeStringPattern = regexp.MustCompile(`(?i)\bEXEC\s*\(\s*@`)
-
-// Pre-compiled pattern for OPENROWSET which can exfiltrate data to external sources
-var openrowsetPattern = regexp.MustCompile(`(?i)\bOPENROWSET\b`)
-
-// Pre-compiled pattern for OPENDATASOURCE
-var opendatasourcePattern = regexp.MustCompile(`(?i)\bOPENDATASOURCE\b`)
-
-// Pre-compiled pattern for linked servers references
-var linkedServerPattern = regexp.MustCompile(`(?i)\b(OPENQUERY|OPENROWSET|OPENDATASOURCE)\b`)
-
-// Pre-compiled pattern for SELECT INTO which can create new tables
-var selectIntoPattern = regexp.MustCompile(`(?i)\bSELECT\s+[^;]+INTO\s+[^;]+FROM\b`)
-
-// Pre-compiled pattern for temporary table creation via SELECT INTO
-var tempTablePattern = regexp.MustCompile(`(?i)#\w+`)
-
-// stripAllComments removes ALL SQL comments (block and line) from a query.
-// Unlike stripLeadingComments which only removes from the beginning, this removes
-// inline comments throughout the query that could be used to hide keywords.
-func stripAllComments(query string) string {
-	// Remove all block comments (inline comments anywhere)
-	result := inlineCommentPattern.ReplaceAllString(query, " ")
-	// Also remove line comments (-- to end of line)
-	// We need to do this carefully to not affect strings that contain --
-	result = stripLineComments(result)
-	return result
-}
-
-// stripLineComments removes -- line comments but preserves content inside strings
-func stripLineComments(query string) string {
-	var result strings.Builder
-	inString := false
-	var stringChar byte
-	escapeNext := false
-
-	for i := 0; i < len(query); i++ {
-		ch := query[i]
-
-		if escapeNext {
-			escapeNext = false
-			result.WriteByte(ch)
-			continue
-		}
-
-		if ch == '\\' && inString {
-			result.WriteByte(ch)
-			escapeNext = true
-			continue
-		}
-
-		if ch == '\'' && !inString {
-			inString = true
-			stringChar = byte('\'')
-			result.WriteByte(ch)
-			continue
-		}
-
-		if ch == '"' && !inString {
-			inString = true
-			stringChar = byte('"')
-			result.WriteByte(ch)
-			continue
-		}
-
-		if ch == '[' && !inString {
-			// SQL bracket-quoted identifier - treat as string context for purposes of comment detection
-			result.WriteByte(ch)
-			continue
-		}
-
-		if inString && ch == stringChar {
-			// Check for doubled quote (SQL escape)
-			if i+1 < len(query) && query[i+1] == stringChar {
-				result.WriteByte(ch)
-				result.WriteByte(ch)
-				i++
-				continue
-			}
-			inString = false
-			result.WriteByte(ch)
-			continue
-		}
-
-		if !inString && i+1 < len(query) && query[i] == '-' && query[i+1] == '-' {
-			// Found -- start of line comment, skip to end of line
-			i += 2
-			for i < len(query) && query[i] != '\n' && query[i] != '\r' {
-				i++
-			}
-			i-- // back up one since the outer loop will increment
-			continue
-		}
-
-		result.WriteByte(ch)
-	}
-
-	return result.String()
-}
-
-// unicodeControlChars matches Unicode bidirectional control characters and other
-// potentially malicious control characters that could affect text rendering or interpretation.
-// U+200B..U+200F: Zero-width spaces and directional formatting
-// U+202A..U+202E: Bidirectional text override (LEFT-TO-RIGHT OVERRIDE, RIGHT-TO-LEFT OVERRIDE, etc.)
-// U+2066..U+2069: Bidirectional isolate control characters
-var unicodeControlChars = regexp.MustCompile("[\u200B-\u200F\u202A-\u202E\u2066-\u2069]")
-
-// stripUnicodeControlChars removes bidirectional control characters and other
-// invisible Unicode characters that could be used for obfuscation.
-func stripUnicodeControlChars(query string) string {
-	return unicodeControlChars.ReplaceAllString(query, "")
-}
-
-// isLatin checks if a rune is a basic Latin letter (ASCII A-Z, a-z).
-// Used for homoglyph detection — SQL keywords are pure ASCII Latin.
-func isLatin(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-}
-
-// containsHomoglyphs checks if the query contains non-ASCII letters that could be
-// homoglyphs of ASCII letters used in SQL keywords. For example, Cyrillic 'е' (U+0435)
-// looks identical to Latin 'e' and can be used to obfuscate keywords like SELесT.
-func containsHomoglyphs(query string) bool {
-	// First strip string literals to avoid false positives
-	queryWithoutStrings := stripStringLiterals(query)
-
-	// Strip any Unicode control characters first
-	queryClean := stripUnicodeControlChars(queryWithoutStrings)
-
-	// Check each character — if it's a letter but not Latin, it's a potential homoglyph
-	for _, r := range queryClean {
-		if unicode.IsLetter(r) && !isLatin(r) {
-			return true
-		}
-	}
-	return false
-}
-
-// normalizeToASCII attempts to transliterate common Unicode homoglyphs to their ASCII equivalents.
-// This helps detect keywords obfuscated with Cyrillic, Greek, etc. characters.
-// Returns the normalized string and true if any transliteration was performed.
-func normalizeToASCII(query string) string {
-	// Map of common Cyrillic/Greek homoglyphs to Latin letters
-	// Only includes characters that visually resemble ASCII letters and are commonly used in attacks
-	homoglyphMap := map[rune]rune{
-		// Cyrillic homoglyphs (U+0430-U+044F are Cyrillic lowercase)
-		'\u0430': 'a', // Cyrillic 'а' → 'a'
-		'\u0435': 'e', // Cyrillic 'е' → 'e'
-		'\u043e': 'o', // Cyrillic 'о' → 'o'
-		'\u0440': 'p', // Cyrillic 'р' → 'p'
-		'\u0441': 'c', // Cyrillic 'с' → 'c'
-		'\u0445': 'x', // Cyrillic 'х' → 'x'
-		'\u0451': 'e', // Cyrillic 'ё' → 'e'
-		// Greek homoglyphs (U+03B1-U+03C9 are Greek lowercase)
-		'\u03B1': 'a', // Greek 'α' → 'a'
-		'\u03B5': 'e', // Greek 'ε' → 'e'
-		'\u03BF': 'o', // Greek 'ο' → 'o'
-		'\u03C1': 'p', // Greek 'ρ' → 'p'
-		'\u03C4': 't', // Greek 'τ' → 't'
-		'\u03C5': 'u', // Greek 'υ' → 'u'
-		// Full-width Latin lookalikes (U+FF41-U+FF5A are full-width lowercase)
-		'\uFF41': 'a',
-		'\uFF42': 'b',
-		'\uFF43': 'c',
-		'\uFF44': 'd',
-		'\uFF45': 'e',
-		// Mathematical bold Fraktur etc. - skip for brevity
-	}
-
-	result := make([]rune, 0, len(query))
-	for _, r := range query {
-		if replacement, ok := homoglyphMap[r]; ok {
-			result = append(result, replacement)
-		} else {
-			result = append(result, r)
-		}
-	}
-	return string(result)
-}
-
-// validateQueryUnicodeSafety checks for Unicode-based obfuscation techniques
-// including homoglyphs and bidirectional control characters.
-func (s *MCPMSSQLServer) validateQueryUnicodeSafety(query string) error {
-	// Strip string literals and comments first
-	cleanQuery := stripAllComments(query)
-	cleanQuery = stripStringLiterals(cleanQuery)
-
-	// Check for bidirectional control characters (RTL/LTR override)
-	if unicodeControlChars.MatchString(cleanQuery) {
-		return fmt.Errorf("query contains Unicode control characters (e.g. bidirectional override) which can be used for obfuscation")
-	}
-
-	// Check for homoglyphs - non-Latin letters that could mimic ASCII keyword characters
-	if containsHomoglyphs(cleanQuery) {
-		// Try to normalize and check if it reveals a dangerous keyword
-		normalized := normalizeToASCII(cleanQuery)
-		upperNormalized := strings.ToUpper(normalized)
-
-		// Check if normalization reveals a dangerous keyword
-		for keyword, pattern := range dangerousKeywordPatterns {
-			if pattern.MatchString(upperNormalized) {
-				return fmt.Errorf("query contains non-ASCII characters that appear to be homoglyphs of keyword '%s' — possible Unicode obfuscation attack", keyword)
-			}
-		}
-
-		// Even if no known keyword found, flag suspicious Unicode usage
-		return fmt.Errorf("query contains non-Latin Unicode characters that may be used for homoglyph obfuscation")
-	}
-
-	return nil
-}
-
-// containsCharConcatenation checks if the query uses CHAR()/NCHAR() concatenation
-// which can be used to construct keywords like SELECT, INSERT, etc. dynamically
-// to bypass simple pattern matching.
-func containsCharConcatenation(query string) bool {
-	// Strip string literals first to avoid false positives like 'CHAR(83)' in text output
-	queryWithoutStrings := stripStringLiterals(query)
-
-	// First quick check: if the pattern isn't found at all, return false
-	if !charConcatenationPattern.MatchString(queryWithoutStrings) {
-		return false
-	}
-
-	// More thorough check: look for CHAR/NCHAR with numeric arguments followed by +
-	// This catches: CHAR(83)+CHAR(69) or CHAR(83)+CHAR(69)+CHAR(76) etc.
-	// We look for 3+ concatenations as single chars are less likely to be abuse
-	concatPattern := regexp.MustCompile(`(?i)(CHAR|NCHAR)\s*\(\s*\d+\s*\)(\s*\+\s*(CHAR|NCHAR)\s*\(\s*\d+\s*\)){2,}`)
-	return concatPattern.MatchString(queryWithoutStrings)
-}
-
-// containsDangerousHints checks for table/index hints like NOLOCK that enable
-// dirty reads or other risky read behaviors.
-func containsDangerousHints(query string) bool {
-	queryWithoutStrings := stripStringLiterals(query)
-	return dangerousHintsPattern.MatchString(queryWithoutStrings)
-}
-
-// containsWaitfor checks for WAITFOR DELAY which enables timing attacks.
-func containsWaitfor(query string) bool {
-	queryWithoutStrings := stripStringLiterals(query)
-	return waitforPattern.MatchString(queryWithoutStrings)
-}
-
-// containsDangerousSelectPatterns checks for dangerous SELECT-based patterns
-// that could be used for data exfiltration or bypass attempts.
-func containsDangerousSelectPatterns(query string) bool {
-	queryWithoutStrings := stripStringLiterals(query)
-	upperQuery := strings.ToUpper(queryWithoutStrings)
-	// Check for OPENROWSET (data exfiltration to external sources)
-	if openrowsetPattern.MatchString(upperQuery) {
-		return true
-	}
-	// Check for OPENDATASOURCE (data exfiltration)
-	if opendatasourcePattern.MatchString(upperQuery) {
-		return true
-	}
-	// Check for SELECT INTO (creates new tables)
-	if selectIntoPattern.MatchString(upperQuery) {
-		return true
-	}
-	// Check for temporary tables in tempdb
-	if tempTablePattern.MatchString(upperQuery) {
-		// Only flag if it's a SELECT creating temp table (not just referencing one)
-		if strings.Contains(upperQuery, "SELECT") && strings.Contains(upperQuery, "INTO") {
-			return true
-		}
-	}
-	return false
-}
-
-// validateQueryStructuralSafety performs deep structural analysis of the query
-// to detect obfuscation techniques and dangerous patterns that simple keyword
-// matching would miss. Returns an error describing the specific threat if found.
-func (s *MCPMSSQLServer) validateQueryStructuralSafety(query string) error {
-	// Check for comment-based keyword obfuscation
-	// Strategy: if the original query (with comments intact) contains a dangerous keyword,
-	// block it regardless of position or whether it's inside a comment.
-	// This handles both "SELECT /*DROP*/" (keyword inside comment after prefix)
-	// and "/*DROP*/ SELECT" (keyword before prefix).
-	// We strip string literals to avoid false positives on "'DROP'" in data.
-	queryForCommentCheck := stripStringLiterals(query)
-
-	if strings.Contains(query, "/*") || strings.Contains(query, "--") {
-		upperOriginal := strings.ToUpper(queryForCommentCheck)
-		// Check each dangerous keyword in the original (comment-containing) query.
-		// This catches keywords hidden anywhere: before prefix, after prefix, inside comments.
-		for keyword := range dangerousKeywordPatterns {
-			// Use simple contains first as a quick check
-			if strings.Contains(upperOriginal, keyword) {
-				return fmt.Errorf("query contains forbidden keyword '%s' — comments cannot hide SQL keywords from security validation", keyword)
-			}
-		}
-	}
-
-	// Check for CHAR/NCHAR concatenation bypass
-	if containsCharConcatenation(query) {
-		return fmt.Errorf("query contains character concatenation pattern that may be used to bypass keyword detection")
-	}
-
-	// Check for dangerous table hints (NOLOCK, etc.)
-	if containsDangerousHints(query) {
-		return fmt.Errorf("query contains forbidden table hint (e.g. NOLOCK) which enables dirty reads")
-	}
-
-	// Check for WAITFOR (timing attacks)
-	if containsWaitfor(query) {
-		return fmt.Errorf("query contains WAITFOR which can be used for timing-based attacks to infer data existence")
-	}
-
-	// Check for dangerous SELECT patterns
-	if containsDangerousSelectPatterns(query) {
-		return fmt.Errorf("query contains dangerous pattern (OPENROWSET/OPENDATASOURCE/SELECT INTO) that could be used for data exfiltration")
-	}
-
-	return nil
-}
-
-// validateSubqueriesForRestrictedTables checks if any subqueries or CTEs reference
-// tables that would not be accessible in a direct query. This prevents exfiltration
-// via nested queries like: SELECT * FROM (SELECT secret_col FROM restricted_table) x
-func (s *MCPMSSQLServer) validateSubqueriesForRestrictedTables(query string) error {
-	if !s.config.readOnly {
-		return nil
-	}
-
-	whitelist := s.getWhitelistedTables()
-	if len(whitelist) == 0 {
-		return nil
-	}
-
-	// Check for subqueries in SELECT, FROM, or WHERE clauses
-	// Pattern: anything between ( and ) that contains SELECT
-	subqueryExtractPattern := regexp.MustCompile(`(?i)\(\s*SELECT\s+[^)]+\)`)
-	matches := subqueryExtractPattern.FindAllString(query, -1)
-
-	for _, subquery := range matches {
-		// Extract tables from the subquery
-		subqueryRefs := s.extractTableRefs(subquery)
-		for _, ref := range subqueryRefs {
-			// Cross-database refs in subqueries are especially suspicious
-			if ref.database != "" {
-				return fmt.Errorf("query contains subquery referencing cross-database table '%s.%s' which is not allowed", ref.database, ref.table)
-			}
-
-			// Check if the table is whitelisted for modification
-			isWhitelisted := false
-			for _, allowedTable := range whitelist {
-				if allowedTable == "*" {
-					isWhitelisted = true
-					break
-				}
-				if ref.table == allowedTable {
-					isWhitelisted = true
-					break
-				}
-			}
-
-			// If not whitelisted, this is a potential exfiltration via subquery
-			if !isWhitelisted {
-				return fmt.Errorf("query contains subquery that references non-whitelisted table '%s' — this pattern may be used for data exfiltration", ref.table)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (sl *SecurityLogger) sanitizeForLogging(input string) string {
-	result := input
-	for _, pattern := range sensitivePatterns {
-		result = pattern.ReplaceAllString(result, "${1}=***")
-	}
-
-	return result
-}
 
 // serverConfig holds cached configuration read once at startup.
 type serverConfig struct {
-	readOnly            bool
-	whitelistTables     []string
-	whitelistProcs      string
-	allowedDatabases    []string // additional databases this connector can query (cross-database)
-	confirmDestructive  bool     // require confirmation for destructive DDL operations
-	autopilot bool     // skip schema validation for autonomous operation (destructive confirmation still enforced)
-	skipSchemaValidation bool    // skip schema validation independently of autopilot (effective skip = autopilot OR skipSchemaValidation)
+	readOnly             bool
+	whitelistTables      []string
+	whitelistProcs       string
+	allowedDatabases     []string // additional databases this connector can query (cross-database)
+	confirmDestructive   bool     // require confirmation for destructive DDL operations
+	autopilot            bool     // skip schema validation for autonomous operation (destructive confirmation still enforced)
+	skipSchemaValidation bool     // skip schema validation independently of autopilot (effective skip = autopilot OR skipSchemaValidation)
 }
 
 // pendingOperation represents a destructive operation awaiting user confirmation.
@@ -789,13 +45,54 @@ type pendingOperation struct {
 // confirmationTokenTTL is how long a destructive operation token remains valid.
 const confirmationTokenTTL = 5 * time.Minute
 
-// tableRef represents a table reference that may include a cross-database qualifier.
-type tableRef struct {
-	database string // empty = current database
-	table    string // lowercase table name
+// pendingOpsGCInterval is the cadence at which expired confirmation tokens
+// are purged from s.pendingOps. Independent from confirmationTokenTTL: a token
+// can outlive its expiry by up to one interval before being collected.
+const pendingOpsGCInterval = 60 * time.Second
+
+// gcPendingOps removes confirmation tokens past their expiresAt. Returns
+// (active, purged) counts for logging. Safe to call concurrently with
+// checkDestructiveConfirmation / confirm_operation handlers because it
+// holds pendingOpMu for the duration of the sweep.
+func (s *MCPMSSQLServer) gcPendingOps() (active, purged int) {
+	now := time.Now()
+	s.pendingOpMu.Lock()
+	defer s.pendingOpMu.Unlock()
+
+	for token, op := range s.pendingOps {
+		if !now.Before(op.expiresAt) {
+			delete(s.pendingOps, token)
+			purged++
+		}
+	}
+	active = len(s.pendingOps)
+	return active, purged
 }
 
-// ConnectionInfo holds a named dynamic database connection.
+// startPendingOpsGC starts a background goroutine that periodically purges
+// expired confirmation tokens. Runs for the lifetime of the server. Logs at
+// each tick so operators can see token activity over time. Always logs at
+// least the active count; only logs purged when there was something to purge
+// (keeps logs quiet on idle servers).
+func (s *MCPMSSQLServer) startPendingOpsGC() {
+	go func() {
+		ticker := time.NewTicker(pendingOpsGCInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			active, purged := s.gcPendingOps()
+			if purged > 0 {
+				s.secLogger.Printf("pending_ops_gc: active=%d purged=%d", active, purged)
+			} else if active > 0 {
+				s.secLogger.Printf("pending_ops_gc: active=%d (none expired)", active)
+			}
+		}
+	}()
+}
+
+// ConnectionInfo holds a named dynamic database connection together with the
+// per-connection security policy. Each connection gets its own sqlguard.Guard
+// so a single MCP server can hold (for example) a read-only PROD connection
+// next to a permissive STAGING one without the policies bleeding between them.
 type ConnectionInfo struct {
 	Alias     string
 	DB        *sql.DB
@@ -803,11 +100,14 @@ type ConnectionInfo struct {
 	Database  string
 	User      string
 	CreatedAt time.Time
-	// Per-connection security config
+	// Per-connection security config. The guard is built from these fields
+	// in dynamic_connect; downstream handlers must use ConnectionInfo.guard
+	// (NOT the server-wide s.guard) when running queries against this DB.
 	readOnly             bool
 	whitelistTables      []string
 	autopilot            bool
 	skipSchemaValidation bool
+	guard                *sqlguard.Guard
 }
 
 // MSSQL Server
@@ -831,6 +131,8 @@ type MCPMSSQLServer struct {
 	connections     map[string]*ConnectionInfo
 	connMu          sync.RWMutex
 	maxDynamicConns int
+	// Security guard for SQL query validation
+	guard *sqlguard.Guard
 }
 
 // checkRateLimit implements a simple token-bucket rate limiter for tool invocations.
@@ -872,6 +174,9 @@ func (s *MCPMSSQLServer) addDynamicConnectionInfo(alias string, connInfo *Connec
 	s.connections[alias] = connInfo
 }
 
+// getDynamicConnection returns the *sql.DB for an active dynamic connection.
+// Most callers should prefer getDynamicConnectionInfo, which also returns the
+// per-connection security policy needed to validate queries correctly.
 func (s *MCPMSSQLServer) getDynamicConnection(alias string) (*sql.DB, bool) {
 	s.connMu.RLock()
 	defer s.connMu.RUnlock()
@@ -879,6 +184,17 @@ func (s *MCPMSSQLServer) getDynamicConnection(alias string) (*sql.DB, bool) {
 		return conn.DB, true
 	}
 	return nil, false
+}
+
+// getDynamicConnectionInfo returns the full ConnectionInfo (DB + per-connection
+// guard + policy flags) for an active alias, or (nil, false) when missing.
+// query_database uses this so each alias enforces its own policy instead of
+// falling back to the server-wide guard.
+func (s *MCPMSSQLServer) getDynamicConnectionInfo(alias string) (*ConnectionInfo, bool) {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	conn, ok := s.connections[alias]
+	return conn, ok
 }
 
 func (s *MCPMSSQLServer) listDynamicConnections() []*ConnectionInfo {
@@ -1033,320 +349,23 @@ func (s *MCPMSSQLServer) validateBasicInput(input string) error {
 	return nil
 }
 
-// stripLeadingComments removes SQL comments and whitespace from the beginning of a query.
-func stripLeadingComments(query string) string {
-	q := strings.TrimSpace(strings.ToUpper(query))
-	for strings.HasPrefix(q, "--") || strings.HasPrefix(q, "/*") || strings.HasPrefix(q, " ") || strings.HasPrefix(q, "\t") || strings.HasPrefix(q, "\n") || strings.HasPrefix(q, "\r") {
-		if strings.HasPrefix(q, "--") {
-			if idx := strings.Index(q, "\n"); idx != -1 {
-				q = strings.TrimSpace(q[idx+1:])
-			} else {
-				return q
-			}
-		} else if strings.HasPrefix(q, "/*") {
-			if idx := strings.Index(q, "*/"); idx != -1 {
-				q = strings.TrimSpace(q[idx+2:])
-			} else {
-				return q
-			}
-		} else {
-			q = strings.TrimSpace(q[1:])
-		}
-	}
-	return q
-}
-
-func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
-	// Check if read-only mode is enabled (cached at startup)
-	if !s.config.readOnly {
-		return nil // Read-only mode disabled, allow all queries
-	}
-
-	// If whitelist is configured, allow modifications to pass through to validateTablePermissions()
-	// This enables the use case: READ_ONLY=true + WHITELIST=table1,table2
-	// where only whitelisted tables can be modified
-	whitelist := s.getWhitelistedTables()
-	if len(whitelist) > 0 {
-		// Whitelist is configured - let validateTablePermissions() handle modification permissions
-		// We still need to block dangerous operations though
-		normalizedQuery := stripLeadingComments(query)
-		_ = normalizedQuery // used for future pattern matching if needed
-
-		// Block dangerous system procedures even with whitelist
-		dangerousSPs := []string{
-			"XP_CMDSHELL", "XP_REGREAD", "XP_REGWRITE", "XP_FILEEXIST",
-			"XP_DIRTREE", "XP_FIXEDDRIVES", "XP_SERVICECONTROL",
-			"SP_CONFIGURE", "SP_ADDLOGIN", "SP_DROPLOGIN",
-			"SP_ADDSRVROLEMEMBER", "SP_DROPSRVROLEMEMBER",
-			"SP_ADDROLEMEMBER", "SP_DROPROLEMEMBER",
-			"SP_EXECUTESQL", "SP_OACREATE", "SP_OAMETHOD",
-		}
-
-		queryUpper := strings.ToUpper(query)
-		for _, sp := range dangerousSPs {
-			if strings.Contains(queryUpper, sp) {
-				return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
-			}
-		}
-
-		// Allow query to proceed to validateTablePermissions() for whitelist check
-		return nil
-	}
-
-	// No whitelist configured - enforce strict read-only mode
-	normalizedQuery := stripLeadingComments(query)
-
-	// List of allowed read-only operations
-	allowedPrefixes := []string{
-		"SELECT",
-		"WITH", // Common Table Expressions that start with WITH
-		"SHOW",
-		"DESCRIBE",
-		"DESC",
-		"EXPLAIN",
-	}
-
-	// Check if query starts with an allowed prefix
-	for _, prefix := range allowedPrefixes {
-		if strings.HasPrefix(normalizedQuery, prefix) {
-			// Additional check: ensure no dangerous keywords are present (using word boundaries)
-			for keyword, pattern := range dangerousKeywordPatterns {
-				if pattern.MatchString(query) {
-					return fmt.Errorf("read-only mode: query contains forbidden operation '%s'", keyword)
-				}
-			}
-
-			// Dangerous system procedures (block these)
-			dangerousSPs := []string{
-				"XP_CMDSHELL", "XP_REGREAD", "XP_REGWRITE", "XP_FILEEXIST",
-				"XP_DIRTREE", "XP_FIXEDDRIVES", "XP_SERVICECONTROL",
-				"SP_CONFIGURE", "SP_ADDLOGIN", "SP_DROPLOGIN",
-				"SP_ADDSRVROLEMEMBER", "SP_DROPSRVROLEMEMBER",
-				"SP_ADDROLEMEMBER", "SP_DROPROLEMEMBER",
-				"SP_EXECUTESQL", "SP_OACREATE", "SP_OAMETHOD",
-			}
-
-			// Safe read-only system procedures (allow these)
-			safeSPs := []string{
-				"SP_HELP", "SP_HELPTEXT", "SP_HELPINDEX", "SP_HELPCONSTRAINT",
-				"SP_COLUMNS", "SP_TABLES", "SP_STORED_PROCEDURES",
-				"SP_FKEYS", "SP_PKEYS", "SP_STATISTICS",
-				"SP_DATABASES", "SP_HELPDB",
-			}
-
-			queryUpper := strings.ToUpper(query)
-			// Check for dangerous SPs
-			for _, sp := range dangerousSPs {
-				if strings.Contains(queryUpper, sp) {
-					return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
-				}
-			}
-
-			// If query contains SP_ or XP_, verify it's in the safe list
-			if strings.Contains(queryUpper, "SP_") || strings.Contains(queryUpper, "XP_") {
-				isSafe := false
-				for _, safeSP := range safeSPs {
-					if strings.Contains(queryUpper, safeSP) {
-						isSafe = true
-						break
-					}
-				}
-				if !isSafe {
-					return fmt.Errorf("read-only mode: system procedure not in allowed list")
-				}
-			}
-
-			return nil // Query is allowed
-		}
-	}
-
-	return fmt.Errorf("read-only mode: only SELECT and read operations are allowed")
-}
-
 // getWhitelistedTables returns the cached list of tables/views allowed for modification.
+// Kept as a thin accessor because callers in main.go still reach for it; new code
+// should use s.guard.Whitelist() instead.
 func (s *MCPMSSQLServer) getWhitelistedTables() []string {
 	return s.config.whitelistTables
 }
 
-// parseWhitelistTables parses a comma-separated whitelist into normalized lowercase slice.
-// The special value "*" means all tables are allowed for modification.
-func parseWhitelistTables(env string) []string {
-	if env == "" {
-		return nil
-	}
-	if strings.TrimSpace(env) == "*" {
-		return []string{"*"}
-	}
-	tables := strings.Split(env, ",")
-	var normalized []string
-	for _, table := range tables {
-		table = strings.TrimSpace(table)
-		if table != "" {
-			normalized = append(normalized, strings.ToLower(table))
-		}
-	}
-	return normalized
-}
-
-// parseAllowedDatabases parses a comma-separated list of allowed cross-database names.
-func parseAllowedDatabases(env string) []string {
-	if env == "" {
-		return nil
-	}
-	dbs := strings.Split(env, ",")
-	var normalized []string
-	for _, db := range dbs {
-		db = strings.TrimSpace(db)
-		if db != "" {
-			normalized = append(normalized, strings.ToLower(db))
-		}
-	}
-	return normalized
-}
-
-// parseTablePrefix parses a dot-separated prefix like "DB.schema." or "schema." into
-// (database, schema) components. Both may be empty for unqualified table references.
-func parseTablePrefix(prefix string) (database, schema string) {
-	prefix = strings.TrimRight(prefix, ".")
-	if prefix == "" {
-		return "", ""
-	}
-	parts := strings.Split(prefix, ".")
-	for i, p := range parts {
-		parts[i] = strings.Trim(p, "[] \t")
-	}
-	switch len(parts) {
-	case 1:
-		return "", strings.ToLower(parts[0]) // schema only
-	case 2:
-		return strings.ToLower(parts[0]), strings.ToLower(parts[1]) // database.schema
-	default:
-		return "", ""
-	}
-}
-
-// extractTableRefs finds all table/view references in the query, including cross-database
-// qualifiers like DatabaseName.dbo.TableName AND tables inside subqueries.
-// This prevents subquery-based evasion where a restricted table like sys.objects
-// is accessed through a nested SELECT: SELECT * FROM (SELECT name FROM sys.objects) AS x
-func (s *MCPMSSQLServer) extractTableRefs(query string) []tableRef {
-	queryUpper := strings.ToUpper(query)
-	type refKey struct{ db, table string }
-	seen := make(map[refKey]bool)
-	var refs []tableRef
-
-	// First: extract tables from subqueries (SELECT inside parentheses).
-	// This must run BEFORE the top-level patterns so subquery tables are included.
-	subqueryTables := s.extractTablesFromSubqueries(query)
-	for _, t := range subqueryTables {
-		key := refKey{t.database, t.table}
-		if !seen[key] {
-			seen[key] = true
-			refs = append(refs, t)
-		}
-	}
-
-	// Second: extract top-level table references (FROM, JOIN, INTO, etc.)
-	for _, pattern := range tableExtractionPatterns {
-		matches := pattern.FindAllStringSubmatch(queryUpper, -1)
-		for _, match := range matches {
-			if len(match) > 2 {
-				// match[1] = prefix (e.g. "DB.SCHEMA." or "SCHEMA." or ""), match[2] = table name
-				database, schemaPrefix := parseTablePrefix(match[1])
-
-				tableName := match[2]
-				tableName = strings.Trim(tableName, "[]")
-				tableName = strings.ToLower(strings.TrimSpace(tableName))
-				if tableName == "" || sqlReservedWords[tableName] {
-					continue
-				}
-
-				// For system schema objects (sys.*, INFORMATION_SCHEMA.*),
-				// include them with schema-qualified name so whitelist validation
-				// can block unauthorized access (e.g. sys.objects, information_schema.columns).
-				if systemSchemas[schemaPrefix] {
-					tableName = schemaPrefix + "." + tableName
-				} else if systemSchemas[database] {
-					// database part is actually a system schema (e.g. sys.objects without db prefix)
-					tableName = database + "." + tableName
-					database = ""
-				}
-
-				key := refKey{database, tableName}
-				if !seen[key] {
-					seen[key] = true
-					refs = append(refs, tableRef{database: database, table: tableName})
-				}
-			}
-		}
-	}
-	return refs
-}
-
-// extractTablesFromSubqueries extracts all table references that appear inside subqueries.
-// This closes the evasion gap where restricted tables (like sys.objects) are accessed
-// through "SELECT * FROM (SELECT col FROM restricted_table) AS x".
-func (s *MCPMSSQLServer) extractTablesFromSubqueries(query string) []tableRef {
-	type refKey struct{ db, table string }
-	seen := make(map[refKey]bool)
-	var refs []tableRef
-
-	// Remove string literals first so we don't accidentally match tables inside strings
-	queryClean := stripStringLiterals(query)
-
-	// Find all subquery bodies: content between ( and ) that contains SELECT
-	// We look for (SELECT ... FROM ...) patterns
-	subqueryPattern := regexp.MustCompile(`(?i)\(\s*SELECT\s+[^()]+FROM\s+[^()]+\)`)
-	matches := subqueryPattern.FindAllString(queryClean, -1)
-
-	for _, subquery := range matches {
-		// For each subquery, extract table references using the same patterns
-		subqueryUpper := strings.ToUpper(subquery)
-		for _, pattern := range tableExtractionPatterns {
-			subMatches := pattern.FindAllStringSubmatch(subqueryUpper, -1)
-			for _, match := range subMatches {
-				if len(match) > 2 {
-					database, schemaPrefix := parseTablePrefix(match[1])
-
-					tableName := match[2]
-					tableName = strings.Trim(tableName, "[]")
-					tableName = strings.ToLower(strings.TrimSpace(tableName))
-					if tableName == "" || sqlReservedWords[tableName] {
-						continue
-					}
-
-					// For system schema objects in subqueries (sys.objects, INFORMATION_SCHEMA.COLUMNS),
-					// include them with schema-qualified name so the whitelist check blocks them.
-					if systemSchemas[schemaPrefix] {
-						tableName = schemaPrefix + "." + tableName
-					} else if systemSchemas[database] {
-						tableName = database + "." + tableName
-						database = ""
-					}
-
-					key := refKey{database, tableName}
-					if !seen[key] {
-						seen[key] = true
-						refs = append(refs, tableRef{database: database, table: tableName})
-					}
-				}
-			}
-		}
-	}
-
-	return refs
-}
-
 // extractAllTablesFromQuery finds all table/view names referenced in the query (flat list).
-// This is a backward-compatible wrapper around extractTableRefs that returns only table names.
+// This is a backward-compatible wrapper around sqlguard.ExtractTableRefs that returns only table names.
 func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
-	refs := s.extractTableRefs(query)
+	refs := sqlguard.ExtractTableRefs(query)
 	seen := make(map[string]bool)
 	var tables []string
 	for _, ref := range refs {
-		if !seen[ref.table] {
-			seen[ref.table] = true
-			tables = append(tables, ref.table)
+		if !seen[ref.Table] {
+			seen[ref.Table] = true
+			tables = append(tables, ref.Table)
 		}
 	}
 	return tables
@@ -1395,7 +414,7 @@ func (s *MCPMSSQLServer) loadTablesForDatabase(ctx context.Context, database str
 // Returns nil if all tables exist or validation was skipped,
 // or an error message with suggestions if unknown tables are found.
 func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) *string {
-	refs := s.extractTableRefs(query)
+	refs := sqlguard.ExtractTableRefs(query)
 	if len(refs) == 0 {
 		return nil
 	}
@@ -1421,40 +440,33 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 	for _, ref := range refs {
 		// Skip system schema-qualified tables (sys.objects, information_schema.columns, etc.)
 		// These are virtual/system tables not listed in INFORMATION_SCHEMA.TABLES
-		isSystemTable := false
-		for sysSchema := range systemSchemas {
-			if strings.HasPrefix(ref.table, sysSchema+".") {
-				isSystemTable = true
-				break
-			}
-		}
-		if isSystemTable {
+		if sqlguard.IsSystemSchemaTable(ref.Table) {
 			continue
 		}
-		if ref.database != "" {
+		if ref.Database != "" {
 			// Cross-database reference — check if database is allowed
-			if !s.isAllowedDatabase(ref.database) {
-				missing = append(missing, fmt.Sprintf("%s.%s", ref.database, ref.table))
+			if !s.isAllowedDatabase(ref.Database) {
+				missing = append(missing, fmt.Sprintf("%s.%s", ref.Database, ref.Table))
 				continue
 			}
 			// Load tables for that database if not cached
-			if _, ok := tableCache[ref.database]; !ok {
-				dbTables, err := s.loadTablesForDatabase(ctx, ref.database)
+			if _, ok := tableCache[ref.Database]; !ok {
+				dbTables, err := s.loadTablesForDatabase(ctx, ref.Database)
 				if err != nil {
 					// Can't read that database's schema — skip validation for it
-					s.secLogger.Printf("Schema validation skipped: cannot load tables from cross-database '%s' (err: %v)", ref.database, err)
+					s.secLogger.Printf("Schema validation skipped: cannot load tables from cross-database '%s' (err: %v)", ref.Database, err)
 					continue
 				}
-				s.secLogger.Printf("Schema validation: loaded %d tables from cross-database '%s'", len(dbTables), ref.database)
-				tableCache[ref.database] = dbTables
+				s.secLogger.Printf("Schema validation: loaded %d tables from cross-database '%s'", len(dbTables), ref.Database)
+				tableCache[ref.Database] = dbTables
 			}
-			if !tableCache[ref.database][ref.table] {
-				missing = append(missing, fmt.Sprintf("%s.%s", ref.database, ref.table))
+			if !tableCache[ref.Database][ref.Table] {
+				missing = append(missing, fmt.Sprintf("%s.%s", ref.Database, ref.Table))
 			}
 		} else {
 			// Current database reference
-			if !currentTables[ref.table] {
-				missing = append(missing, ref.table)
+			if !currentTables[ref.Table] {
+				missing = append(missing, ref.Table)
 			}
 		}
 	}
@@ -1505,34 +517,24 @@ func (s *MCPMSSQLServer) validateTablesExist(ctx context.Context, query string) 
 	return &msg
 }
 
-// objectType represents the type of database object to check for existence.
-type objectType string
-
-const (
-	objectTypeTable     objectType = "U"   // user table
-	objectTypeView      objectType = "V"   // view
-	objectTypeProcedure objectType = "P"   // stored procedure
-	objectTypeFunction  objectType = "FN"  // scalar function; also IF (inline), TF (table-valued)
-)
-
 // objectExists checks if a database object (table, view, proc, func) already exists.
 // schema and name should be lowercase for consistency.
-func (s *MCPMSSQLServer) objectExists(ctx context.Context, schema, name string, objType objectType) (bool, error) {
+func (s *MCPMSSQLServer) objectExists(ctx context.Context, schema, name string, objType sqlguard.ObjectType) (bool, error) {
 	db := s.getDB()
 	if db == nil {
 		return false, fmt.Errorf("database not connected")
 	}
 
-	// Map objectType to sys.objects type codes
+	// Map ObjectType to sys.objects type codes
 	var typeCodes []string
 	switch objType {
-	case objectTypeTable:
+	case sqlguard.ObjectTypeTable:
 		typeCodes = []string{"U"}
-	case objectTypeView:
+	case sqlguard.ObjectTypeView:
 		typeCodes = []string{"V"}
-	case objectTypeProcedure:
+	case sqlguard.ObjectTypeProcedure:
 		typeCodes = []string{"P", "PC"} // also "PC" for CLR procedure
-	case objectTypeFunction:
+	case sqlguard.ObjectTypeFunction:
 		typeCodes = []string{"FN", "IF", "TF", "FT"} // scalar, inline table, table-valued, assembly
 	default:
 		return false, fmt.Errorf("unknown object type: %s", objType)
@@ -1569,113 +571,6 @@ func placeholders(count int) string {
 	return strings.Join(parts, ", ")
 }
 
-// extractDDLTargetObjects extracts schema.object names from a DDL query.
-// Returns a list of targets that should be checked for existence.
-func (s *MCPMSSQLServer) extractDDLTargetObjects(query string) []struct {
-	schema string
-	name   string
-	objType objectType
-} {
-	var targets []struct {
-		schema string
-		name   string
-		objType objectType
-	}
-
-	// Check DROP TABLE
-	if matches := regexp.MustCompile(`(?i)\bDROP\s+TABLE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
-		prefix, name := matches[1], matches[2]
-		schema, objName := parseTableRef(prefix, name)
-		targets = append(targets, struct {
-			schema string
-			name   string
-			objType objectType
-		}{schema: schema, name: objName, objType: objectTypeTable})
-	}
-
-	// Check DROP VIEW
-	if matches := regexp.MustCompile(`(?i)\bDROP\s+VIEW\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
-		prefix, name := matches[1], matches[2]
-		schema, objName := parseTableRef(prefix, name)
-		targets = append(targets, struct {
-			schema string
-			name   string
-			objType objectType
-		}{schema: schema, name: objName, objType: objectTypeView})
-	}
-
-	// Check DROP PROCEDURE
-	if matches := regexp.MustCompile(`(?i)\bDROP\s+PROCEDURE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
-		prefix, name := matches[1], matches[2]
-		schema, objName := parseTableRef(prefix, name)
-		targets = append(targets, struct {
-			schema string
-			name   string
-			objType objectType
-		}{schema: schema, name: objName, objType: objectTypeProcedure})
-	}
-
-	// Check DROP FUNCTION
-	if matches := regexp.MustCompile(`(?i)\bDROP\s+FUNCTION\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
-		prefix, name := matches[1], matches[2]
-		schema, objName := parseTableRef(prefix, name)
-		targets = append(targets, struct {
-			schema string
-			name   string
-			objType objectType
-		}{schema: schema, name: objName, objType: objectTypeFunction})
-	}
-
-	// Check ALTER VIEW
-	if matches := regexp.MustCompile(`(?i)\bALTER\s+VIEW\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
-		prefix, name := matches[1], matches[2]
-		schema, objName := parseTableRef(prefix, name)
-		targets = append(targets, struct {
-			schema string
-			name   string
-			objType objectType
-		}{schema: schema, name: objName, objType: objectTypeView})
-	}
-
-	// Check ALTER TABLE (for DROP COLUMN, etc.)
-	if matches := regexp.MustCompile(`(?i)\bALTER\s+TABLE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
-		prefix, name := matches[1], matches[2]
-		schema, objName := parseTableRef(prefix, name)
-		targets = append(targets, struct {
-			schema string
-			name   string
-			objType objectType
-		}{schema: schema, name: objName, objType: objectTypeTable})
-	}
-
-	// Check TRUNCATE TABLE
-	if matches := regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+((?:\[?[\w]+\]?\.)?\[?([\w]+)\]?)`).FindStringSubmatch(query); len(matches) >= 3 {
-		prefix, name := matches[1], matches[2]
-		schema, objName := parseTableRef(prefix, name)
-		targets = append(targets, struct {
-			schema string
-			name   string
-			objType objectType
-		}{schema: schema, name: objName, objType: objectTypeTable})
-	}
-
-	return targets
-}
-
-// parseTableRef parses a table reference prefix and name into schema and table name.
-// Handles forms like: "table", "schema.table", "[table]", "[schema].[table]", etc.
-func parseTableRef(prefix, name string) (schema, tableName string) {
-	tableName = strings.ToLower(strings.Trim(strings.Trim(name, "[]"), "\""))
-
-	if prefix == "" {
-		return "dbo", tableName // default schema
-	}
-
-	// prefix might be "schema." or "[schema]."
-	schema = strings.ToLower(strings.Trim(strings.Trim(prefix, "[]\""), "."))
-	return schema, tableName
-}
-
 // checkDestructiveConfirmation checks if a query targets an existing object and requires
 // user confirmation before execution. Returns (token, error) if confirmation is needed.
 func (s *MCPMSSQLServer) checkDestructiveConfirmation(ctx context.Context, query string) (string, error) {
@@ -1685,16 +580,16 @@ func (s *MCPMSSQLServer) checkDestructiveConfirmation(ctx context.Context, query
 	}
 
 	// Extract target objects from the DDL query
-	targets := s.extractDDLTargetObjects(query)
+	targets := sqlguard.ExtractDDLTargetObjects(query)
 	if len(targets) == 0 {
 		return "", nil // Not a destructive operation we track
 	}
 
 	// Check if any target object exists
 	for _, target := range targets {
-		exists, err := s.objectExists(ctx, target.schema, target.name, target.objType)
+		exists, err := s.objectExists(ctx, target.Schema, target.Name, target.ObjType)
 		if err != nil {
-			s.secLogger.Printf("Error checking object existence for %s.%s: %v", target.schema, target.name, err)
+			s.secLogger.Printf("Error checking object existence for %s.%s: %v", target.Schema, target.Name, err)
 			continue // Skip on error, let the query execute
 		}
 		if exists {
@@ -1710,29 +605,13 @@ func (s *MCPMSSQLServer) checkDestructiveConfirmation(ctx context.Context, query
 
 			// Log the warning
 			s.secLogger.Printf("DESTRUCTIVE OPERATION WARNING: %s on existing %s.%s (%s) - token: %s",
-				extractDestructiveOpType(query), target.schema, target.name, target.objType, token)
+				sqlguard.ExtractDestructiveOpType(query), target.Schema, target.Name, target.ObjType, token)
 
 			return token, nil
 		}
 	}
 
 	return "", nil
-}
-
-// extractDestructiveOpType returns a human-readable operation type from the query.
-func extractDestructiveOpType(query string) string {
-	upper := strings.ToUpper(query)
-	for op, pattern := range destructiveOpPatterns {
-		if pattern.MatchString(query) {
-			return strings.ReplaceAll(op, "_", " ")
-		}
-	}
-	// Fallback: extract first word
-	parts := strings.Fields(upper)
-	if len(parts) > 0 {
-		return parts[0] + " (detected)"
-	}
-	return "UNKNOWN"
 }
 
 // generateOpToken generates a random confirmation token using crypto/rand.
@@ -1744,235 +623,6 @@ func generateOpToken() string {
 	return hex.EncodeToString(b)
 }
 
-// findSimilarNames returns up to 3 existing table names similar to the target.
-// Uses Levenshtein-like prefix/substring matching for practical suggestions.
-func findSimilarNames(target string, existing map[string]bool) []string {
-	var scored []struct {
-		name  string
-		score int
-	}
-
-	for name := range existing {
-		score := similarityScore(target, name)
-		if score > 0 {
-			scored = append(scored, struct {
-				name  string
-				score int
-			}{name, score})
-		}
-	}
-
-	// Sort by score descending
-	for i := 0; i < len(scored); i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[j].score > scored[i].score {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
-		}
-	}
-
-	var suggestions []string
-	limit := 3
-	if len(scored) < limit {
-		limit = len(scored)
-	}
-	for i := 0; i < limit; i++ {
-		suggestions = append(suggestions, "'"+scored[i].name+"'")
-	}
-	return suggestions
-}
-
-// similarityScore returns a score > 0 if two table names are similar enough to suggest.
-// Higher score = better match. Returns 0 if not similar enough.
-func similarityScore(target, candidate string) int {
-	// Exact prefix match (strongest signal)
-	if strings.HasPrefix(candidate, target) || strings.HasPrefix(target, candidate) {
-		return 100
-	}
-
-	// Substring match
-	if strings.Contains(candidate, target) || strings.Contains(target, candidate) {
-		return 80
-	}
-
-	// Levenshtein distance for short names
-	dist := levenshtein(target, candidate)
-	maxLen := len(target)
-	if len(candidate) > maxLen {
-		maxLen = len(candidate)
-	}
-	if maxLen == 0 {
-		return 0
-	}
-
-	// Allow distance up to ~30% of the longer name
-	threshold := maxLen * 30 / 100
-	if threshold < 2 {
-		threshold = 2
-	}
-	if dist <= threshold {
-		return 60 - dist
-	}
-
-	return 0
-}
-
-// levenshtein computes the edit distance between two strings (lowercase comparison).
-func levenshtein(a, b string) int {
-	a = strings.ToLower(a)
-	b = strings.ToLower(b)
-
-	if len(a) == 0 {
-		return len(b)
-	}
-	if len(b) == 0 {
-		return len(a)
-	}
-
-	// Use single-row optimization
-	prev := make([]int, len(b)+1)
-	curr := make([]int, len(b)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-
-	for i := 1; i <= len(a); i++ {
-		curr[0] = i
-		for j := 1; j <= len(b); j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-			curr[j] = min3(curr[j-1]+1, prev[j]+1, prev[j-1]+cost)
-		}
-		prev, curr = curr, prev
-	}
-	return prev[len(b)]
-}
-
-func min3(a, b, c int) int {
-	if a < b {
-		if a < c {
-			return a
-		}
-		return c
-	}
-	if b < c {
-		return b
-	}
-	return c
-}
-
-// extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
-func (s *MCPMSSQLServer) extractOperation(query string) string {
-	queryUpper := stripLeadingComments(query)
-
-	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
-	for _, op := range modifyOps {
-		if strings.HasPrefix(queryUpper, op) {
-			return op
-		}
-	}
-
-	// If WITH is found, check if there's a modify operation after the CTE
-	if strings.HasPrefix(queryUpper, "WITH") {
-		for _, op := range modifyOps {
-			if strings.Contains(queryUpper, op) {
-				return op
-			}
-		}
-	}
-
-	return "SELECT" // Default to SELECT for read operations
-}
-
-// validateTablePermissions validates that all tables in a modify operation are whitelisted.
-// Cross-database table references are always blocked for modification (security: only
-// current-database tables can be in the whitelist).
-func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
-	// Only validate if read-only mode is enabled (cached at startup)
-	if !s.config.readOnly {
-		return nil // Whitelist mode disabled, allow all operations
-	}
-
-	whitelist := s.getWhitelistedTables()
-	operation := s.extractOperation(query)
-
-	// Determine if this is a modification operation
-	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
-	isModifyOp := false
-	for _, op := range modifyOps {
-		if operation == op {
-			isModifyOp = true
-			break
-		}
-	}
-
-	// If not a modify operation (e.g., SELECT), allow it
-	if !isModifyOp {
-		return nil
-	}
-
-	// Extract ALL table references including cross-database
-	refsInQuery := s.extractTableRefs(query)
-
-	// Build flat list for logging
-	var tableNames []string
-	for _, ref := range refsInQuery {
-		if ref.database != "" {
-			tableNames = append(tableNames, ref.database+"."+ref.table)
-		} else {
-			tableNames = append(tableNames, ref.table)
-		}
-	}
-
-	s.secLogger.Printf("Permission check - Operation: %s, Tables found: %v, Whitelist: %v",
-		operation, tableNames, whitelist)
-
-	// If whitelist is empty, deny all modifications
-	if len(whitelist) == 0 {
-		return fmt.Errorf("permission denied: no tables are whitelisted for %s operations", operation)
-	}
-
-	// Wildcard "*" means all tables are allowed for modification
-	for _, allowedTable := range whitelist {
-		if allowedTable == "*" {
-			s.secLogger.Printf("Permission granted: %s operation allowed by wildcard whitelist (*)", operation)
-			return nil
-		}
-	}
-
-	// Check if ALL tables in the query are whitelisted
-	for _, ref := range refsInQuery {
-		// Cross-database modifications are always blocked
-		if ref.database != "" {
-			s.secLogger.Printf("SECURITY VIOLATION: Attempted %s operation on cross-database table '%s.%s'",
-				operation, ref.database, ref.table)
-			return fmt.Errorf("permission denied: cross-database modification not allowed — table '%s.%s' is in another database",
-				ref.database, ref.table)
-		}
-
-		isWhitelisted := false
-		for _, allowedTable := range whitelist {
-			if ref.table == allowedTable {
-				isWhitelisted = true
-				break
-			}
-		}
-
-		if !isWhitelisted {
-			s.secLogger.Printf("SECURITY VIOLATION: Attempted %s operation on non-whitelisted table '%s'",
-				operation, ref.table)
-			return fmt.Errorf("permission denied: table '%s' is not whitelisted for %s operations",
-				ref.table, operation)
-		}
-	}
-
-	// All tables are whitelisted
-	s.secLogger.Printf("Permission granted: %s operation on whitelisted table(s) %v",
-		operation, tableNames)
-	return nil
-}
 
 // maxQueryRows limits the number of rows returned by any query to prevent token overflow.
 const maxQueryRows = 500
@@ -1990,69 +640,57 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	}
 
 	// Validate read-only restrictions
-	if err := s.validateReadOnlyQuery(query); err != nil {
+	if err := s.guard.ValidateReadOnly(query); err != nil {
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
 		return nil, err
 	}
 
 	// Validate granular table permissions (whitelist)
-	if err := s.validateTablePermissions(query); err != nil {
+	if err := s.guard.ValidateTablePermissions(query); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
 		return nil, err
 	}
 
-	// Validate query structural safety (inline comments, CHAR concatenation, NOLOCK hints, etc.)
-	if err := s.validateQueryStructuralSafety(query); err != nil {
-		s.secLogger.Printf("Structural safety violation blocked: %s", err)
-		return nil, err
-	}
-
-	// Validate Unicode obfuscation (homoglyphs, bidirectional control characters)
-	if err := s.validateQueryUnicodeSafety(query); err != nil {
-		s.secLogger.Printf("Unicode safety violation blocked: %s", err)
-		return nil, err
-	}
-
 	// Validate subqueries don't reference restricted tables
-	if err := s.validateSubqueriesForRestrictedTables(query); err != nil {
+	if err := s.guard.ValidateSubqueriesForRestrictedTables(query); err != nil {
 		s.secLogger.Printf("Subquery safety violation blocked: %s", err)
 		return nil, err
 	}
 
 	// Check for destructive operation confirmation requirement
 	// AUTOPILOT does NOT skip destructive confirmation — each dangerous operation requires explicit confirmation
-	s.secLogger.Printf("AUTOPILOT=%v — %s", s.config.autopilot, s.extractOperation(query))
+	s.secLogger.Printf("AUTOPILOT=%v — %s", s.config.autopilot, sqlguard.ExtractOperation(query))
 	if token, err := s.checkDestructiveConfirmation(ctx, query); err != nil {
-			// If check fails with confirmation requirement, return confirmation error
-			if token != "" {
-				targets := s.extractDDLTargetObjects(query)
-				var targetStr string
-				if len(targets) > 0 {
-					targetStr = targets[0].schema + "." + targets[0].name
-				}
-				opType := extractDestructiveOpType(query)
-				return nil, &ConfirmationRequiredError{
-					Token:     token,
-					Operation: opType,
-					Target:    targetStr,
-					ExpiresIn: "5 minutes",
-				}
-			}
-			// Other errors from checkDestructiveConfirmation are logged but don't block
-		} else if token != "" {
-			// Confirmation required
-			targets := s.extractDDLTargetObjects(query)
+		// If check fails with confirmation requirement, return confirmation error
+		if token != "" {
+			targets := sqlguard.ExtractDDLTargetObjects(query)
 			var targetStr string
 			if len(targets) > 0 {
-				targetStr = targets[0].schema + "." + targets[0].name
+				targetStr = targets[0].Schema + "." + targets[0].Name
 			}
-			opType := extractDestructiveOpType(query)
+			opType := sqlguard.ExtractDestructiveOpType(query)
 			return nil, &ConfirmationRequiredError{
 				Token:     token,
 				Operation: opType,
 				Target:    targetStr,
 				ExpiresIn: "5 minutes",
 			}
+		}
+		// Other errors from checkDestructiveConfirmation are logged but don't block
+	} else if token != "" {
+		// Confirmation required
+		targets := sqlguard.ExtractDDLTargetObjects(query)
+		var targetStr string
+		if len(targets) > 0 {
+			targetStr = targets[0].Schema + "." + targets[0].Name
+		}
+		opType := sqlguard.ExtractDestructiveOpType(query)
+		return nil, &ConfirmationRequiredError{
+			Token:     token,
+			Operation: opType,
+			Target:    targetStr,
+			ExpiresIn: "5 minutes",
+		}
 	}
 
 	stmt, err := db.PrepareContext(ctx, query)
@@ -2122,11 +760,21 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	return results, nil
 }
 
-// executeSecureQueryWithDB is a wrapper that accepts an explicit db connection.
-// This enables dynamic multi-database connections in MSSQL_DYNAMIC_MODE.
-func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.DB, query string, args ...interface{}) ([]map[string]interface{}, error) {
+// executeSecureQueryWithDB is a wrapper that accepts an explicit db connection
+// and a per-call sqlguard.Guard. This enables dynamic multi-database
+// connections in MSSQL_DYNAMIC_MODE: each ConnectionInfo carries its own
+// guard, so queries against alias "prod" enforce prod's policy and queries
+// against "staging" enforce staging's, even from the same MCP server.
+//
+// guard may be nil — in that case the server-wide s.guard is used. Callers
+// hitting the default DB should pass nil; callers hitting a dynamic alias
+// should pass connInfo.guard.
+func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.DB, guard *sqlguard.Guard, query string, args ...interface{}) ([]map[string]interface{}, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not connected")
+	}
+	if guard == nil {
+		guard = s.guard
 	}
 
 	if err := s.validateBasicInput(query); err != nil {
@@ -2134,63 +782,35 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 	}
 
 	// Validate read-only restrictions
-	if err := s.validateReadOnlyQuery(query); err != nil {
+	if err := guard.ValidateReadOnly(query); err != nil {
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
 		return nil, err
 	}
 
 	// Validate granular table permissions (whitelist)
-	if err := s.validateTablePermissions(query); err != nil {
+	if err := guard.ValidateTablePermissions(query); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
 		return nil, err
 	}
 
-	// Validate query structural safety (inline comments, CHAR concatenation, NOLOCK hints, etc.)
-	if err := s.validateQueryStructuralSafety(query); err != nil {
-		s.secLogger.Printf("Structural safety violation blocked: %s", err)
-		return nil, err
-	}
-
-	// Validate Unicode obfuscation (homoglyphs, bidirectional control characters)
-	if err := s.validateQueryUnicodeSafety(query); err != nil {
-		s.secLogger.Printf("Unicode safety violation blocked: %s", err)
-		return nil, err
-	}
-
 	// Validate subqueries don't reference restricted tables
-	if err := s.validateSubqueriesForRestrictedTables(query); err != nil {
+	if err := guard.ValidateSubqueriesForRestrictedTables(query); err != nil {
 		s.secLogger.Printf("Subquery safety violation blocked: %s", err)
 		return nil, err
 	}
 
 	// Check for destructive operation confirmation requirement
 	// AUTOPILOT does NOT skip destructive confirmation — each dangerous operation requires explicit confirmation
-	s.secLogger.Printf("AUTOPILOT=%v — %s", s.config.autopilot, s.extractOperation(query))
+	s.secLogger.Printf("AUTOPILOT=%v — %s", s.config.autopilot, sqlguard.ExtractOperation(query))
 	if token, err := s.checkDestructiveConfirmation(ctx, query); err != nil {
-			// If check fails with confirmation requirement, return confirmation error
-			if token != "" {
-				targets := s.extractDDLTargetObjects(query)
-				var targetStr string
-				if len(targets) > 0 {
-					targetStr = targets[0].schema + "." + targets[0].name
-				}
-				opType := extractDestructiveOpType(query)
-				return nil, &ConfirmationRequiredError{
-					Token:     token,
-					Operation: opType,
-					Target:    targetStr,
-					ExpiresIn: "5 minutes",
-				}
-			}
-			// Other errors from checkDestructiveConfirmation are logged but don't block
-		} else if token != "" {
-			// Confirmation required
-			targets := s.extractDDLTargetObjects(query)
+		// If check fails with confirmation requirement, return confirmation error
+		if token != "" {
+			targets := sqlguard.ExtractDDLTargetObjects(query)
 			var targetStr string
 			if len(targets) > 0 {
-				targetStr = targets[0].schema + "." + targets[0].name
+				targetStr = targets[0].Schema + "." + targets[0].Name
 			}
-			opType := extractDestructiveOpType(query)
+			opType := sqlguard.ExtractDestructiveOpType(query)
 			return nil, &ConfirmationRequiredError{
 				Token:     token,
 				Operation: opType,
@@ -2198,6 +818,22 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 				ExpiresIn: "5 minutes",
 			}
 		}
+		// Other errors from checkDestructiveConfirmation are logged but don't block
+	} else if token != "" {
+		// Confirmation required
+		targets := sqlguard.ExtractDDLTargetObjects(query)
+		var targetStr string
+		if len(targets) > 0 {
+			targetStr = targets[0].Schema + "." + targets[0].Name
+		}
+		opType := sqlguard.ExtractDestructiveOpType(query)
+		return nil, &ConfirmationRequiredError{
+			Token:     token,
+			Operation: opType,
+			Target:    targetStr,
+			ExpiresIn: "5 minutes",
+		}
+	}
 
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
@@ -2282,1646 +918,27 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 	switch params.Name {
 	case "get_database_info":
-		var info strings.Builder
-
-		if s.getDB() == nil {
-			info.WriteString("Database Status: DISCONNECTED\n\n")
-
-			// Show current configuration so Claude can diagnose
-			info.WriteString("=== Current Configuration ===\n")
-			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
-				info.WriteString("Connection: Custom connection string (MSSQL_CONNECTION_STRING)\n")
-			} else {
-				server := os.Getenv("MSSQL_SERVER")
-				if server == "" {
-					info.WriteString("MSSQL_SERVER: NOT SET (required)\n")
-				} else {
-					info.WriteString("MSSQL_SERVER: " + server + "\n")
-				}
-				database := os.Getenv("MSSQL_DATABASE")
-				if database != "" {
-					info.WriteString("MSSQL_DATABASE: " + database + "\n")
-				} else {
-					info.WriteString("MSSQL_DATABASE: not set\n")
-				}
-				auth := strings.ToLower(os.Getenv("MSSQL_AUTH"))
-				if auth == "" {
-					auth = "sql"
-				}
-				info.WriteString("MSSQL_AUTH: " + auth + "\n")
-				if auth == "sql" {
-					if os.Getenv("MSSQL_USER") == "" {
-						info.WriteString("MSSQL_USER: NOT SET (required for SQL auth)\n")
-					} else {
-						info.WriteString("MSSQL_USER: " + os.Getenv("MSSQL_USER") + "\n")
-					}
-					if os.Getenv("MSSQL_PASSWORD") == "" {
-						info.WriteString("MSSQL_PASSWORD: NOT SET (required for SQL auth)\n")
-					} else {
-						info.WriteString("MSSQL_PASSWORD: ***\n")
-					}
-				} else if auth == "integrated" || auth == "windows" {
-					if u, err := osuser.Current(); err == nil {
-						info.WriteString("Windows User: " + u.Username + "\n")
-					}
-				}
-				port := os.Getenv("MSSQL_PORT")
-				if port == "" {
-					port = "1433"
-				}
-				info.WriteString("MSSQL_PORT: " + port + "\n")
-				info.WriteString("DEVELOPER_MODE: " + os.Getenv("DEVELOPER_MODE") + "\n")
-				encryptVal := os.Getenv("MSSQL_ENCRYPT")
-				if encryptVal != "" {
-					info.WriteString("MSSQL_ENCRYPT: " + encryptVal + "\n")
-				}
-			}
-
-			// Diagnostic hints for Claude to suggest fixes
-			info.WriteString("\n=== Possible Causes ===\n")
-			if os.Getenv("MSSQL_SERVER") == "" && os.Getenv("MSSQL_CONNECTION_STRING") == "" {
-				info.WriteString("- MSSQL_SERVER environment variable is not set\n")
-			} else {
-				auth := strings.ToLower(os.Getenv("MSSQL_AUTH"))
-				devMode := strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
-				encrypt := "true"
-				if devMode {
-					if envEncrypt := os.Getenv("MSSQL_ENCRYPT"); envEncrypt != "" {
-						encrypt = strings.ToLower(envEncrypt)
-					} else {
-						encrypt = "false"
-					}
-				}
-
-				if auth == "sql" || auth == "" {
-					if os.Getenv("MSSQL_USER") == "" || os.Getenv("MSSQL_PASSWORD") == "" {
-						info.WriteString("- Missing MSSQL_USER or MSSQL_PASSWORD for SQL authentication\n")
-					}
-				}
-				if encrypt == "true" {
-					info.WriteString("- TLS encryption is ENABLED. If the server is SQL Server 2008/2012 or doesn't have TLS certificates, set MSSQL_ENCRYPT=false with DEVELOPER_MODE=true\n")
-				}
-				if !devMode {
-					info.WriteString("- Production mode requires valid TLS certificates. For internal/dev servers, set DEVELOPER_MODE=true\n")
-				}
-				if auth == "integrated" || auth == "windows" {
-					info.WriteString("- Windows Integrated Auth: verify the Windows user has SQL Server login permissions\n")
-					info.WriteString("- Check that SQL Server allows Windows Authentication mode\n")
-					info.WriteString("- For remote servers, verify Active Directory connectivity\n")
-				}
-				info.WriteString("- Verify the server is reachable and SQL Server service is running\n")
-				info.WriteString("- Check firewall rules allow connections on the configured port\n")
-			}
-		} else {
-			info.WriteString("Database Status: Connected\n")
-			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
-				info.WriteString("Connection: Custom connection string\n")
-				info.WriteString("Mode: " + func() string {
-					if os.Getenv("DEVELOPER_MODE") == "true" {
-						return "Development"
-					} else {
-						return "Production"
-					}
-				}() + "\n")
-			} else {
-				info.WriteString("Server: " + os.Getenv("MSSQL_SERVER") + "\n")
-				info.WriteString("Database: " + os.Getenv("MSSQL_DATABASE") + "\n")
-				encrypt := "Enabled (TLS)"
-				if os.Getenv("DEVELOPER_MODE") == "true" && os.Getenv("MSSQL_ENCRYPT") != "true" {
-					encrypt = "Disabled (Development)"
-				}
-				info.WriteString("Encryption: " + encrypt + "\n")
-			}
-
-			// Show read-only status and whitelist (cached config)
-			whitelist := s.getWhitelistedTables()
-			isWildcard := len(whitelist) == 1 && whitelist[0] == "*"
-			if s.config.readOnly {
-				if isWildcard {
-					info.WriteString("Access Mode: READ-ONLY with wildcard whitelist (*)\n")
-					info.WriteString("Whitelisted Tables: * (all tables allowed for modification)\n")
-					info.WriteString("Note: SELECT allowed on all tables. Modifications allowed on ALL tables (wildcard).\n")
-				} else if len(whitelist) > 0 {
-					info.WriteString("Access Mode: READ-ONLY with whitelist exceptions\n")
-					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
-					info.WriteString("Note: SELECT allowed on all tables. Modifications (INSERT/UPDATE/DELETE/CREATE/DROP) only allowed on whitelisted tables.\n")
-				} else {
-					info.WriteString("Access Mode: READ-ONLY (SELECT queries only)\n")
-					info.WriteString("Whitelisted Tables: NONE (all modifications blocked)\n")
-				}
-			} else {
-				if isWildcard {
-					info.WriteString("Access Mode: Full access (wildcard whitelist — same as no read-only)\n")
-				} else if len(whitelist) > 0 {
-					info.WriteString("Access Mode: Whitelist-protected (modifications restricted)\n")
-					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
-					info.WriteString("Note: Only whitelisted tables can be modified. All other tables are read-only.\n")
-				} else {
-					info.WriteString("Access Mode: Full access\n")
-				}
-			}
-
-			// Show allowed cross-databases
-			if len(s.config.allowedDatabases) > 0 {
-				info.WriteString("Cross-Database Access: " + strings.Join(s.config.allowedDatabases, ", ") + "\n")
-				info.WriteString("Note: You can query these databases using 3-part names (e.g., DatabaseName.dbo.TableName). Use explore with database parameter to list their tables.\n")
-			}
-		}
-
-		// Annotation: diagnostics for the LLM; high priority when disconnected
-		ann := annAssistantLow
-		if s.getDB() == nil {
-			ann = annAssistantHigh
-		}
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        info.String(),
-						Annotations: ann,
-					},
-				},
-			},
-		}
-
+		return s.handleGetDatabaseInfo(id, params)
 	case "query_database":
-		// Check for dynamic connection parameter
-		var db *sql.DB
-		connectionName, hasConnection := params.Arguments["connection"].(string)
-
-		if hasConnection && connectionName != "" {
-			// Use dynamic connection
-			var ok bool
-			db, ok = s.getDynamicConnection(connectionName)
-			if !ok {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{
-								Type:        "text",
-								Text:        fmt.Sprintf("Error: Unknown dynamic connection '%s'. Use dynamic_list to see active connections.", connectionName),
-								Annotations: annBothHigh,
-							},
-						},
-						IsError: true,
-					},
-				}
-			}
-		} else {
-			// Use default connection
-			db = s.getDB()
-			if db == nil {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{
-								Type:        "text",
-								Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
-								Annotations: annAssistantHigh,
-							},
-						},
-						IsError: true,
-					},
-				}
-			}
-		}
-
-		query, ok := params.Arguments["query"].(string)
-		if !ok {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Missing or invalid 'query' parameter",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// Best-effort schema validation: check that referenced tables exist.
-		// If INFORMATION_SCHEMA is not accessible (permissions), validation is silently skipped.
-		// Skipped when AUTOPILOT or SKIP_SCHEMA_VALIDATION is enabled (effective skip = autopilot OR skipSchemaValidation).
-		s.secLogger.Printf("SCHEMA_VALIDATION: autopilot=%v skip_schema_validation=%v", s.config.autopilot, s.config.skipSchemaValidation)
-		if !s.config.autopilot && !s.config.skipSchemaValidation {
-			if validationErr := s.validateTablesExist(ctx, query); validationErr != nil {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{
-								Type:        "text",
-								Text:        *validationErr,
-								Annotations: annBothHigh,
-							},
-						},
-						IsError: true,
-					},
-				}
-			}
-		}
-
-		results, err := s.executeSecureQueryWithDB(ctx, db, query)
-		if err != nil {
-			// Check if this is a confirmation-required error
-			if confirmErr, ok := err.(*ConfirmationRequiredError); ok {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Error: &MCPError{
-						Code:    DestructiveConfirmationCode,
-						Message: confirmErr.Error(),
-						Data: map[string]interface{}{
-							"operation":   confirmErr.Operation,
-							"target":      confirmErr.Target,
-							"token":       confirmErr.Token,
-							"expires_in":  confirmErr.ExpiresIn,
-							"confirm_url": "use confirm_operation tool with this token to execute",
-						},
-					},
-				}
-			}
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Query Error: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// DDL/DML with no result set (ALTER, CREATE, DROP, INSERT, UPDATE, DELETE, etc.)
-		if results == nil || len(results) == 0 {
-			op := strings.ToUpper(strings.Fields(strings.TrimSpace(query))[0])
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("%s executed successfully. No rows returned.", op),
-							Annotations: annBothQuery,
-						},
-					},
-				},
-			}
-		}
-
-		// Format results as JSON
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error formatting results: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        fmt.Sprintf("Query executed successfully. %d rows returned:\n%s", len(results), string(resultBytes)),
-						Annotations: annBothQuery,
-					},
-				},
-			},
-		}
-
+		return s.handleQueryDatabase(id, params)
 	case "explore":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
-							Annotations: annAssistantHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		exploreType := "tables"
-		if t, ok := params.Arguments["type"].(string); ok && t != "" {
-			exploreType = t
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		var results []map[string]interface{}
-		var err error
-		var label string
-
-		switch exploreType {
-		case "databases":
-			label = "Databases found"
-			query := `
-				SELECT
-					name as database_name,
-					database_id,
-					create_date,
-					state_desc as state
-				FROM sys.databases
-				WHERE database_id > 4
-				ORDER BY name
-			`
-			results, err = s.executeSecureQuery(ctx, query)
-
-		case "procedures":
-			label = "Stored procedures found"
-			schemaFilter, _ := params.Arguments["schema"].(string)
-			filterVal, _ := params.Arguments["filter"].(string)
-			if schemaFilter != "" && filterVal != "" {
-				query := `
-					SELECT
-						SCHEMA_NAME(p.schema_id) as schema_name,
-						p.name as procedure_name,
-						p.create_date,
-						p.modify_date
-					FROM sys.procedures p
-					WHERE SCHEMA_NAME(p.schema_id) = @p1 AND p.name LIKE @p2
-					ORDER BY schema_name, procedure_name
-				`
-				results, err = s.executeSecureQuery(ctx, query, schemaFilter, "%"+filterVal+"%")
-			} else if schemaFilter != "" {
-				query := `
-					SELECT
-						SCHEMA_NAME(p.schema_id) as schema_name,
-						p.name as procedure_name,
-						p.create_date,
-						p.modify_date
-					FROM sys.procedures p
-					WHERE SCHEMA_NAME(p.schema_id) = @p1
-					ORDER BY schema_name, procedure_name
-				`
-				results, err = s.executeSecureQuery(ctx, query, schemaFilter)
-			} else if filterVal != "" {
-				query := `
-					SELECT
-						SCHEMA_NAME(p.schema_id) as schema_name,
-						p.name as procedure_name,
-						p.create_date,
-						p.modify_date
-					FROM sys.procedures p
-					WHERE p.name LIKE @p1
-					ORDER BY schema_name, procedure_name
-				`
-				results, err = s.executeSecureQuery(ctx, query, "%"+filterVal+"%")
-			} else {
-				query := `
-					SELECT
-						SCHEMA_NAME(p.schema_id) as schema_name,
-						p.name as procedure_name,
-						p.create_date,
-						p.modify_date
-					FROM sys.procedures p
-					ORDER BY schema_name, procedure_name
-				`
-				results, err = s.executeSecureQuery(ctx, query)
-			}
-
-		case "search":
-			pattern, ok := params.Arguments["pattern"].(string)
-			if !ok || pattern == "" {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{Type: "text", Text: "Error: 'pattern' is required when type=search", Annotations: annBothHigh},
-						},
-						IsError: true,
-					},
-				}
-			}
-			searchIn, _ := params.Arguments["search_in"].(string)
-			likePattern := "%" + pattern + "%"
-			if searchIn == "definition" {
-				label = fmt.Sprintf("Objects matching '%s' in definition", pattern)
-				query := `
-					SELECT
-						o.type_desc      AS object_type,
-						SCHEMA_NAME(o.schema_id) AS schema_name,
-						o.name           AS object_name,
-						m.definition     AS definition_snippet
-					FROM sys.sql_modules m
-					JOIN sys.objects     o ON o.object_id = m.object_id
-					WHERE m.definition LIKE @p1
-					ORDER BY o.type_desc, o.name
-				`
-				results, err = s.executeSecureQuery(ctx, query, likePattern)
-			} else {
-				label = fmt.Sprintf("Objects matching '%s' in name", pattern)
-				query := `
-					SELECT
-						o.type_desc      AS object_type,
-						SCHEMA_NAME(o.schema_id) AS schema_name,
-						o.name           AS object_name,
-						o.create_date    AS created,
-						o.modify_date    AS modified
-					FROM sys.objects o
-					WHERE o.name LIKE @p1
-					  AND o.type IN ('U','V','P','FN','IF','TF')
-					ORDER BY o.type_desc, o.name
-				`
-				results, err = s.executeSecureQuery(ctx, query, likePattern)
-			}
-
-		case "views":
-			label = "Views found"
-			viewFilter, _ := params.Arguments["filter"].(string)
-			if viewFilter != "" {
-				query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v WHERE v.TABLE_NAME LIKE @p1 ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-				results, err = s.executeSecureQuery(ctx, query, "%"+viewFilter+"%")
-			} else {
-				query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-				results, err = s.executeSecureQuery(ctx, query)
-			}
-
-		default: // "tables"
-			// Check if user wants to explore a specific allowed database
-			dbFilter, _ := params.Arguments["database"].(string)
-
-			if dbFilter != "" {
-				// Explore a specific cross-database
-				dbFilterLower := strings.ToLower(strings.Trim(dbFilter, "[] "))
-				if !s.isAllowedDatabase(dbFilterLower) {
-					allowedList := strings.Join(s.config.allowedDatabases, ", ")
-					if allowedList == "" {
-						allowedList = "(none configured)"
-					}
-					return &MCPResponse{
-						JSONRPC: "2.0",
-						ID:      id,
-						Result: CallToolResult{
-							Content: []ContentItem{
-								{
-									Type:        "text",
-									Text:        fmt.Sprintf("Error: database '%s' is not in MSSQL_ALLOWED_DATABASES. Allowed: %s", dbFilter, allowedList),
-									Annotations: annBothHigh,
-								},
-							},
-							IsError: true,
-						},
-					}
-				}
-				// Validate database name for safe interpolation
-				if !regexp.MustCompile(`^[\w]+$`).MatchString(dbFilterLower) {
-					return &MCPResponse{
-						JSONRPC: "2.0",
-						ID:      id,
-						Result: CallToolResult{
-							Content: []ContentItem{
-								{Type: "text", Text: "Error: invalid database name", Annotations: annBothHigh},
-							},
-							IsError: true,
-						},
-					}
-				}
-
-				label = fmt.Sprintf("Tables and views in [%s]", dbFilter)
-				if filterVal, ok := params.Arguments["filter"].(string); ok && filterVal != "" {
-					query := fmt.Sprintf(`
-						SELECT
-							TABLE_SCHEMA as schema_name,
-							TABLE_NAME as table_name,
-							TABLE_TYPE as table_type
-						FROM [%s].INFORMATION_SCHEMA.TABLES
-						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-						  AND TABLE_NAME LIKE @p1
-						ORDER BY TABLE_SCHEMA, TABLE_NAME
-					`, dbFilterLower)
-					results, err = s.executeSecureQuery(ctx, query, "%"+filterVal+"%")
-				} else {
-					query := fmt.Sprintf(`
-						SELECT
-							TABLE_SCHEMA as schema_name,
-							TABLE_NAME as table_name,
-							TABLE_TYPE as table_type
-						FROM [%s].INFORMATION_SCHEMA.TABLES
-						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-						ORDER BY TABLE_SCHEMA, TABLE_NAME
-					`, dbFilterLower)
-					results, err = s.executeSecureQuery(ctx, query)
-				}
-			} else {
-				// Default: current database + summary of allowed databases
-				label = "Tables and views found"
-				if filterVal, ok := params.Arguments["filter"].(string); ok && filterVal != "" {
-					filterPattern := "%" + filterVal + "%"
-					query := `
-						SELECT
-							TABLE_SCHEMA as schema_name,
-							TABLE_NAME as table_name,
-							TABLE_TYPE as table_type
-						FROM INFORMATION_SCHEMA.TABLES
-						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-						  AND TABLE_NAME LIKE @p1
-						ORDER BY TABLE_SCHEMA, TABLE_NAME
-					`
-					results, err = s.executeSecureQuery(ctx, query, filterPattern)
-				} else {
-					query := `
-						SELECT
-							TABLE_SCHEMA as schema_name,
-							TABLE_NAME as table_name,
-							TABLE_TYPE as table_type
-						FROM INFORMATION_SCHEMA.TABLES
-						WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-						ORDER BY TABLE_SCHEMA, TABLE_NAME
-					`
-					results, err = s.executeSecureQuery(ctx, query)
-				}
-
-				// Append cross-database info if allowed databases are configured
-				if err == nil && len(s.config.allowedDatabases) > 0 {
-					label = fmt.Sprintf("Tables and views found (current database + %d allowed cross-databases: %s — use explore with database parameter to list their tables)",
-						len(s.config.allowedDatabases), strings.Join(s.config.allowedDatabases, ", "))
-				}
-			}
-		}
-
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error in explore: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error formatting results: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
-						Annotations: annBothExplore,
-					},
-				},
-			},
-		}
-
+		return s.handleExplore(id, params)
 	case "execute_procedure":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
-							Annotations: annAssistantHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		procName, ok := params.Arguments["procedure_name"].(string)
-		if !ok || procName == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Missing or invalid 'procedure_name' parameter",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Check whitelist (cached at startup)
-		whitelistEnv := s.config.whitelistProcs
-		if whitelistEnv == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: No stored procedures are whitelisted. Set MSSQL_WHITELIST_PROCEDURES environment variable.",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		allowedProcs := strings.Split(whitelistEnv, ",")
-		procAllowed := false
-		procNameLower := strings.ToLower(strings.TrimSpace(procName))
-		for _, allowed := range allowedProcs {
-			if strings.ToLower(strings.TrimSpace(allowed)) == procNameLower {
-				procAllowed = true
-				break
-			}
-		}
-
-		if !procAllowed {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error: Stored procedure '%s' is not in the whitelist. Allowed: %s", procName, whitelistEnv),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Validate procedure name contains only safe characters
-		if err := s.validateProcedureName(procName); err != nil {
-			s.secLogger.Printf("Rejected unsafe procedure name: %s", procName)
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Parse parameters if provided
-		var procParams map[string]interface{}
-		if paramsJSON, ok := params.Arguments["parameters"].(string); ok && paramsJSON != "" {
-			if err := json.Unmarshal([]byte(paramsJSON), &procParams); err != nil {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{
-								Type:        "text",
-								Text:        fmt.Sprintf("Error: Invalid JSON in parameters: %v", err),
-								Annotations: annBothHigh,
-							},
-						},
-						IsError: true,
-					},
-				}
-			}
-		}
-
-		// Build EXEC statement with parameters
-		var queryBuilder strings.Builder
-		queryBuilder.WriteString("EXEC ")
-		queryBuilder.WriteString(procName)
-
-		var args []interface{}
-		if len(procParams) > 0 {
-			queryBuilder.WriteString(" ")
-			paramStrings := make([]string, 0, len(procParams))
-			i := 1
-			for paramName, paramValue := range procParams {
-				paramStrings = append(paramStrings, fmt.Sprintf("@%s = @p%d", paramName, i))
-				args = append(args, paramValue)
-				i++
-			}
-			queryBuilder.WriteString(strings.Join(paramStrings, ", "))
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		results, err := s.executeSecureQuery(ctx, queryBuilder.String(), args...)
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error executing procedure '%s': %v", procName, err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error formatting results: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        fmt.Sprintf("Procedure '%s' executed successfully:\n%s", procName, string(resultBytes)),
-						Annotations: annBothProcedure,
-					},
-				},
-			},
-		}
-
+		return s.handleExecuteProcedure(id, params)
 	case "inspect":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.",
-							Annotations: annAssistantHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		tableName, ok := params.Arguments["table_name"].(string)
-		if !ok || tableName == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{Type: "text", Text: "Error: Missing or invalid 'table_name' parameter", Annotations: annBothHigh},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		schemaName := "dbo"
-		if schema, ok := params.Arguments["schema"].(string); ok && schema != "" {
-			schemaName = schema
-		}
-		if strings.Contains(tableName, ".") {
-			parts := strings.Split(tableName, ".")
-			if len(parts) == 2 {
-				schemaName = strings.Trim(parts[0], "[]")
-				tableName = strings.Trim(parts[1], "[]")
-			}
-		}
-		tableName = strings.Trim(tableName, "[]")
-
-		detail := "columns"
-		if d, ok := params.Arguments["detail"].(string); ok && d != "" {
-			detail = d
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		columnsQuery := `
-			SELECT
-				COLUMN_NAME as column_name,
-				DATA_TYPE as data_type,
-				IS_NULLABLE as is_nullable,
-				COLUMN_DEFAULT as default_value,
-				CHARACTER_MAXIMUM_LENGTH as max_length,
-				ORDINAL_POSITION as position
-			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2
-			ORDER BY ORDINAL_POSITION
-		`
-		indexesQuery := `
-			SELECT
-				i.name as index_name,
-				i.type_desc as index_type,
-				i.is_unique,
-				i.is_primary_key,
-				STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) as columns
-			FROM sys.indexes i
-			INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-			INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-			INNER JOIN sys.tables t ON i.object_id = t.object_id
-			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-			WHERE t.name = @p1 AND s.name = @p2 AND i.name IS NOT NULL
-			GROUP BY i.name, i.type_desc, i.is_unique, i.is_primary_key
-			ORDER BY i.is_primary_key DESC, i.name
-		`
-		fkQuery := `
-			SELECT
-				fk.name as constraint_name,
-				OBJECT_SCHEMA_NAME(fk.parent_object_id) as from_schema,
-				OBJECT_NAME(fk.parent_object_id) as from_table,
-				COL_NAME(fkc.parent_object_id, fkc.parent_column_id) as from_column,
-				OBJECT_SCHEMA_NAME(fk.referenced_object_id) as to_schema,
-				OBJECT_NAME(fk.referenced_object_id) as to_table,
-				COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) as to_column,
-				fk.delete_referential_action_desc as on_delete,
-				fk.update_referential_action_desc as on_update
-			FROM sys.foreign_keys fk
-			INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
-			INNER JOIN sys.tables t ON fk.parent_object_id = t.object_id
-			INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-			WHERE (t.name = @p1 AND s.name = @p2)
-			   OR (OBJECT_NAME(fk.referenced_object_id) = @p1 AND OBJECT_SCHEMA_NAME(fk.referenced_object_id) = @p2)
-			ORDER BY fk.name
-		`
-
-		if detail == "all" {
-			colResults, err := s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
-			if err != nil {
-				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting columns: %v", err), Annotations: annBothHigh}}, IsError: true,
-				}}
-			}
-			idxResults, err := s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
-			if err != nil {
-				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err), Annotations: annBothHigh}}, IsError: true,
-				}}
-			}
-			fkResults, err := s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
-			if err != nil {
-				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err), Annotations: annBothHigh}}, IsError: true,
-				}}
-			}
-			depsAllQuery := `
-				SELECT
-					SCHEMA_NAME(o.schema_id)  AS referencing_schema,
-					o.name                    AS referencing_object,
-					o.type_desc               AS referencing_type,
-					sed.is_caller_dependent,
-					sed.is_ambiguous
-				FROM sys.sql_expression_dependencies sed
-				JOIN sys.objects o ON o.object_id = sed.referencing_id
-				WHERE sed.referenced_entity_name = @p1
-				  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
-				ORDER BY o.type_desc, referencing_schema, referencing_object
-			`
-			depsResults, _ := s.executeSecureQuery(ctx, depsAllQuery, tableName, schemaName) // #nosec G104 - dependencies query is optional, errors handled gracefully
-			combined := map[string]interface{}{
-				"columns":      colResults,
-				"indexes":      idxResults,
-				"foreign_keys": fkResults,
-				"dependencies": depsResults,
-			}
-			resultBytes, err := json.MarshalIndent(combined, "", "  ")
-			if err != nil {
-				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error formatting results: %v", err), Annotations: annBothHigh}}, IsError: true,
-				}}
-			}
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Full inspection of '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
-							Annotations: annBothInspect,
-						},
-					},
-				},
-			}
-		}
-
-		var results []map[string]interface{}
-		var err error
-		var label string
-
-		switch detail {
-		case "indexes":
-			label = fmt.Sprintf("Indexes for '%s.%s'", schemaName, tableName)
-			results, err = s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
-		case "foreign_keys":
-			label = fmt.Sprintf("Foreign keys for '%s.%s'", schemaName, tableName)
-			results, err = s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
-		case "dependencies":
-			label = fmt.Sprintf("Objects that depend on '%s.%s'", schemaName, tableName)
-			depsQuery := `
-				SELECT
-					SCHEMA_NAME(o.schema_id)  AS referencing_schema,
-					o.name                    AS referencing_object,
-					o.type_desc               AS referencing_type,
-					sed.is_caller_dependent,
-					sed.is_ambiguous
-				FROM sys.sql_expression_dependencies sed
-				JOIN sys.objects o ON o.object_id = sed.referencing_id
-				WHERE sed.referenced_entity_name = @p1
-				  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
-				ORDER BY o.type_desc, referencing_schema, referencing_object
-			`
-			results, err = s.executeSecureQuery(ctx, depsQuery, tableName, schemaName)
-		default: // "columns"
-			label = fmt.Sprintf("Table structure for '%s'", tableName)
-			results, err = s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
-			if err == nil && len(results) == 0 {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{Type: "text", Text: fmt.Sprintf("Table '%s' not found", tableName), Annotations: annBothHigh},
-						},
-						IsError: true,
-					},
-				}
-			}
-		}
-
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error in inspect: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Error formatting results: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
-						Annotations: annBothInspect,
-					},
-				},
-			},
-		}
-
+		return s.handleInspect(id, params)
 	case "explain_query":
-		if s.getDB() == nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: Database not connected. Call the get_database_info tool to see current configuration, diagnose the problem, and get specific troubleshooting steps.", Annotations: annAssistantHigh}},
-					IsError: true,
-				},
-			}
-		}
-
-		query, ok := params.Arguments["query"].(string)
-		if !ok || strings.TrimSpace(query) == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: Missing or invalid 'query' parameter", Annotations: annBothHigh}},
-					IsError: true,
-				},
-			}
-		}
-
-		// Only allow SELECT queries for safety (always enforced, regardless of MSSQL_READ_ONLY)
-		if op := s.extractOperation(query); op != "SELECT" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: explain_query only accepts SELECT queries, got: " + op, Annotations: annBothHigh}},
-					IsError: true,
-				},
-			}
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// Use a dedicated connection so SET SHOWPLAN_TEXT applies only to this query
-		conn, err := s.getDB().Conn(ctx)
-		if err != nil {
-			connErrMsg := "Error acquiring connection"
-			if s.devMode {
-				connErrMsg += ": " + err.Error()
-			}
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: connErrMsg, Annotations: annBothHigh}},
-					IsError: true,
-				},
-			}
-		}
-		defer conn.Close()
-
-		// Enable showplan (does not execute the query, only returns the plan)
-		if _, err := conn.ExecContext(ctx, "SET SHOWPLAN_TEXT ON"); err != nil {
-			showplanErrMsg := "Error enabling SHOWPLAN"
-			if s.devMode {
-				showplanErrMsg += ": " + err.Error()
-			}
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: showplanErrMsg, Annotations: annBothHigh}},
-					IsError: true,
-				},
-			}
-		}
-
-		rows, err := conn.QueryContext(ctx, query)
-		if err != nil {
-			_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF") // #nosec G104 - best-effort cleanup
-			planErrMsg := "Error getting execution plan"
-			if s.devMode {
-				planErrMsg += ": " + err.Error()
-			}
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: planErrMsg, Annotations: annBothHigh}},
-					IsError: true,
-				},
-			}
-		}
-		defer rows.Close()
-
-		var planLines []string
-		for rows.Next() {
-			var line string
-			if err := rows.Scan(&line); err == nil {
-				planLines = append(planLines, line)
-			}
-		}
-		_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF") // #nosec G104 - best-effort cleanup
-
-		if len(planLines) == 0 {
-			planLines = []string{"(no plan returned — query may be too simple or unsupported)"}
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        "Execution plan:\n\n" + strings.Join(planLines, "\n"),
-						Annotations: annBothExplain,
-					},
-				},
-			},
-		}
-
+		return s.handleExplainQuery(id, params)
 	case "confirm_operation":
-		token, ok := params.Arguments["token"].(string)
-		if !ok || token == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Missing or invalid 'token' parameter. Provide the token from the destructive operation warning.",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Look up the pending operation
-		s.pendingOpMu.Lock()
-		op, exists := s.pendingOps[token]
-		if !exists {
-			s.pendingOpMu.Unlock()
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Invalid or expired confirmation token. The token may have expired (valid for 5 minutes) or has already been used.",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Check if expired
-		if time.Now().After(op.expiresAt) {
-			delete(s.pendingOps, token)
-			s.pendingOpMu.Unlock()
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Confirmation token has expired. Please retry the original destructive operation.",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Remove token (one-time use)
-		delete(s.pendingOps, token)
-		s.pendingOpMu.Unlock()
-
-		// Log that confirmation was received
-		s.secLogger.Printf("DESTRUCTIVE OPERATION CONFIRMED: executing %s", op.query)
-
-		// Execute the pending operation
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		results, err := s.executeSecureQuery(ctx, op.query)
-		if err != nil {
-			// If execution fails, return the error
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Operation failed: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Operation succeeded
-		opType := extractDestructiveOpType(op.query)
-		if results == nil || len(results) == 0 {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("%s executed successfully after confirmation. No rows returned.", opType),
-							Annotations: annBothQuery,
-						},
-					},
-				},
-			}
-		}
-
-		resultBytes, _ := json.MarshalIndent(results, "", "  ")
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        fmt.Sprintf("%s executed successfully after confirmation. %d rows returned:\n%s", opType, len(results), string(resultBytes)),
-						Annotations: annBothQuery,
-					},
-				},
-			},
-		}
-
+		return s.handleConfirmOperation(id, params)
 	case "dynamic_connect":
-		// Connect to a pre-configured dynamic connection from .env
-		// No credentials needed - they are loaded from MSSQL_DYNAMIC_<ALIAS>_XXX env vars
-		alias, ok := params.Arguments["alias"].(string)
-		if !ok || alias == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Missing or invalid 'alias' parameter",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		// Build connection string from MSSQL_DYNAMIC_<ALIAS>_XXX env vars
-		prefix := "MSSQL_DYNAMIC_" + strings.ToUpper(alias) + "_"
-		server := os.Getenv(prefix + "SERVER")
-		database := os.Getenv(prefix + "DATABASE")
-		user := os.Getenv(prefix + "USER")
-		password := os.Getenv(prefix + "PASSWORD")
-		portStr := os.Getenv(prefix + "PORT")
-
-		if server == "" || database == "" || user == "" || password == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Dynamic connection '%s' not found or incomplete in configuration. Use dynamic_list to see available connections.", alias),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		port := 1433
-		if portStr != "" {
-			if p, err := strconv.Atoi(portStr); err == nil {
-				port = p
-			}
-		}
-
-		encrypt := "true"
-		if s.devMode {
-			encrypt = "false"
-		}
-		trustCert := "false"
-		if s.devMode {
-			trustCert = "true"
-		}
-
-		connStr := fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
-			server, port, database, user, password, encrypt, trustCert,
-		)
-
-		db, err := sql.Open("sqlserver", connStr)
-		if err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Failed to open connection: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		if err := db.PingContext(context.Background()); err != nil {
-			db.Close()
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        fmt.Sprintf("Failed to connect: %v", err),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		db.SetMaxOpenConns(5)
-		db.SetMaxIdleConns(2)
-		db.SetConnMaxLifetime(time.Hour)
-		db.SetConnMaxIdleTime(15 * time.Minute)
-
-		// Load per-connection security config
-		connInfo := &ConnectionInfo{
-			Alias:     alias,
-			DB:        db,
-			Server:    server,
-			Database:  database,
-			User:      user,
-			CreatedAt: time.Now(),
-			readOnly:             strings.ToLower(os.Getenv(prefix+"READ_ONLY")) == "true",
-			autopilot:            strings.ToLower(os.Getenv(prefix+"AUTOPILOT")) == "true",
-			skipSchemaValidation: strings.ToLower(os.Getenv(prefix+"SKIP_SCHEMA_VALIDATION")) == "true",
-		}
-		if wl := os.Getenv(prefix + "WHITELIST_TABLES"); wl != "" {
-			connInfo.whitelistTables = parseWhitelistTables(wl)
-		}
-
-		s.addDynamicConnectionInfo(alias, connInfo)
-		s.secLogger.Printf("Dynamic connection '%s' activated: %s/%s", alias, server, database)
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        fmt.Sprintf("Connected to '%s' (%s/%s)", alias, server, database),
-						Annotations: annBothQuery,
-					},
-				},
-			},
-		}
-
+		return s.handleDynamicConnect(id, params)
 	case "dynamic_list":
-		connections := s.listDynamicConnections()
-		if len(connections) == 0 {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "No active dynamic connections. Use dynamic_connect to establish one.",
-							Annotations: annBothQuery,
-						},
-					},
-				},
-			}
-		}
-
-		var info strings.Builder
-		info.WriteString("Active dynamic connections:\n")
-		for _, conn := range connections {
-			age := time.Since(conn.CreatedAt).Round(time.Second)
-			info.WriteString(fmt.Sprintf("- %s (%s/%s) - connected %s ago\n", conn.Alias, conn.Server, conn.Database, age))
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        info.String(),
-						Annotations: annBothQuery,
-					},
-				},
-			},
-		}
-
+		return s.handleDynamicList(id, params)
 	case "dynamic_available":
-		// List all pre-configured connections from .env file directly (without connecting)
-		// This helps the AI discover what aliases are available without exposing credentials
-		var info strings.Builder
-		found := false
-		info.WriteString("Available dynamic connections (use dynamic_connect to activate):\n")
-
-		// Read .env file directly to discover configured aliases
-		envFile, err := os.Open(".env")
-		if err == nil {
-			defer envFile.Close()
-			scanner := bufio.NewScanner(envFile)
-			knownAliases := make(map[string]bool)
-			for scanner.Scan() {
-				line := scanner.Text()
-				// Parse KEY=VALUE lines
-				if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
-					key := strings.TrimSpace(parts[0])
-					value := strings.TrimSpace(parts[1])
-					// Track which aliases have SERVER defined
-					if strings.HasPrefix(key, "MSSQL_DYNAMIC_") && strings.HasSuffix(key, "_SERVER") && value != "" {
-						alias := strings.TrimPrefix(strings.TrimSuffix(key, "_SERVER"), "MSSQL_DYNAMIC_")
-						knownAliases[alias] = true
-					}
-				}
-			}
-			// Now output aliases that have SERVER configured
-			for alias := range knownAliases {
-				dbName := ""
-				serverVal := ""
-				// Re-scan to get DATABASE for this alias (we need to store it from scan above)
-				envFile.Seek(0, 0)
-				scanner := bufio.NewScanner(envFile)
-				for scanner.Scan() {
-					line := scanner.Text()
-					if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
-						key := strings.TrimSpace(parts[0])
-						value := strings.TrimSpace(parts[1])
-						if key == "MSSQL_DYNAMIC_"+alias+"_DATABASE" {
-							dbName = value
-						}
-						if key == "MSSQL_DYNAMIC_"+alias+"_SERVER" {
-							serverVal = value
-						}
-					}
-				}
-				if serverVal != "" {
-					info.WriteString(fmt.Sprintf("- %s (%s/%s)\n", alias, serverVal, dbName))
-					found = true
-				}
-			}
-		}
-
-		if !found {
-			info.WriteString("No dynamic connections configured. Add MSSQL_DYNAMIC_<ALIAS>_SERVER to .env")
-		}
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        info.String(),
-						Annotations: annBothQuery,
-					},
-				},
-			},
-		}
-
+		return s.handleDynamicAvailable(id, params)
 	case "dynamic_disconnect":
-		alias, ok := params.Arguments["alias"].(string)
-		if !ok || alias == "" {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        "Error: Missing or invalid 'alias' parameter",
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		if err := s.removeDynamicConnection(alias); err != nil {
-			return &MCPResponse{
-				JSONRPC: "2.0",
-				ID:      id,
-				Result: CallToolResult{
-					Content: []ContentItem{
-						{
-							Type:        "text",
-							Text:        err.Error(),
-							Annotations: annBothHigh,
-						},
-					},
-					IsError: true,
-				},
-			}
-		}
-
-		s.secLogger.Printf("Dynamic connection '%s' closed", alias)
-
-		return &MCPResponse{
-			JSONRPC: "2.0",
-			ID:      id,
-			Result: CallToolResult{
-				Content: []ContentItem{
-					{
-						Type:        "text",
-						Text:        fmt.Sprintf("Disconnected '%s'", alias),
-						Annotations: annBothQuery,
-					},
-				},
-			},
-		}
-
+		return s.handleDynamicDisconnect(id, params)
 	default:
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -4094,6 +1111,10 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 							Type:        "string",
 							Description: "Explore tables in a specific allowed cross-database (requires MSSQL_ALLOWED_DATABASES). Example: 'JJP_Carregues'",
 						},
+						"connection": {
+							Type:        "string",
+							Description: "Dynamic connection alias to use (e.g. 'TEST'). Use dynamic_list to see available connections.",
+						},
 					},
 					Required: []string{},
 				},
@@ -4122,6 +1143,10 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 						"detail": {
 							Type:        "string",
 							Description: "What to retrieve: 'columns' (default), 'indexes', 'foreign_keys', 'dependencies', 'all'",
+						},
+						"connection": {
+							Type:        "string",
+							Description: "Dynamic connection alias to use (e.g. 'TEST'). Use dynamic_list to see available connections.",
 						},
 					},
 					Required: []string{"table_name"},
@@ -4338,6 +1363,8 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 	}
 }
 
+// getenvBool reads an env var and treats it as a bool. Comparison is
+// case-insensitive against "true". Anything else (including unset, empty,
 func main() {
 	// Load .env file ONLY if no direct server is configured via environment variables
 	// If MSSQL_SERVER or MSSQL_CONNECTION_STRING is set (e.g., from Claude Desktop JSON config), skip .env entirely
@@ -4351,20 +1378,19 @@ func main() {
 	secLogger.Printf("Starting secure MCP-MSSQL server")
 
 	// Check for developer mode
-	devMode := strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
+	devMode := getenvBool("DEVELOPER_MODE")
 	if devMode {
 		secLogger.Printf("DEVELOPER MODE ENABLED - Detailed errors will be shown")
 	}
 
-	// Cache configuration once at startup (avoid os.Getenv on every request)
-	cfg := serverConfig{
-		readOnly:             strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
-		whitelistTables:      parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
-		whitelistProcs:       os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
-		allowedDatabases:     parseAllowedDatabases(os.Getenv("MSSQL_ALLOWED_DATABASES")),
-		confirmDestructive:   strings.ToLower(os.Getenv("MSSQL_CONFIRM_DESTRUCTIVE")) != "false", // default true
-		autopilot:            strings.ToLower(os.Getenv("MSSQL_AUTOPILOT")) == "true",
-		skipSchemaValidation: strings.ToLower(os.Getenv("MSSQL_SKIP_SCHEMA_VALIDATION")) == "true",
+	// Load and validate configuration. Warnings are logged but never abort.
+	cfg, warnings, err := loadConfig()
+	if err != nil {
+		secLogger.Printf("FATAL: invalid configuration: %v", err)
+		os.Exit(1)
+	}
+	for _, msg := range warnings {
+		secLogger.Printf("CONFIG WARNING: %s", msg)
 	}
 
 	// Dynamic multi-connection mode configuration
@@ -4380,15 +1406,23 @@ func main() {
 
 	// Create MCP server without database initially
 	server := &MCPMSSQLServer{
-		db:                nil,
-		secLogger:         secLogger,
-		devMode:          devMode,
-		config:           cfg,
-		pendingOps:       make(map[string]pendingOperation),
-		dynamicMode:      dynamicMode,
-		connections:      make(map[string]*ConnectionInfo),
-		maxDynamicConns:  maxDynamicConns,
+		db:              nil,
+		secLogger:       secLogger,
+		devMode:         devMode,
+		config:          cfg,
+		pendingOps:      make(map[string]pendingOperation),
+		dynamicMode:     dynamicMode,
+		connections:     make(map[string]*ConnectionInfo),
+		maxDynamicConns: maxDynamicConns,
 	}
+
+	// Initialize sqlguard with security configuration
+	server.guard = sqlguard.New(sqlguard.Config{
+		ReadOnly:         cfg.readOnly,
+		Whitelist:        cfg.whitelistTables,
+		AllowedDatabases: cfg.allowedDatabases,
+		Logger:           secLogger,
+	})
 
 	// Log final configuration
 	secLogger.Printf("=== SERVER CONFIGURATION ===")
@@ -4408,6 +1442,10 @@ func main() {
 	server.rateLimiter.tokens = 60
 	server.rateLimiter.lastReset = time.Now()
 	server.rateLimiter.interval = time.Minute
+
+	// Start the background GC for expired confirmation tokens. Runs for the
+	// lifetime of the process; logs activity through secLogger.
+	server.startPendingOpsGC()
 
 	// Try to establish database connection (non-fatal)
 	// Use context for cancellation and WaitGroup for clean shutdown
@@ -4468,8 +1506,16 @@ func main() {
 			}
 		}
 
-		// Log only non-sensitive configuration settings
-		safeEnvVars := []string{"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_PORT", "MSSQL_AUTH", "MSSQL_READ_ONLY", "MSSQL_WHITELIST_TABLES", "MSSQL_ALLOWED_DATABASES", "MSSQL_SKIP_SCHEMA_VALIDATION", "DEVELOPER_MODE"}
+		// Log only non-sensitive configuration settings. Sensitive vars
+		// (MSSQL_PASSWORD, MSSQL_CONNECTION_STRING) are NEVER added here.
+		safeEnvVars := []string{
+			"MSSQL_SERVER", "MSSQL_DATABASE", "MSSQL_PORT", "MSSQL_AUTH",
+			"MSSQL_READ_ONLY", "MSSQL_WHITELIST_TABLES", "MSSQL_WHITELIST_PROCEDURES",
+			"MSSQL_ALLOWED_DATABASES",
+			"MSSQL_AUTOPILOT", "MSSQL_SKIP_SCHEMA_VALIDATION", "MSSQL_CONFIRM_DESTRUCTIVE",
+			"MSSQL_DYNAMIC_MODE", "MSSQL_DYNAMIC_MAX_CONNECTIONS",
+			"DEVELOPER_MODE",
+		}
 		secLogger.Printf("Configuration settings:")
 		for _, key := range safeEnvVars {
 			if val := os.Getenv(key); val != "" {
@@ -4484,7 +1530,47 @@ func main() {
 			secLogger.Printf("Full access mode enabled")
 		}
 
-		if customConnStr == "" && serverHost == "" {
+		// Auto-connect for dynamic mode: if no direct connection but dynamic connections exist, auto-connect to first
+		if customConnStr == "" && serverHost == "" && dynamicMode {
+			if firstAlias := discoverFirstDynamicConnection(); firstAlias != "" {
+				secLogger.Printf("Auto-connecting to first dynamic connection: %s", firstAlias)
+				// Build connection string for the first dynamic alias and connect
+				alias := firstAlias
+				prefix := "MSSQL_DYNAMIC_" + strings.ToUpper(alias) + "_"
+				os.Setenv("MSSQL_SERVER", os.Getenv(prefix+"SERVER"))
+				os.Setenv("MSSQL_DATABASE", os.Getenv(prefix+"DATABASE"))
+				os.Setenv("MSSQL_USER", os.Getenv(prefix+"USER"))
+				os.Setenv("MSSQL_PASSWORD", os.Getenv(prefix+"PASSWORD"))
+				os.Setenv("MSSQL_PORT", os.Getenv(prefix+"PORT"))
+				os.Setenv("MSSQL_AUTH", os.Getenv(prefix+"AUTH"))
+				os.Setenv("MSSQL_READ_ONLY", os.Getenv(prefix+"READ_ONLY"))
+				os.Setenv("MSSQL_WHITELIST_TABLES", os.Getenv(prefix+"WHITELIST_TABLES"))
+				os.Setenv("MSSQL_AUTOPILOT", os.Getenv(prefix+"AUTOPILOT"))
+				os.Setenv("MSSQL_SKIP_SCHEMA_VALIDATION", os.Getenv(prefix+"SKIP_SCHEMA_VALIDATION"))
+				os.Setenv("MSSQL_DYNAMIC_ACTIVE_ALIAS", alias)
+				// Update server.config to match the dynamic connection's settings
+				// This is critical because loadConfig() ran BEFORE auto-connect set these env vars
+				server.config.readOnly = getenvBool(prefix+"READ_ONLY")
+				server.config.whitelistTables = sqlguard.ParseWhitelistTables(os.Getenv(prefix+"WHITELIST_TABLES"))
+				server.config.autopilot = getenvBool(prefix+"AUTOPILOT")
+				server.config.skipSchemaValidation = getenvBool(prefix+"SKIP_SCHEMA_VALIDATION")
+				// Rebuild guard with updated config (critical for security)
+				server.guard = sqlguard.New(sqlguard.Config{
+					ReadOnly:         server.config.readOnly,
+					Whitelist:        server.config.whitelistTables,
+					AllowedDatabases: server.config.allowedDatabases,
+					Logger:           secLogger,
+				})
+				// Update serverHost for logging below
+				serverHost = os.Getenv("MSSQL_SERVER")
+				database = os.Getenv("MSSQL_DATABASE")
+				secLogger.Printf("Auto-connected to %s (%s/%s) with readOnly=%v, autopilot=%v, whitelist=%v",
+					alias, serverHost, database, server.config.readOnly, server.config.autopilot, server.config.whitelistTables)
+			} else {
+				secLogger.Printf("Dynamic multi-connection mode enabled - no connections configured in .env")
+				return
+			}
+		} else if customConnStr == "" && serverHost == "" {
 			secLogger.Printf("No MSSQL_SERVER or MSSQL_CONNECTION_STRING environment variable - database features disabled")
 			return
 		}

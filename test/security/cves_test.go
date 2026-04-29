@@ -2,11 +2,12 @@ package security
 
 import (
 	"os"
-	"regexp"
 	"strings"
 	"testing"
 
 	"golang.org/x/mod/semver"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
 
 // CVERecord represents a known CVE vulnerability
@@ -526,73 +527,36 @@ func TestAIAttackVectors(t *testing.T) {
 	}
 }
 
-// shouldBlockAIQuery returns true if the query should be blocked based on AI-specific attack patterns.
-// This is a simplified version that checks structural patterns without the full server context.
+// shouldBlockAIQuery returns true if the query should be blocked based on
+// AI-specific attack patterns. Delegates to sqlguard so the checks stay
+// aligned with production validation — when sqlguard adds a new pattern
+// detector, this helper picks it up automatically.
+//
+// Inline comment bypass detection is intentionally NOT included here: the
+// full server validation (sqlguard.ValidateStructuralSafety) covers it with
+// access to the complete dangerous-keyword list, and replicating that logic
+// in tests would diverge over time. Tests that need the full check should
+// call sqlguard.ValidateStructuralSafety directly.
 func shouldBlockAIQuery(query string) bool {
-	// Check for CHAR concatenation
-	if containsCharConcatenation(query) {
+	if sqlguard.ContainsCharConcatenation(query) {
 		return true
 	}
-
-	// Check for dangerous hints (NOLOCK, etc.)
-	if containsDangerousHints(query) {
+	if sqlguard.ContainsDangerousHints(query) {
 		return true
 	}
-
-	// Check for WAITFOR
-	if containsWaitfor(query) {
+	if sqlguard.ContainsWaitfor(query) {
 		return true
 	}
-
-	// Check for OPENROWSET/OPENDATASOURCE
-	if containsOpenrowset(query) {
+	// ContainsDangerousSelectPatterns covers OPENROWSET, OPENDATASOURCE,
+	// SELECT INTO and temp-table writes — a superset of the previous
+	// local containsOpenrowset helper.
+	if sqlguard.ContainsDangerousSelectPatterns(query) {
 		return true
 	}
-
-	// Check for Unicode bidirectional control characters (RTL/LTR override)
-	if containsUnicodeControlChars(query) {
+	if sqlguard.ContainsUnicodeControlChars(query) {
 		return true
 	}
-
-	// Note: Inline comment bypass detection is done by the full server validation
-	// (validateQueryStructuralSafety) which has access to the complete dangerous keyword list
-	// and proper comment-stripping logic. The test helper uses a simplified approach.
-
 	return false
 }
 
-// containsCharConcatenation checks for CHAR()/NCHAR() concatenation patterns
-func containsCharConcatenation(query string) bool {
-	// Look for 3+ CHAR/NCHAR concatenations
-	pattern := regexp.MustCompile(`(?i)(CHAR|NCHAR)\s*\(\s*\d+\s*\)(\s*\+\s*(CHAR|NCHAR)\s*\(\s*\d+\s*\)){2,}`)
-	return pattern.MatchString(query)
-}
-
-// containsDangerousHints checks for forbidden table hints
-func containsDangerousHints(query string) bool {
-	hintPattern := regexp.MustCompile(`(?i)\bWITH\s*\(\s*(NOLOCK|READUNCOMMITTED|READCOMMITTED|TABLOCK|UPDLOCK|HOLDLOCK)\s*\)`)
-	return hintPattern.MatchString(query)
-}
-
-// containsWaitfor checks for WAITFOR timing attacks
-func containsWaitfor(query string) bool {
-	waitforPattern := regexp.MustCompile(`(?i)\bWAITFOR\b`)
-	return waitforPattern.MatchString(query)
-}
-
-// containsOpenrowset checks for OPENROWSET data exfiltration
-func containsOpenrowset(query string) bool {
-	openrowsetPattern := regexp.MustCompile(`(?i)\b(OPENROWSET|OPENDATASOURCE)\b`)
-	return openrowsetPattern.MatchString(query)
-}
-
-// containsUnicodeControlChars checks for bidirectional control characters and other
-// invisible Unicode characters used for obfuscation.
-func containsUnicodeControlChars(query string) bool {
-	// U+200B..U+200F: Zero-width spaces and directional formatting
-	// U+202A..U+202E: Bidirectional text override
-	// U+2066..U+2069: Bidirectional isolate control characters
-	unicodeControlPattern := regexp.MustCompile("[\u200B-\u200F\u202A-\u202E\u2066-\u2069]")
-	return unicodeControlPattern.MatchString(query)
-}
 

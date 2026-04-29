@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
 
 // TestExtractAllTablesFromQuery tests table extraction from various SQL queries
@@ -174,9 +176,10 @@ func TestValidateTablePermissions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Update cached config for this test case
 			server.config.readOnly = tt.readOnly == "true"
-			server.config.whitelistTables = parseWhitelistTables(tt.whitelist)
+			server.config.whitelistTables = sqlguard.ParseWhitelistTables(tt.whitelist)
+			newTestGuard(server)
 
-			err := server.validateTablePermissions(tt.query)
+			err := server.guard.ValidateTablePermissions(tt.query)
 
 			if tt.shouldSucceed && err != nil {
 				t.Errorf("Expected query to succeed but got error: %v\nQuery: %s\nDescription: %s",
@@ -236,7 +239,7 @@ func TestGetWhitelistedTables(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Update cached config for this test case
-			server.config.whitelistTables = parseWhitelistTables(tt.whitelist)
+			server.config.whitelistTables = sqlguard.ParseWhitelistTables(tt.whitelist)
 
 			tables := server.getWhitelistedTables()
 
@@ -266,8 +269,6 @@ func TestGetWhitelistedTables(t *testing.T) {
 
 // TestExtractOperation tests SQL operation extraction
 func TestExtractOperation(t *testing.T) {
-	server := newTestMCPServer()
-
 	tests := []struct {
 		name     string
 		query    string
@@ -317,7 +318,7 @@ func TestExtractOperation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			operation := server.extractOperation(tt.query)
+			operation := sqlguard.ExtractOperation(tt.query)
 
 			if operation != tt.expected {
 				t.Errorf("Expected operation '%s', got '%s' for query: %s",
@@ -360,7 +361,7 @@ func TestBUG001_StripStringLiterals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripStringLiterals(tt.input)
+			result := sqlguard.StripStringLiterals(tt.input)
 			if strings.Contains(result, tt.contains) {
 				t.Errorf("stripStringLiterals should remove '%s' from string literals.\nInput:  %s\nOutput: %s",
 					tt.contains, tt.input, result)
@@ -371,7 +372,7 @@ func TestBUG001_StripStringLiterals(t *testing.T) {
 	// Verify that content OUTSIDE strings is preserved
 	t.Run("content outside strings preserved", func(t *testing.T) {
 		input := "SELECT col FROM users WHERE name = 'test value'"
-		result := stripStringLiterals(input)
+		result := sqlguard.StripStringLiterals(input)
 		if !strings.Contains(result, "SELECT") || !strings.Contains(result, "FROM") || !strings.Contains(result, "users") {
 			t.Errorf("stripStringLiterals should preserve SQL outside strings.\nInput:  %s\nOutput: %s", input, result)
 		}
@@ -380,7 +381,7 @@ func TestBUG001_StripStringLiterals(t *testing.T) {
 	// Verify quotes themselves are preserved (structure intact)
 	t.Run("quote markers preserved", func(t *testing.T) {
 		input := "SELECT 'hello' AS col"
-		result := stripStringLiterals(input)
+		result := sqlguard.StripStringLiterals(input)
 		if !strings.Contains(result, "''") {
 			t.Errorf("stripStringLiterals should preserve empty quotes ''.\nInput:  %s\nOutput: %s", input, result)
 		}
@@ -414,9 +415,9 @@ func TestBUG001_NoFalsePositiveOnHintsInStrings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := containsDangerousHints(tt.query)
+			got := sqlguard.ContainsDangerousHints(tt.query)
 			if got != tt.wantHit {
-				t.Errorf("containsDangerousHints(%q) = %v, want %v", tt.query, got, tt.wantHit)
+				t.Errorf("sqlguard.ContainsDangerousHints(%q) = %v, want %v", tt.query, got, tt.wantHit)
 			}
 		})
 	}
@@ -425,8 +426,6 @@ func TestBUG001_NoFalsePositiveOnHintsInStrings(t *testing.T) {
 // TestBUG001_StructuralSafetyNoFalsePositive verifies the full validation chain
 // does not produce false positives for dangerous patterns inside string literals.
 func TestBUG001_StructuralSafetyNoFalsePositive(t *testing.T) {
-	server := newTestMCPServer()
-
 	safeLiteralQueries := []struct {
 		name  string
 		query string
@@ -438,9 +437,9 @@ func TestBUG001_StructuralSafetyNoFalsePositive(t *testing.T) {
 
 	for _, tt := range safeLiteralQueries {
 		t.Run(tt.name, func(t *testing.T) {
-			err := server.validateQueryStructuralSafety(tt.query)
+			err := sqlguard.ValidateStructuralSafety(tt.query)
 			if err != nil {
-				t.Errorf("False positive: validateQueryStructuralSafety(%q) returned error: %v", tt.query, err)
+				t.Errorf("False positive: sqlguard.ValidateStructuralSafety(%q) returned error: %v", tt.query, err)
 			}
 		})
 	}
@@ -452,6 +451,7 @@ func TestBUG002_SubquerySystemSchemaBlocked(t *testing.T) {
 	server := newTestMCPServer()
 	server.config.readOnly = true
 	server.config.whitelistTables = []string{"users", "orders"}
+	newTestGuard(server)
 
 	tests := []struct {
 		name    string
@@ -487,7 +487,7 @@ func TestBUG002_SubquerySystemSchemaBlocked(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := server.validateSubqueriesForRestrictedTables(tt.query)
+			err := server.guard.ValidateSubqueriesForRestrictedTables(tt.query)
 			if tt.wantErr && err == nil {
 				t.Errorf("Expected error for query: %s", tt.query)
 			}
@@ -501,8 +501,6 @@ func TestBUG002_SubquerySystemSchemaBlocked(t *testing.T) {
 // TestBUG002_ExtractTableRefsIncludesSystemSchemas verifies that extractTableRefs
 // includes system schema tables with qualified names (e.g. "sys.objects").
 func TestBUG002_ExtractTableRefsIncludesSystemSchemas(t *testing.T) {
-	server := newTestMCPServer()
-
 	tests := []struct {
 		name          string
 		query         string
@@ -537,12 +535,12 @@ func TestBUG002_ExtractTableRefsIncludesSystemSchemas(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			refs := server.extractTableRefs(tt.query)
+			refs := sqlguard.ExtractTableRefs(tt.query)
 			found := false
 			var tableNames []string
 			for _, ref := range refs {
-				tableNames = append(tableNames, ref.table)
-				if ref.table == tt.expectTable {
+				tableNames = append(tableNames, ref.Table)
+				if ref.Table == tt.expectTable {
 					found = true
 				}
 			}

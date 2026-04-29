@@ -4,6 +4,7 @@
 
 # Environment files with credentials
 .env
+.env.private
 .env.local
 .env.test
 .env.production
@@ -122,3 +123,7 @@ test/*.exe
 website/node_modules/
 website/dist/
 website/.astro/
+
+
+# Otros
+docs/
