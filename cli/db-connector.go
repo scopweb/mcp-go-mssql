@@ -136,15 +136,15 @@ type QueryResult struct {
 }
 
 func main() {
-	// Load .env from executable directory first, fallback to current directory
+	// Load .env - try executable directory first, then current directory
 	exeDir := getExecutableDir()
 	if exeDir != "" {
 		if envPath := filepath.Join(exeDir, ".env"); fileExists(envPath) {
 			loadEnvFile(envPath)
 		}
-	} else {
-		loadEnvFile(".env")
 	}
+	// Always also try current directory (overrides if already set)
+	loadEnvFile(".env")
 
 	// Initialize CLI state
 	cliState.devMode = strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
