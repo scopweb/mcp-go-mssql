@@ -22,6 +22,7 @@ import (
 	_ "github.com/microsoft/go-mssqldb"
 	_ "github.com/microsoft/go-mssqldb/integratedauth/winsspi"
 
+	"mcp-go-mssql/internal/resultfmt"
 	"mcp-go-mssql/internal/sqlguard"
 )
 
@@ -624,9 +625,9 @@ func generateOpToken() string {
 	return hex.EncodeToString(b)
 }
 
-
 // maxQueryRows limits the number of rows returned by any query to prevent token overflow.
-const maxQueryRows = 500
+// Default 100, configurable via MSSQL_MAX_ROWS env var.
+var maxQueryRows = 100
 
 // executeSecureQuery runs a validated, prepared query and returns up to maxQueryRows rows.
 // If the result is truncated, the last element contains a "_truncated" warning key.
@@ -716,6 +717,12 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	}
 	defer rows.Close()
 
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, err
+	}
+	formatter := resultfmt.NewFormatter(colTypes)
+
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, err
@@ -741,12 +748,8 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 
 		row := make(map[string]interface{})
 		for i, col := range columns {
-			val := values[i]
-			if b, ok := val.([]byte); ok {
-				row[col] = string(b)
-			} else {
-				row[col] = val
-			}
+			formatted, _ := formatter.FormatValue(i, values[i])
+			row[col] = formatted
 		}
 		results = append(results, row)
 		rowCount++
@@ -770,34 +773,34 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 // guard may be nil — in that case the server-wide s.guard is used. Callers
 // hitting the default DB should pass nil; callers hitting a dynamic alias
 // should pass connInfo.guard.
-func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.DB, guard *sqlguard.Guard, query string, args ...interface{}) ([]map[string]interface{}, error) {
+func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.DB, guard *sqlguard.Guard, query string, args ...interface{}) ([]map[string]interface{}, resultfmt.Metadata, error) {
 	if db == nil {
-		return nil, fmt.Errorf("database not connected")
+		return nil, resultfmt.Metadata{}, fmt.Errorf("database not connected")
 	}
 	if guard == nil {
 		guard = s.guard
 	}
 
 	if err := s.validateBasicInput(query); err != nil {
-		return nil, err
+		return nil, resultfmt.Metadata{}, err
 	}
 
 	// Validate read-only restrictions
 	if err := guard.ValidateReadOnly(query); err != nil {
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
-		return nil, err
+		return nil, resultfmt.Metadata{}, err
 	}
 
 	// Validate granular table permissions (whitelist)
 	if err := guard.ValidateTablePermissions(query); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
-		return nil, err
+		return nil, resultfmt.Metadata{}, err
 	}
 
 	// Validate subqueries don't reference restricted tables
 	if err := guard.ValidateSubqueriesForRestrictedTables(query); err != nil {
 		s.secLogger.Printf("Subquery safety violation blocked: %s", err)
-		return nil, err
+		return nil, resultfmt.Metadata{}, err
 	}
 
 	// Check for destructive operation confirmation requirement
@@ -812,7 +815,7 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 				targetStr = targets[0].Schema + "." + targets[0].Name
 			}
 			opType := sqlguard.ExtractDestructiveOpType(query)
-			return nil, &ConfirmationRequiredError{
+			return nil, resultfmt.Metadata{}, &ConfirmationRequiredError{
 				Token:     token,
 				Operation: opType,
 				Target:    targetStr,
@@ -828,7 +831,7 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 			targetStr = targets[0].Schema + "." + targets[0].Name
 		}
 		opType := sqlguard.ExtractDestructiveOpType(query)
-		return nil, &ConfirmationRequiredError{
+		return nil, resultfmt.Metadata{}, &ConfirmationRequiredError{
 			Token:     token,
 			Operation: opType,
 			Target:    targetStr,
@@ -840,10 +843,10 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 	if err != nil {
 		if s.devMode {
 			s.secLogger.Printf("Failed to prepare statement: %v", err)
-			return nil, fmt.Errorf("query preparation failed: %v", err)
+			return nil, resultfmt.Metadata{}, fmt.Errorf("query preparation failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to prepare statement: query preparation error")
-		return nil, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
+		return nil, resultfmt.Metadata{}, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
 	}
 	defer stmt.Close()
 
@@ -851,16 +854,22 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 	if err != nil {
 		if s.devMode {
 			s.secLogger.Printf("Failed to execute query: %v", err)
-			return nil, fmt.Errorf("query execution failed: %v", err)
+			return nil, resultfmt.Metadata{}, fmt.Errorf("query execution failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to execute query: execution error")
-		return nil, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
+		return nil, resultfmt.Metadata{}, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
 	}
 	defer rows.Close()
 
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, resultfmt.Metadata{}, err
+	}
+	formatter := resultfmt.NewFormatter(colTypes)
+
 	columns, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return nil, resultfmt.Metadata{}, err
 	}
 
 	var results []map[string]interface{}
@@ -878,19 +887,16 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 		}
 
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, err
+			return nil, resultfmt.Metadata{}, err
 		}
 
 		row := make(map[string]interface{})
 		for i, col := range columns {
-			val := values[i]
-			if b, ok := val.([]byte); ok {
-				row[col] = string(b)
-			} else {
-				row[col] = val
-			}
+			formatted, _ := formatter.FormatValue(i, values[i])
+			row[col] = formatted
 		}
 		results = append(results, row)
+		formatter.IncRow()
 		rowCount++
 	}
 
@@ -900,7 +906,7 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 		})
 	}
 
-	return results, nil
+	return results, formatter.BuildMetadata(truncated, maxQueryRows), nil
 }
 
 func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *MCPResponse {
@@ -1461,6 +1467,13 @@ func main() {
 	}
 	secLogger.Printf("WHITELIST_TABLES=%s", wl)
 	secLogger.Printf("=============================")
+	// Initialize maxQueryRows from env var (default 100)
+	if envMax := os.Getenv("MSSQL_MAX_ROWS"); envMax != "" {
+		if parsed, err := strconv.Atoi(envMax); err == nil && parsed > 0 {
+			maxQueryRows = parsed
+		}
+	}
+
 	// Initialize rate limiter: 60 tool calls per minute
 	server.rateLimiter.maxTokens = 60
 	server.rateLimiter.tokens = 60

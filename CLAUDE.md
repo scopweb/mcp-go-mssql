@@ -150,6 +150,9 @@ The server reads database connection from these environment variables. See `.env
   - Independent flag — effective skip is `AUTOPILOT OR SKIP_SCHEMA_VALIDATION`
   - Useful when you want to disable schema checks without enabling other AUTOPILOT semantics (currently AUTOPILOT only governs schema validation, but this flag stays decoupled in case AUTOPILOT grows)
   - Does NOT skip whitelist protection or destructive operation confirmation
+- `MSSQL_MAX_ROWS`: Maximum rows returned per query (default: 100, max: 500)
+  - Reduces token consumption by truncating large result sets
+  - Configurable balance between data completeness and token savings
 - `MSSQL_DYNAMIC_MODE`: Enable dynamic multi-database connections (default: false)
   - `"true"`: Enables runtime database connections via `dynamic_connect` tool
   - Allows connecting to multiple databases from a single MCP server instance

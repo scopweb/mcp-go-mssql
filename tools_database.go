@@ -310,7 +310,7 @@ func (s *MCPMSSQLServer) handleQueryDatabase(id interface{}, params CallToolPara
 		}
 	}
 
-	results, err := s.executeSecureQueryWithDB(ctx, db, connGuard, query)
+	results, meta, err := s.executeSecureQueryWithDB(ctx, db, connGuard, query)
 	if err != nil {
 		// Check if this is a confirmation-required error
 		if confirmErr, ok := err.(*ConfirmationRequiredError); ok {
@@ -364,7 +364,7 @@ func (s *MCPMSSQLServer) handleQueryDatabase(id interface{}, params CallToolPara
 		}
 	}
 
-	// Format results as JSON
+	// Format results as JSON with metadata
 	resultBytes, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return &MCPResponse{
@@ -383,6 +383,17 @@ func (s *MCPMSSQLServer) handleQueryDatabase(id interface{}, params CallToolPara
 		}
 	}
 
+	// Build result metadata for _meta field
+	metaMap := map[string]interface{}{
+		"rows_returned": meta.TotalRows,
+		"columns":       meta.ColumnCount,
+		"types":         meta.ColumnTypes,
+		"null_counts":   meta.NullCounts,
+	}
+	if meta.Truncated {
+		metaMap["warning"] = fmt.Sprintf("Results truncated at %d rows. Use WHERE or TOP to narrow the query.", meta.TruncatedAt)
+	}
+
 	return &MCPResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -394,6 +405,7 @@ func (s *MCPMSSQLServer) handleQueryDatabase(id interface{}, params CallToolPara
 					Annotations: annBothQuery,
 				},
 			},
+			Meta: metaMap,
 		},
 	}
 }
@@ -470,7 +482,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 			WHERE database_id > 4
 			ORDER BY name
 		`
-		results, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
+		results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
 
 	case "procedures":
 		label = "Stored procedures found"
@@ -487,7 +499,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 				WHERE SCHEMA_NAME(p.schema_id) = @p1 AND p.name LIKE @p2
 				ORDER BY schema_name, procedure_name
 			`
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, schemaFilter, "%"+filterVal+"%")
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, schemaFilter, "%"+filterVal+"%")
 		} else if schemaFilter != "" {
 			query := `
 				SELECT
@@ -499,7 +511,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 				WHERE SCHEMA_NAME(p.schema_id) = @p1
 				ORDER BY schema_name, procedure_name
 			`
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, schemaFilter)
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, schemaFilter)
 		} else if filterVal != "" {
 			query := `
 				SELECT
@@ -511,7 +523,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 				WHERE p.name LIKE @p1
 				ORDER BY schema_name, procedure_name
 			`
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, "%"+filterVal+"%")
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, "%"+filterVal+"%")
 		} else {
 			query := `
 				SELECT
@@ -522,7 +534,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 				FROM sys.procedures p
 				ORDER BY schema_name, procedure_name
 			`
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
 		}
 
 	case "search":
@@ -554,7 +566,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 				WHERE m.definition LIKE @p1
 				ORDER BY o.type_desc, o.name
 			`
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, likePattern)
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, likePattern)
 		} else {
 			label = fmt.Sprintf("Objects matching '%s' in name", pattern)
 			query := `
@@ -569,7 +581,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 				  AND o.type IN ('U','V','P','FN','IF','TF')
 				ORDER BY o.type_desc, o.name
 			`
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, likePattern)
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, likePattern)
 		}
 
 	case "views":
@@ -577,10 +589,10 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 		viewFilter, _ := params.Arguments["filter"].(string)
 		if viewFilter != "" {
 			query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v WHERE v.TABLE_NAME LIKE @p1 ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, "%"+viewFilter+"%")
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, "%"+viewFilter+"%")
 		} else {
 			query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-			results, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
+			results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
 		}
 
 	default: // "tables"
@@ -636,7 +648,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 					  AND TABLE_NAME LIKE @p1
 					ORDER BY TABLE_SCHEMA, TABLE_NAME
 				`, dbFilterLower)
-				results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, "%"+filterVal+"%")
+				results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, "%"+filterVal+"%")
 			} else {
 				query := fmt.Sprintf(`
 					SELECT
@@ -647,7 +659,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 					WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
 					ORDER BY TABLE_SCHEMA, TABLE_NAME
 				`, dbFilterLower)
-				results, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
+				results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
 			}
 		} else {
 			// Default: current database + summary of allowed databases
@@ -664,7 +676,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 					  AND TABLE_NAME LIKE @p1
 					ORDER BY TABLE_SCHEMA, TABLE_NAME
 				`
-				results, err = s.executeSecureQueryWithDB(ctx, db, guard, query, filterPattern)
+				results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query, filterPattern)
 			} else {
 				query := `
 					SELECT
@@ -675,7 +687,7 @@ func (s *MCPMSSQLServer) handleExplore(id interface{}, params CallToolParams) *M
 					WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
 					ORDER BY TABLE_SCHEMA, TABLE_NAME
 				`
-				results, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
+				results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, query)
 			}
 
 			// Append cross-database info if allowed databases are configured
@@ -867,19 +879,19 @@ func (s *MCPMSSQLServer) handleInspect(id interface{}, params CallToolParams) *M
 	`
 
 	if detail == "all" {
-		colResults, err := s.executeSecureQueryWithDB(ctx, db, guard, columnsQuery, schemaName, tableName)
+		colResults, _, err := s.executeSecureQueryWithDB(ctx, db, guard, columnsQuery, schemaName, tableName)
 		if err != nil {
 			return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting columns: %v", err), Annotations: annBothHigh}}, IsError: true,
 			}}
 		}
-		idxResults, err := s.executeSecureQueryWithDB(ctx, db, guard, indexesQuery, tableName, schemaName)
+		idxResults, _, err := s.executeSecureQueryWithDB(ctx, db, guard, indexesQuery, tableName, schemaName)
 		if err != nil {
 			return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err), Annotations: annBothHigh}}, IsError: true,
 			}}
 		}
-		fkResults, err := s.executeSecureQueryWithDB(ctx, db, guard, fkQuery, tableName, schemaName)
+		fkResults, _, err := s.executeSecureQueryWithDB(ctx, db, guard, fkQuery, tableName, schemaName)
 		if err != nil {
 			return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err), Annotations: annBothHigh}}, IsError: true,
@@ -898,7 +910,7 @@ func (s *MCPMSSQLServer) handleInspect(id interface{}, params CallToolParams) *M
 			  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
 			ORDER BY o.type_desc, referencing_schema, referencing_object
 		`
-		depsResults, _ := s.executeSecureQueryWithDB(ctx, db, guard, depsAllQuery, tableName, schemaName) // #nosec G104 - dependencies query is optional, errors handled gracefully
+		depsResults, _, _ := s.executeSecureQueryWithDB(ctx, db, guard, depsAllQuery, tableName, schemaName)
 		combined := map[string]interface{}{
 			"columns":      colResults,
 			"indexes":      idxResults,
@@ -933,10 +945,10 @@ func (s *MCPMSSQLServer) handleInspect(id interface{}, params CallToolParams) *M
 	switch detail {
 	case "indexes":
 		label = fmt.Sprintf("Indexes for '%s.%s'", schemaName, tableName)
-		results, err = s.executeSecureQueryWithDB(ctx, db, guard, indexesQuery, tableName, schemaName)
+		results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, indexesQuery, tableName, schemaName)
 	case "foreign_keys":
 		label = fmt.Sprintf("Foreign keys for '%s.%s'", schemaName, tableName)
-		results, err = s.executeSecureQueryWithDB(ctx, db, guard, fkQuery, tableName, schemaName)
+		results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, fkQuery, tableName, schemaName)
 	case "dependencies":
 		label = fmt.Sprintf("Objects that depend on '%s.%s'", schemaName, tableName)
 		depsQuery := `
@@ -952,10 +964,10 @@ func (s *MCPMSSQLServer) handleInspect(id interface{}, params CallToolParams) *M
 			  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
 			ORDER BY o.type_desc, referencing_schema, referencing_object
 		`
-		results, err = s.executeSecureQueryWithDB(ctx, db, guard, depsQuery, tableName, schemaName)
+		results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, depsQuery, tableName, schemaName)
 	default: // "columns"
 		label = fmt.Sprintf("Table structure for '%s'", tableName)
-		results, err = s.executeSecureQueryWithDB(ctx, db, guard, columnsQuery, schemaName, tableName)
+		results, _, err = s.executeSecureQueryWithDB(ctx, db, guard, columnsQuery, schemaName, tableName)
 		if err == nil && len(results) == 0 {
 			return &MCPResponse{
 				JSONRPC: "2.0",
