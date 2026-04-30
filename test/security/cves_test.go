@@ -12,11 +12,11 @@ import (
 
 // CVERecord represents a known CVE vulnerability
 type CVERecord struct {
-	CVEId            string
-	PackageName      string
-	MinSafeVersion   string // minimum safe semver version (e.g. "v0.31.0")
-	Severity         string
-	Description      string
+	CVEId          string
+	PackageName    string
+	MinSafeVersion string // minimum safe semver version (e.g. "v0.31.0")
+	Severity       string
+	Description    string
 }
 
 // TestKnownCVEs verifies that go.mod dependency versions are above known-vulnerable ranges.
@@ -558,5 +558,3 @@ func shouldBlockAIQuery(query string) bool {
 	}
 	return false
 }
-
-

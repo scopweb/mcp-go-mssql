@@ -80,6 +80,10 @@ SELECT * FROM OPENROWSET('SQLNCLI',
 
 **Mitigation**: These functions are blocked and never execute.
 
+### 5.1. OPENQUERY (not blocked)
+
+`OPENQUERY` allows accessing linked servers configured in SQL Server. Unlike `OPENROWSET`/`OPENDATASOURCE`, **it is not blocked by MCP code** because it is useful in environments with multiple linked servers. Modifications through linked servers are still blocked (treated as cross-database).
+
 ### 6. Subqueries to bypass whitelist
 
 An AI could access restricted tables through subqueries:

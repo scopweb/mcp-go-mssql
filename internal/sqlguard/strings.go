@@ -5,9 +5,9 @@ import "strings"
 // StripStringLiterals removes the *contents* of SQL string literals (both
 // single and double quoted) so that patterns appearing inside strings are not
 // falsely flagged as code. The opening and closing quote characters are
-// preserved as empty literals ('') to keep the query structure intact.
+// preserved as empty literals (”) to keep the query structure intact.
 //
-// Handles SQL's escape convention of doubled quotes: '' inside a single-
+// Handles SQL's escape convention of doubled quotes: ” inside a single-
 // quoted string and "" inside a double-quoted identifier.
 func StripStringLiterals(query string) string {
 	var result strings.Builder

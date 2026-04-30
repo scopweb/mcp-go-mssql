@@ -9,6 +9,7 @@ import (
 	"os"
 	osuser "os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +67,55 @@ func loadEnvFile(filePath string) error {
 	return scanner.Err()
 }
 
+// ConnectionInfo holds information about an active database connection
+type ConnectionInfo struct {
+	Alias    string
+	DB       *sql.DB
+	Server   string
+	Database string
+	User     string
+	guard    *sqlguard.Guard
+}
+
+// CLIState holds the CLI's runtime state including dynamic connections
+type CLIState struct {
+	dynamicMode     bool
+	connections     map[string]*ConnectionInfo
+	activeAlias     string
+	devMode         bool
+	maxDynamicConns int
+	stateFile       string
+}
+
+// Global CLI state
+var cliState = &CLIState{
+	connections: make(map[string]*ConnectionInfo),
+}
+
+const stateFileName = ".db-connector-state"
+
+// loadState loads persisted state from disk and reconnects to active alias
+func loadState() {
+	stateFile := filepath.Join(getExecutableDir(), stateFileName)
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		return
+	}
+	alias := strings.TrimSpace(string(data))
+	if alias == "" {
+		return
+	}
+	// Reconnect to persisted alias
+	cliState.activeAlias = alias
+	connectDynamicSilent(alias)
+}
+
+// saveState persists active alias to disk
+func saveState() {
+	stateFile := filepath.Join(getExecutableDir(), stateFileName)
+	os.WriteFile(stateFile, []byte(cliState.activeAlias), 0600)
+}
+
 // DatabaseConfig holds connection configuration
 type DatabaseConfig struct {
 	Server   string `json:"server"`
@@ -96,18 +146,39 @@ func main() {
 		loadEnvFile(".env")
 	}
 
+	// Initialize CLI state
+	cliState.devMode = strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
+	cliState.dynamicMode = strings.ToLower(os.Getenv("MSSQL_DYNAMIC_MODE")) == "true" && os.Getenv("MSSQL_SERVER") == ""
+
+	if maxConns := os.Getenv("MSSQL_DYNAMIC_MAX_CONNECTIONS"); maxConns != "" {
+		if parsed, err := strconv.Atoi(maxConns); err == nil && parsed > 0 {
+			cliState.maxDynamicConns = parsed
+		}
+	}
+	if cliState.maxDynamicConns == 0 {
+		cliState.maxDynamicConns = 10
+	}
+
+	// Load persisted state (active connection alias)
+	if cliState.dynamicMode {
+		loadState()
+	}
+
 	if len(os.Args) < 2 {
-		fmt.Println("Usage:")
-		fmt.Println("  go run db-connector.go test                    # Test connection")
-		fmt.Println("  go run db-connector.go info                    # Show database info")
-		fmt.Println("  go run db-connector.go query \"SELECT ...\"      # Execute query")
-		fmt.Println("  go run db-connector.go tables                  # List all tables")
-		fmt.Println("  go run db-connector.go describe table_name     # Describe table structure")
+		printUsage()
 		os.Exit(1)
 	}
 
 	command := os.Args[1]
 
+	// Handle dynamic mode commands
+	if cliState.dynamicMode {
+		if handled := handleDynamicCommand(command); handled {
+			os.Exit(0)
+		}
+	}
+
+	// Direct connection mode (or fallback)
 	config, guard, err := loadConfig()
 	if err != nil {
 		printError("Configuration error: %v", err)
@@ -141,9 +212,335 @@ func main() {
 		}
 		describeTable(db, os.Args[2], guard)
 	default:
-		printError("Unknown command: %s", command)
+		if cliState.dynamicMode {
+			fmt.Printf("Unknown command '%s'. In dynamic mode, use: dynamic_available, dynamic_connect, dynamic_list, dynamic_disconnect\n", command)
+		} else {
+			printError("Unknown command: %s", command)
+		}
 		os.Exit(1)
 	}
+}
+
+func printUsage() {
+	fmt.Println("Usage:")
+	fmt.Println("  go run db-connector.go test                    # Test connection")
+	fmt.Println("  go run db-connector.go info                    # Show database info")
+	fmt.Println("  go run db-connector.go query \"SELECT ...\"      # Execute query")
+	fmt.Println("  go run db-connector.go tables                  # List all tables")
+	fmt.Println("  go run db-connector.go describe table_name     # Describe table structure")
+	if cliState.dynamicMode {
+		fmt.Println("  go run db-connector.go dynamic_available      # List available dynamic connections")
+		fmt.Println("  go run db-connector.go dynamic_connect <alias> # Connect to a dynamic connection")
+		fmt.Println("  go run db-connector.go dynamic_list           # List active dynamic connections")
+		fmt.Println("  go run db-connector.go dynamic_disconnect <alias> # Disconnect a dynamic connection")
+	}
+}
+
+// handleDynamicCommand processes dynamic-mode specific commands.
+// Returns true if the command was handled, false otherwise.
+func handleDynamicCommand(command string) bool {
+	switch command {
+	case "dynamic_available":
+		listAvailableDynamicConnections()
+		return true
+	case "dynamic_connect":
+		if len(os.Args) < 3 {
+			printError("dynamic_connect requires alias argument")
+			os.Exit(1)
+		}
+		connectDynamic(os.Args[2])
+		return true
+	case "dynamic_list":
+		listActiveDynamicConnections()
+		return true
+	case "dynamic_disconnect":
+		if len(os.Args) < 3 {
+			printError("dynamic_disconnect requires alias argument")
+			os.Exit(1)
+		}
+		disconnectDynamic(os.Args[2])
+		return true
+	case "test", "info", "query", "tables", "describe":
+		// These require an active connection in dynamic mode
+		if cliState.activeAlias == "" {
+			printError("No active dynamic connection. Use 'dynamic_connect <alias>' first")
+			os.Exit(1)
+		}
+		// Get active connection and run command
+		conn := cliState.connections[cliState.activeAlias]
+		if conn == nil {
+			printError("Active connection '%s' not found. Use 'dynamic_connect <alias>'", cliState.activeAlias)
+			os.Exit(1)
+		}
+		runCommandOnConnection(command, conn)
+		return true
+	}
+	return false
+}
+
+func runCommandOnConnection(command string, conn *ConnectionInfo) {
+	switch command {
+	case "test":
+		testDynamicConnection(conn)
+	case "info":
+		showDynamicInfo(conn)
+	case "query":
+		if len(os.Args) < 3 {
+			printError("Query command requires SQL statement")
+			os.Exit(1)
+		}
+		executeQuery(conn.DB, os.Args[2], conn.guard)
+	case "tables":
+		listTables(conn.DB, conn.guard)
+	case "describe":
+		if len(os.Args) < 3 {
+			printError("Describe command requires table name")
+			os.Exit(1)
+		}
+		describeTable(conn.DB, os.Args[2], conn.guard)
+	}
+}
+
+func getEnvPath() string {
+	exeDir := getExecutableDir()
+	if exeDir != "" {
+		if envPath := filepath.Join(exeDir, ".env"); fileExists(envPath) {
+			return envPath
+		}
+	}
+	return ".env"
+}
+
+func listAvailableDynamicConnections() {
+	envPath := getEnvPath()
+	envFile, err := os.Open(envPath)
+	if err != nil {
+		fmt.Println("No .env file found")
+		return
+	}
+	defer envFile.Close()
+
+	scanner := bufio.NewScanner(envFile)
+	knownAliases := make(map[string]struct {
+		server   string
+		database string
+	})
+	for scanner.Scan() {
+		line := scanner.Text()
+		if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			if strings.HasPrefix(key, "MSSQL_DYNAMIC_") && strings.HasSuffix(key, "_SERVER") && value != "" {
+				alias := strings.TrimPrefix(strings.TrimSuffix(key, "_SERVER"), "MSSQL_DYNAMIC_")
+				knownAliases[alias] = struct {
+					server   string
+					database string
+				}{server: value}
+			}
+			if strings.HasPrefix(key, "MSSQL_DYNAMIC_") && strings.HasSuffix(key, "_DATABASE") && value != "" {
+				alias := strings.TrimPrefix(strings.TrimSuffix(key, "_DATABASE"), "MSSQL_DYNAMIC_")
+				if entry, ok := knownAliases[alias]; ok {
+					entry.database = value
+					knownAliases[alias] = entry
+				}
+			}
+		}
+	}
+
+	fmt.Println("Available dynamic connections:")
+	for alias, entry := range knownAliases {
+		active := ""
+		if cliState.activeAlias == alias {
+			active = " (active)"
+		}
+		fmt.Printf("  - %s (%s/%s)%s\n", alias, entry.server, entry.database, active)
+	}
+	if len(knownAliases) == 0 {
+		fmt.Println("  No dynamic connections configured")
+	}
+}
+
+func connectDynamic(alias string) {
+	if err := connectDynamicDB(alias); err != nil {
+		printError("%v", err)
+		os.Exit(1)
+	}
+	cliState.activeAlias = alias
+	saveState()
+	fmt.Printf("Connected to '%s' (%s/%s)\n", alias, cliState.connections[alias].Server, cliState.connections[alias].Database)
+}
+
+// connectDynamicDB establishes a connection without modifying active alias or saving state
+func connectDynamicDB(alias string) error {
+	if len(cliState.connections) >= cliState.maxDynamicConns {
+		return fmt.Errorf("maximum dynamic connections (%d) reached", cliState.maxDynamicConns)
+	}
+
+	prefix := "MSSQL_DYNAMIC_" + strings.ToUpper(alias) + "_"
+	server := os.Getenv(prefix + "SERVER")
+	database := os.Getenv(prefix + "DATABASE")
+	user := os.Getenv(prefix + "USER")
+	password := os.Getenv(prefix + "PASSWORD")
+	portStr := os.Getenv(prefix + "PORT")
+	auth := os.Getenv(prefix + "AUTH")
+
+	if server == "" || database == "" {
+		return fmt.Errorf("dynamic connection '%s' not found or incomplete", alias)
+	}
+
+	isIntegratedAuth := strings.ToLower(auth) == "integrated" || strings.ToLower(auth) == "windows"
+	if !isIntegratedAuth && (user == "" || password == "") {
+		return fmt.Errorf("dynamic connection '%s' missing credentials", alias)
+	}
+
+	port := 1433
+	if portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+
+	encrypt := "true"
+	trustCert := "false"
+	if cliState.devMode {
+		encrypt = "false"
+		trustCert = "true"
+	}
+
+	var connStr string
+	if isIntegratedAuth {
+		connStr = fmt.Sprintf("server=%s;port=%d;database=%s;encrypt=%s;trustservercertificate=%s;integrated security=SSPI;connection timeout=30;command timeout=30",
+			server, port, database, encrypt, trustCert)
+	} else {
+		connStr = fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+			server, port, database, user, password, encrypt, trustCert)
+	}
+
+	db, err := sql.Open("sqlserver", connStr)
+	if err != nil {
+		return fmt.Errorf("failed to open connection: %w", err)
+	}
+
+	if err := db.PingContext(context.Background()); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(time.Hour)
+	db.SetConnMaxIdleTime(15 * time.Minute)
+
+	readOnly := strings.ToLower(os.Getenv(prefix+"READ_ONLY")) == "true"
+	guard := sqlguard.New(sqlguard.Config{
+		ReadOnly:  readOnly,
+		Whitelist: sqlguard.ParseWhitelistTables(os.Getenv(prefix + "WHITELIST_TABLES")),
+		Logger:    securityLogger{},
+	})
+
+	cliState.connections[alias] = &ConnectionInfo{
+		Alias:    alias,
+		DB:       db,
+		Server:   server,
+		Database: database,
+		User:     user,
+		guard:    guard,
+	}
+
+	return nil
+}
+
+// connectDynamicSilent reconnects without printing errors or output
+func connectDynamicSilent(alias string) {
+	connectDynamicDB(alias)
+}
+
+func listActiveDynamicConnections() {
+	if len(cliState.connections) == 0 {
+		fmt.Println("No active dynamic connections")
+		return
+	}
+	fmt.Println("Active dynamic connections:")
+	for alias, conn := range cliState.connections {
+		active := ""
+		if cliState.activeAlias == alias {
+			active = " (active)"
+		}
+		fmt.Printf("  - %s (%s/%s)%s\n", alias, conn.Server, conn.Database, active)
+	}
+}
+
+func disconnectDynamic(alias string) {
+	conn, ok := cliState.connections[alias]
+	if !ok {
+		printError("Dynamic connection '%s' not found", alias)
+		os.Exit(1)
+	}
+	conn.DB.Close()
+	delete(cliState.connections, alias)
+	if cliState.activeAlias == alias {
+		// Switch to another active connection if available
+		for a := range cliState.connections {
+			cliState.activeAlias = a
+			break
+		}
+		if len(cliState.connections) == 0 {
+			cliState.activeAlias = ""
+		}
+	}
+	saveState()
+	fmt.Printf("Disconnected '%s'\n", alias)
+}
+
+func testDynamicConnection(conn *ConnectionInfo) {
+	result := QueryResult{Success: true}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var version string
+	userDisplay := conn.User
+	if conn.User == "" {
+		userDisplay = "Integrated"
+	}
+	err := conn.DB.QueryRowContext(ctx, "SELECT @@VERSION").Scan(&version)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("Test query failed: %v", err)
+	} else {
+		result.Info = fmt.Sprintf("✅ Connection successful!\nServer: %s\nDatabase: %s\nUser: %s\nTLS: Enabled\nVersion: %s",
+			conn.Server, conn.Database, userDisplay, strings.TrimSpace(version))
+	}
+
+	printResult(result)
+}
+
+func showDynamicInfo(conn *ConnectionInfo) {
+	result := QueryResult{Success: true}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queries := map[string]string{
+		"version":    "SELECT @@VERSION as version",
+		"servername": "SELECT @@SERVERNAME as server_name",
+		"dbname":     "SELECT DB_NAME() as database_name",
+		"user":       "SELECT SYSTEM_USER as current_user",
+	}
+
+	info := make(map[string]interface{})
+	for key, query := range queries {
+		var value string
+		err := conn.DB.QueryRowContext(ctx, query).Scan(&value)
+		if err != nil {
+			info[key] = fmt.Sprintf("Error: %v", err)
+		} else {
+			info[key] = value
+		}
+	}
+
+	result.Data = []map[string]interface{}{info}
+	printResult(result)
 }
 
 func loadConfig() (*DatabaseConfig, *sqlguard.Guard, error) {

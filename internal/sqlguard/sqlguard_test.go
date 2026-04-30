@@ -80,13 +80,13 @@ func TestStripLeadingComments(t *testing.T) {
 
 func TestExtractOperation(t *testing.T) {
 	cases := map[string]string{
-		"SELECT * FROM t":                                "SELECT",
-		"  insert INTO t VALUES (1)":                     "INSERT",
-		"DELETE FROM t":                                  "DELETE",
-		"WITH x AS (SELECT 1) DELETE FROM t":             "DELETE",
-		"WITH x AS (SELECT 1) SELECT * FROM t":           "SELECT",
-		"-- comment\nUPDATE t SET a = 1":                 "UPDATE",
-		"   ":                                            "SELECT",
+		"SELECT * FROM t":                      "SELECT",
+		"  insert INTO t VALUES (1)":           "INSERT",
+		"DELETE FROM t":                        "DELETE",
+		"WITH x AS (SELECT 1) DELETE FROM t":   "DELETE",
+		"WITH x AS (SELECT 1) SELECT * FROM t": "SELECT",
+		"-- comment\nUPDATE t SET a = 1":       "UPDATE",
+		"   ":                                  "SELECT",
 	}
 	for in, want := range cases {
 		if got := ExtractOperation(in); got != want {
@@ -97,14 +97,14 @@ func TestExtractOperation(t *testing.T) {
 
 func TestExtractDestructiveOpType(t *testing.T) {
 	cases := map[string]string{
-		"DROP TABLE users":     "DROP TABLE",
-		"drop view v":          "DROP VIEW",
-		"ALTER TABLE t ADD c":  "ALTER TABLE",
-		"TRUNCATE TABLE t":     "TRUNCATE TABLE",
-		"DROP procedure p":     "DROP PROC",
-		"DROP function f":      "DROP FUNCTION",
-		"INSERT INTO t (a)":    "INSERT (detected)",
-		"":                     "UNKNOWN",
+		"DROP TABLE users":    "DROP TABLE",
+		"drop view v":         "DROP VIEW",
+		"ALTER TABLE t ADD c": "ALTER TABLE",
+		"TRUNCATE TABLE t":    "TRUNCATE TABLE",
+		"DROP procedure p":    "DROP PROC",
+		"DROP function f":     "DROP FUNCTION",
+		"INSERT INTO t (a)":   "INSERT (detected)",
+		"":                    "UNKNOWN",
 	}
 	for in, want := range cases {
 		if got := ExtractDestructiveOpType(in); got != want {
