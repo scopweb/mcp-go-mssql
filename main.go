@@ -629,139 +629,18 @@ func generateOpToken() string {
 // Default 100, configurable via MSSQL_MAX_ROWS env var.
 var maxQueryRows = 100
 
-// executeSecureQuery runs a validated, prepared query and returns up to maxQueryRows rows.
-// If the result is truncated, the last element contains a "_truncated" warning key.
+// executeSecureQuery is the legacy entry point for callers that don't need
+// result-set metadata (tools_confirm, tools_procedure, internal validation
+// queries). It delegates to executeSecureQueryWithDB using the default DB
+// and the server-wide guard, discarding the metadata.
+//
+// Truncation is silent on this path: callers get up to maxQueryRows rows
+// with no flag indicating whether more existed. AI-exposed handlers that
+// need the truncation warning should call executeSecureQueryWithDB directly
+// and surface meta.Truncated to the user (see handleQueryDatabase).
 func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, error) {
-	db := s.getDB()
-	if db == nil {
-		return nil, fmt.Errorf("database not connected")
-	}
-
-	if err := s.validateBasicInput(query); err != nil {
-		return nil, err
-	}
-
-	// Validate read-only restrictions
-	if err := s.guard.ValidateReadOnly(query); err != nil {
-		s.secLogger.Printf("Read-only violation blocked: %s", err)
-		return nil, err
-	}
-
-	// Validate granular table permissions (whitelist)
-	if err := s.guard.ValidateTablePermissions(query); err != nil {
-		s.secLogger.Printf("Permission violation blocked: %s", err)
-		return nil, err
-	}
-
-	// Validate subqueries don't reference restricted tables
-	if err := s.guard.ValidateSubqueriesForRestrictedTables(query); err != nil {
-		s.secLogger.Printf("Subquery safety violation blocked: %s", err)
-		return nil, err
-	}
-
-	// Check for destructive operation confirmation requirement
-	// AUTOPILOT does NOT skip destructive confirmation — each dangerous operation requires explicit confirmation
-	s.secLogger.Printf("AUTOPILOT=%v — %s", s.config.autopilot, sqlguard.ExtractOperation(query))
-	if token, err := s.checkDestructiveConfirmation(ctx, query); err != nil {
-		// If check fails with confirmation requirement, return confirmation error
-		if token != "" {
-			targets := sqlguard.ExtractDDLTargetObjects(query)
-			var targetStr string
-			if len(targets) > 0 {
-				targetStr = targets[0].Schema + "." + targets[0].Name
-			}
-			opType := sqlguard.ExtractDestructiveOpType(query)
-			return nil, &ConfirmationRequiredError{
-				Token:     token,
-				Operation: opType,
-				Target:    targetStr,
-				ExpiresIn: "5 minutes",
-			}
-		}
-		// Other errors from checkDestructiveConfirmation are logged but don't block
-	} else if token != "" {
-		// Confirmation required
-		targets := sqlguard.ExtractDDLTargetObjects(query)
-		var targetStr string
-		if len(targets) > 0 {
-			targetStr = targets[0].Schema + "." + targets[0].Name
-		}
-		opType := sqlguard.ExtractDestructiveOpType(query)
-		return nil, &ConfirmationRequiredError{
-			Token:     token,
-			Operation: opType,
-			Target:    targetStr,
-			ExpiresIn: "5 minutes",
-		}
-	}
-
-	stmt, err := db.PrepareContext(ctx, query)
-	if err != nil {
-		if s.devMode {
-			s.secLogger.Printf("Failed to prepare statement: %v", err)
-			return nil, fmt.Errorf("query preparation failed: %v", err)
-		}
-		s.secLogger.Printf("Failed to prepare statement: query preparation error")
-		return nil, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
-	}
-	defer stmt.Close()
-
-	rows, err := stmt.QueryContext(ctx, args...)
-	if err != nil {
-		if s.devMode {
-			s.secLogger.Printf("Failed to execute query: %v", err)
-			return nil, fmt.Errorf("query execution failed: %v", err)
-		}
-		s.secLogger.Printf("Failed to execute query: execution error")
-		return nil, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
-	}
-	defer rows.Close()
-
-	colTypes, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, err
-	}
-	formatter := resultfmt.NewFormatter(colTypes)
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-
-	var results []map[string]interface{}
-	rowCount := 0
-	truncated := false
-	for rows.Next() {
-		if rowCount >= maxQueryRows {
-			truncated = true
-			break
-		}
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range columns {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, err
-		}
-
-		row := make(map[string]interface{})
-		for i, col := range columns {
-			formatted, _ := formatter.FormatValue(i, values[i])
-			row[col] = formatted
-		}
-		results = append(results, row)
-		rowCount++
-	}
-
-	if truncated {
-		results = append(results, map[string]interface{}{
-			"_truncated": fmt.Sprintf("Results limited to %d rows. Use WHERE or TOP to narrow the query.", maxQueryRows),
-		})
-	}
-
-	return results, nil
+	results, _, err := s.executeSecureQueryWithDB(ctx, s.getDB(), nil, query, args...)
+	return results, err
 }
 
 // executeSecureQueryWithDB is a wrapper that accepts an explicit db connection
@@ -892,20 +771,25 @@ func (s *MCPMSSQLServer) executeSecureQueryWithDB(ctx context.Context, db *sql.D
 
 		row := make(map[string]interface{})
 		for i, col := range columns {
-			formatted, _ := formatter.FormatValue(i, values[i])
-			row[col] = formatted
+			formatted, isNull := formatter.FormatValue(i, values[i])
+			if isNull {
+				// Map SQL NULL to JSON null instead of "" so the AI can
+				// distinguish NULL from a genuine empty string.
+				row[col] = nil
+			} else {
+				row[col] = formatted
+			}
 		}
 		results = append(results, row)
 		formatter.IncRow()
 		rowCount++
 	}
 
-	if truncated {
-		results = append(results, map[string]interface{}{
-			"_truncated": fmt.Sprintf("Results limited to %d rows. Use WHERE or TOP to narrow the query.", maxQueryRows),
-		})
-	}
-
+	// Truncation is now signalled exclusively via the returned Metadata
+	// (and the warning ContentItem in handleQueryDatabase). The previous
+	// sentinel row (`{"_truncated": "..."}` appended to results) broke the
+	// homogeneity of the array — every row had the same column schema except
+	// the last one — and forced any structured consumer to filter it out.
 	return results, formatter.BuildMetadata(truncated, maxQueryRows), nil
 }
 

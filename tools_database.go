@@ -383,29 +383,54 @@ func (s *MCPMSSQLServer) handleQueryDatabase(id interface{}, params CallToolPara
 		}
 	}
 
-	// Build result metadata for _meta field
+	// Build result metadata for _meta field. Only include null_counts when at
+	// least one column has a NULL — for clean datasets the array is otherwise
+	// just [0,0,0,...] and adds tokens with no information value.
 	metaMap := map[string]interface{}{
 		"rows_returned": meta.TotalRows,
 		"columns":       meta.ColumnCount,
 		"types":         meta.ColumnTypes,
-		"null_counts":   meta.NullCounts,
+	}
+	hasNulls := false
+	for _, n := range meta.NullCounts {
+		if n > 0 {
+			hasNulls = true
+			break
+		}
+	}
+	if hasNulls {
+		metaMap["null_counts"] = meta.NullCounts
 	}
 	if meta.Truncated {
 		metaMap["warning"] = fmt.Sprintf("Results truncated at %d rows. Use WHERE or TOP to narrow the query.", meta.TruncatedAt)
+	}
+
+	// Build content blocks. The data block is always present; when results are
+	// truncated, append a second text block with the warning so the AI sees it
+	// even if the client ignores Meta. (Previously this signal lived as a
+	// sentinel `_truncated` row inside the data array, which broke the row
+	// schema homogeneity — see executeSecureQueryWithDB for context.)
+	content := []ContentItem{
+		{
+			Type:        "text",
+			Text:        fmt.Sprintf("Query executed successfully. %d rows returned:\n%s", len(results), string(resultBytes)),
+			Annotations: annBothQuery,
+		},
+	}
+	if meta.Truncated {
+		content = append(content, ContentItem{
+			Type:        "text",
+			Text:        fmt.Sprintf("Results truncated at %d rows. Use WHERE or TOP to narrow the query.", meta.TruncatedAt),
+			Annotations: annBothQuery,
+		})
 	}
 
 	return &MCPResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result: CallToolResult{
-			Content: []ContentItem{
-				{
-					Type:        "text",
-					Text:        fmt.Sprintf("Query executed successfully. %d rows returned:\n%s", len(results), string(resultBytes)),
-					Annotations: annBothQuery,
-				},
-			},
-			Meta: metaMap,
+			Content: content,
+			Meta:    metaMap,
 		},
 	}
 }

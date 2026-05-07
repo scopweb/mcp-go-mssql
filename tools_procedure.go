@@ -152,7 +152,10 @@ func (s *MCPMSSQLServer) handleExecuteProcedure(id interface{}, params CallToolP
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	results, err := s.executeSecureQuery(ctx, queryBuilder.String(), args...)
+	// Use executeSecureQueryWithDB so we can surface a truncation warning to
+	// the AI when the procedure returns more than maxQueryRows. Going through
+	// the legacy executeSecureQuery wrapper would silently cap the result set.
+	results, meta, err := s.executeSecureQueryWithDB(ctx, s.getDB(), nil, queryBuilder.String(), args...)
 	if err != nil {
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -188,17 +191,26 @@ func (s *MCPMSSQLServer) handleExecuteProcedure(id interface{}, params CallToolP
 		}
 	}
 
+	content := []ContentItem{
+		{
+			Type:        "text",
+			Text:        fmt.Sprintf("Procedure '%s' executed successfully:\n%s", procName, string(resultBytes)),
+			Annotations: annBothProcedure,
+		},
+	}
+	if meta.Truncated {
+		content = append(content, ContentItem{
+			Type:        "text",
+			Text:        fmt.Sprintf("Results truncated at %d rows. Procedure produced more rows than the limit.", meta.TruncatedAt),
+			Annotations: annBothProcedure,
+		})
+	}
+
 	return &MCPResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result: CallToolResult{
-			Content: []ContentItem{
-				{
-					Type:        "text",
-					Text:        fmt.Sprintf("Procedure '%s' executed successfully:\n%s", procName, string(resultBytes)),
-					Annotations: annBothProcedure,
-				},
-			},
+			Content: content,
 		},
 	}
 }
