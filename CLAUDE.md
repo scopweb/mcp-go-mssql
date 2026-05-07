@@ -150,9 +150,11 @@ The server reads database connection from these environment variables. See `.env
   - Independent flag — effective skip is `AUTOPILOT OR SKIP_SCHEMA_VALIDATION`
   - Useful when you want to disable schema checks without enabling other AUTOPILOT semantics (currently AUTOPILOT only governs schema validation, but this flag stays decoupled in case AUTOPILOT grows)
   - Does NOT skip whitelist protection or destructive operation confirmation
-- `MSSQL_MAX_ROWS`: Maximum rows returned per query (default: 100, max: 500)
-  - Reduces token consumption by truncating large result sets
-  - Configurable balance between data completeness and token savings
+- `MSSQL_MAX_ROWS`: Maximum rows returned per query (default: 100, no hard cap)
+  - Acts as a server-wide ceiling on every query, including stored procedures
+  - When a query exceeds the limit, the result is truncated and the AI sees a `Results truncated at N rows...` warning as a separate text block plus `_meta.warning` (see Result Format Contract below)
+  - To request fewer rows on a per-query basis the AI should add `TOP N` to the query (`SELECT TOP 50 * FROM ...`) — there is no `limit` argument on `query_database`
+  - To allow more rows globally, raise this env var. There is no AI-side override on purpose (security-first)
 - `MSSQL_DYNAMIC_MODE`: Enable dynamic multi-database connections (default: false)
   - `"true"`: Enables runtime database connections via `dynamic_connect` tool
   - Allows connecting to multiple databases from a single MCP server instance
@@ -352,6 +354,52 @@ MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia,mi_vista
     - SQL injection via JOIN/subquery to non-whitelisted tables
     - Unauthorized data exfiltration through INSERT...SELECT
   - **Recommended setup**: Create dedicated temp tables for AI operations
+
+## Result Format Contract
+
+The server formats every column value before returning it through `query_database`, `execute_procedure`, etc. The AI consumer can rely on the following representation rather than guessing at the raw driver output. Implementation lives in `internal/resultfmt/formatter.go`.
+
+### Type representations
+
+| SQL Server type                              | JSON output                                              | Notes                                                                                  |
+|----------------------------------------------|----------------------------------------------------------|----------------------------------------------------------------------------------------|
+| `DATETIME`, `DATETIME2(N)`, `DATETIMEOFFSET` | `"2026-05-07T12:00:00.000Z"`                             | ISO 8601, always UTC. `DATETIMEOFFSET` original offset is normalized to UTC.           |
+| `SMALLDATETIME`                              | `"2026-05-07T12:00:00Z"`                                 | Minute precision (no fractional seconds).                                              |
+| `DATE`                                       | `"2026-05-07"`                                           |                                                                                        |
+| `TIME(N)`                                    | `"12:00:00.000Z"`                                        |                                                                                        |
+| `BIT`                                        | `true` / `false`                                         | JSON boolean, not 0/1.                                                                 |
+| `UNIQUEIDENTIFIER`                           | `"550e8400-e29b-41d4-a716-446655440000"`                 | Lowercase, RFC 4122 byte order (SQL Server wire byte reorder is applied).              |
+| `DECIMAL(p,s)`, `NUMERIC`, `MONEY`           | `"1234.56"` (string)                                     | Never scientific notation. Keep as string to preserve precision beyond float64.        |
+| `FLOAT`, `REAL`                              | number                                                   | Native JSON number; precision may use exponent if huge.                                |
+| `INT`, `BIGINT`, `SMALLINT`, `TINYINT`       | number                                                   |                                                                                        |
+| `VARBINARY`, `BINARY(N)`, `IMAGE`, `TIMESTAMP` | `"0x000123abc..."`                                     | Lowercase hex, ALL bytes preserved (including leading zeros).                          |
+| `XML`                                        | string passthrough                                       | The server does not pretty-print XML.                                                  |
+| `VARCHAR`, `NVARCHAR`, `CHAR(N)`, `TEXT`     | string passthrough                                       | **No trim** — `CHAR(N)` padding and intentional whitespace are preserved.              |
+| `SQL_VARIANT`, `HIERARCHYID`, `GEOGRAPHY`    | best-effort: `[]byte` → string                           | Falls through to a generic conversion; treat as opaque.                                |
+
+Type names with parentheses (`DECIMAL(10,2)`, `VARCHAR(255)`, `BINARY(8)`, `NVARCHAR(MAX)`, `DATETIME2(7)`, etc.) are normalized to their base type before formatting, so all parameterized variants behave the same as the base.
+
+### NULL
+
+SQL `NULL` serializes as JSON `null`, NOT as `""`. A genuine empty-string column value remains `""`. The AI should always check for `null` rather than empty string when looking for missing data.
+
+### `_meta` block in `query_database`
+
+Every successful `query_database` response carries a `_meta` map alongside the data:
+
+- `rows_returned` — int, count of rows actually returned (after the cap).
+- `columns` — int, column count.
+- `types` — array of base SQL Server type names in column order.
+- `null_counts` — array of int per column. **Omitted** when every column has 0 nulls (saves tokens on clean datasets).
+- `warning` — present only when truncated. Reads `Results truncated at N rows. Use WHERE or TOP to narrow the query.`
+
+When `warning` is present, the same message also appears as a second `text` ContentItem in the response so it is visible to AI clients that ignore `Meta`.
+
+### Truncation behavior
+
+- Every query is capped at `MSSQL_MAX_ROWS` rows (default 100). The cap applies to `query_database`, `execute_procedure`, and any internal validation queries.
+- When the cap kicks in, the AI receives the first N rows as a clean array (no sentinel row injected) plus the warning described above.
+- To bound a query without changing the server cap, add `TOP N` to the SQL: `SELECT TOP 50 * FROM ...`. The cap still applies as a safety ceiling.
 
 ## Security Best Practices
 
