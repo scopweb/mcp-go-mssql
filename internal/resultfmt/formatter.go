@@ -2,13 +2,14 @@ package resultfmt
 
 import (
 	"database/sql"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/google/uuid"
+	mssql "github.com/microsoft/go-mssqldb"
 )
 
 // Formatter converts SQL Server column values to AI-friendly representations.
@@ -51,25 +52,32 @@ func (f *Formatter) FormatValue(colIdx int, raw interface{}) (value interface{},
 	}
 
 	typeName := f.columnTypes[colIdx]
+	// DatabaseTypeName() returns the declared form, including any size/precision
+	// parameters: e.g. "DECIMAL(10,2)", "VARCHAR(255)", "BINARY(8)", "NVARCHAR(MAX)".
+	// Strip "(...)" so all DECIMAL(p,s), VARCHAR(N), BINARY(N), DATETIME2(N), etc.
+	// route to their base-type formatter instead of falling through to default.
+	if i := strings.IndexByte(typeName, '('); i > 0 {
+		typeName = typeName[:i]
+	}
 
 	switch typeName {
-	case "DATETIME", "DATETIME2", "DATETIME2(7)", "DATETIMEOFFSET":
+	case "DATETIME", "DATETIME2", "DATETIMEOFFSET":
 		return formatDateTime(raw)
 	case "SMALLDATETIME":
 		return formatSmallDateTime(raw)
 	case "DATE":
 		return formatDate(raw)
-	case "TIME", "TIME(7)", "TIME(0)":
+	case "TIME":
 		return formatTime(raw)
 	case "BIT", "BIT VARYING":
 		return formatBit(raw)
 	case "UNIQUEIDENTIFIER":
 		return formatGUID(raw)
-	case "DECIMAL", "NUMERIC", "DECIMAL(18,0)", "NUMERIC(18,0)", "MONEY", "SMALLMONEY", "DECIMAL(19,4)":
+	case "DECIMAL", "NUMERIC", "MONEY", "SMALLMONEY":
 		return formatDecimal(raw)
-	case "FLOAT", "REAL", "FLOAT(53)":
+	case "FLOAT", "REAL":
 		return formatFloat(raw)
-	case "VARBINARY", "BINARY", "IMAGE", "VARBINARY(MAX)", "BINARY(16)", "TIMESTAMP":
+	case "VARBINARY", "BINARY", "IMAGE", "TIMESTAMP":
 		return formatBinary(raw)
 	case "XML":
 		return formatXML(raw)
@@ -153,8 +161,14 @@ func FormatResult(colTypes []*sql.ColumnType, rows *sql.Rows, maxRows int) ([]ma
 
 		row := make(map[string]interface{})
 		for i := range columns {
-			formatted, _ := f.FormatValue(i, values[i])
-			row[columns[i]] = formatted
+			formatted, isNull := f.FormatValue(i, values[i])
+			if isNull {
+				// Map SQL NULL to JSON null instead of "" so the AI can
+				// distinguish NULL from a genuine empty string.
+				row[columns[i]] = nil
+			} else {
+				row[columns[i]] = formatted
+			}
 		}
 
 		results = append(results, row)
@@ -162,25 +176,10 @@ func FormatResult(colTypes []*sql.ColumnType, rows *sql.Rows, maxRows int) ([]ma
 		rowCount++
 	}
 
-	if truncated {
-		results = append(results, map[string]interface{}{
-			"_truncated": fmt.Sprintf("Results limited to %d rows. Use WHERE or TOP to narrow the query.", maxRows),
-		})
-	}
-
+	// Truncation is signalled via the returned Metadata only. The previous
+	// sentinel row injection has been removed — see executeSecureQueryWithDB
+	// in main.go for the rationale.
 	return results, f.BuildMetadata(truncated, maxRows), nil
-}
-
-// ToJSON serialises a result set with its metadata in a single JSON document.
-// The _meta key is appended so downstream MCP handlers can include it in
-// CallToolResult.Meta without re-serialising.
-func ToJSON(rows []map[string]interface{}, meta Metadata) ([]byte, error) {
-	doc := map[string]interface{}{
-		"_data":  rows,
-		"_meta":  meta,
-		"_types": meta.ColumnTypes,
-	}
-	return json.MarshalIndent(doc, "", "  ")
 }
 
 // ── Type-specific formatters ─────────────────────────────────────────────────
@@ -283,11 +282,24 @@ func formatGUID(raw interface{}) (interface{}, bool) {
 		return "", true
 	}
 	switch v := raw.(type) {
+	case mssql.UniqueIdentifier:
+		// Canonical path: the driver stores already-reordered bytes in this
+		// type (the SQL Server -> RFC 4122 reorder is applied inside Scan()).
+		// String() prints them as-is. Lowercase for consistency with uuid.UUID.
+		return strings.ToLower(v.String()), false
 	case uuid.UUID:
 		return v.String(), false
 	case []byte:
+		// Defensive path: if a uniqueidentifier ever arrives as a raw 16-byte
+		// slice (without going through the driver's typed path), the bytes are
+		// in SQL Server wire order and need reordering. Scan() does that.
+		// Previous implementations used uuid.UUID(v).String() (no reorder) or
+		// copy() into mssql.UniqueIdentifier (also no reorder) — both wrong.
 		if len(v) == 16 {
-			return uuid.UUID(v).String(), false
+			var u mssql.UniqueIdentifier
+			if err := u.Scan(v); err == nil {
+				return strings.ToLower(u.String()), false
+			}
 		}
 		return string(v), false
 	case string:
@@ -305,20 +317,25 @@ func formatDecimal(raw interface{}) (interface{}, bool) {
 	}
 	switch v := raw.(type) {
 	case float64:
-		// Suppress scientific notation for large numbers — SQL Server decimal
-		// values that fit in an int64 should not appear as 1.23E+15.
-		if v == float64(int64(v)) {
-			return fmt.Sprintf("%.0f", v), false
-		}
-		return fmt.Sprintf("%v", v), false
+		// strconv.FormatFloat with precision -1 emits the minimum digits
+		// required to represent v exactly, never using scientific notation.
+		// This covers both integer-valued floats (1e15 -> "1000000000000000")
+		// and fractional ones (0.1 -> "0.1") with a single rule.
+		//
+		// CAVEAT: SQL Server DECIMAL(p,s) values larger than 2^53 lose
+		// precision when transported as float64. The driver normally returns
+		// these as []byte to avoid that, so this branch should be rare; for
+		// the rare cases it triggers, accuracy is already lost upstream and
+		// we cannot recover it here.
+		return strconv.FormatFloat(v, 'f', -1, 64), false
 	case []byte:
 		return strings.TrimSpace(string(v)), false
 	case string:
 		return strings.TrimSpace(v), false
 	case int64:
-		return fmt.Sprintf("%d", v), false
+		return strconv.FormatInt(v, 10), false
 	case int:
-		return fmt.Sprintf("%d", v), false
+		return strconv.Itoa(v), false
 	}
 	return raw, raw == nil
 }
@@ -345,9 +362,14 @@ func formatBinary(raw interface{}) (interface{}, bool) {
 	}
 	switch v := raw.(type) {
 	case []byte:
-		return "0x" + strings.TrimLeft(fmt.Sprintf("%x", v), "0"), false
+		// hex.EncodeToString preserves all bytes including leading zeros.
+		// Previous implementation used strings.TrimLeft(_, "0") which corrupted
+		// fixed-width BINARY(N) values like 0x000123 -> 0x123.
+		return "0x" + hex.EncodeToString(v), false
 	case string:
-		return strings.TrimPrefix(strings.TrimSpace(v), "0x"), false
+		// Driver returns binary as []byte; the string path is unusual
+		// (e.g. CONVERT(varchar, ...) in dynamic SQL). Pass through unchanged.
+		return v, false
 	}
 	return raw, raw == nil
 }
@@ -356,26 +378,15 @@ func formatXML(raw interface{}) (interface{}, bool) {
 	if raw == nil {
 		return "", true
 	}
+	// XML values pass through unchanged. The previous implementation tried
+	// json.Unmarshal on the XML payload (which never succeeds for XML) and
+	// silently fell back to the raw string anyway — pure dead code. Real XML
+	// pretty-printing would need encoding/xml decoder/encoder round-tripping,
+	// which is out of scope here. The AI client can format if it wants to.
 	switch v := raw.(type) {
 	case []byte:
-		// Basic indent: collapse spaces/newlines then re-indent via json.
-		// Proper XML indent would require an XML library; this reduces bloat.
-		collapsed := collapseSpaces(string(v))
-		var any interface{}
-		if err := json.Unmarshal([]byte(collapsed), &any); err == nil {
-			if indented, err := json.MarshalIndent(any, "", "  "); err == nil {
-				return string(indented), false
-			}
-		}
 		return string(v), false
 	case string:
-		collapsed := collapseSpaces(v)
-		var any interface{}
-		if err := json.Unmarshal([]byte(collapsed), &any); err == nil {
-			if indented, err := json.MarshalIndent(any, "", "  "); err == nil {
-				return string(indented), false
-			}
-		}
 		return v, false
 	}
 	return raw, raw == nil
@@ -385,11 +396,16 @@ func formatString(raw interface{}) (interface{}, bool) {
 	if raw == nil {
 		return "", true
 	}
+	// IMPORTANT: do NOT TrimSpace here. CHAR(N)/NCHAR(N) columns are space-padded
+	// by SQL Server but the padding can be indistinguishable from intentional
+	// trailing spaces in user data, especially with ANSI_PADDING ON. Preserving
+	// raw values matches the previous behavior of executeSecureQuery before the
+	// resultfmt rewrite and avoids silently mutating identifiers/codes.
 	switch v := raw.(type) {
 	case []byte:
-		return strings.TrimSpace(string(v)), false
+		return string(v), false
 	case string:
-		return strings.TrimSpace(v), false
+		return v, false
 	}
 	return raw, raw == nil
 }
@@ -411,21 +427,3 @@ func formatInt(raw interface{}) (interface{}, bool) {
 	return raw, raw == nil
 }
 
-// collapseSpaces collapses runs of whitespace in s to a single space.
-// Used to compact JSON-like XML before re-formatting.
-func collapseSpaces(s string) string {
-	var out []rune
-	var prevSpace bool
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			if !prevSpace {
-				out = append(out, ' ')
-				prevSpace = true
-			}
-		} else {
-			out = append(out, r)
-			prevSpace = false
-		}
-	}
-	return string(out)
-}
