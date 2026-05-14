@@ -13,6 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔁 **Effective skip rule**: schema validation is now skipped if `AUTOPILOT=true` **OR** `SKIP_SCHEMA_VALIDATION=true`. Existing `AUTOPILOT=true` configs keep working identically — no breakage.
 - 📝 **Doc fixes**: `CLAUDE.md` and `docs/config-visual.md` previously claimed `AUTOPILOT` skipped destructive confirmation. The code does the opposite (`AUTOPILOT does NOT skip destructive confirmation`). Docs now reflect the actual code behavior.
 
+### Configuration — Per-Connection TLS Override for Legacy SQL Servers
+
+- 🆕 **`MSSQL_DYNAMIC_<ALIAS>_ENCRYPT`**: Each dynamic connection can now override the default TLS/encryption behavior individually. Required for SQL Server 2008/2012 instances that only support TLS 1.0 and reject TLS 1.2 handshakes from modern Go clients.
+- Values: `true` (force TLS), `false` (TLS but skip cert validation), `disable` (no TLS at all)
+- Priority: per-connection env var > `DEVELOPER_MODE` > default (`true`)
+- Example for legacy GDP server:
+  ```
+  MSSQL_DYNAMIC_GDP_SERVER=server-gdp
+  MSSQL_DYNAMIC_GDP_DATABASE=GDP_DB
+  MSSQL_DYNAMIC_GDP_AUTH=integrated
+  MSSQL_DYNAMIC_GDP_ENCRYPT=disable
+  ```
+
+### Dependencies — Updated
+
+- 📦 **`github.com/microsoft/go-mssqldb` v1.9.8 → v1.10.0** (bugfixes)
+- 📦 **`golang.org/x/mod` v0.35.0 → v0.36.0**
+- 📦 **`golang.org/x/crypto` v0.50.0 → v0.51.0**
+- 📦 **`golang.org/x/net` v0.52.0 → v0.54.0**
+- 📦 **`golang.org/x/text` v0.36.0 → v0.37.0**
+
 ### Cleanup — Connector and tool duplications removed
 
 - 🧹 **Deleted `pkg/connector/`**: was a stale fork of `claude-code/db-connector.go` (still contained the literal `// (rest of functions copied from original claude-code/db-connector.go)` marker). The canonical version in `claude-code/` had a small UX improvement (`(default/all available)` label for empty database) that `pkg/connector/` lacked. Nothing functional lost.
@@ -55,9 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 
 - 📦 **Go 1.26.2** (released 2026-04-07): Security release fixing 4 stdlib vulnerabilities in `crypto/x509` and `crypto/tls`. Update via `go install golang.org/dl/go1.26.2@latest && go1.26.2 download`
-- 📦 **Updated**: `golang.org/x/crypto` v0.49.0 → **v0.50.0**
-- 📦 **Updated**: `golang.org/x/mod` v0.34.0 → **v0.35.0**
-- 📦 **Updated**: `golang.org/x/text` v0.35.0 → **v0.36.0**
+- 📦 **Updated**: `golang.org/x/crypto` v0.49.0 → **v0.51.0**
+- 📦 **Updated**: `golang.org/x/mod` v0.34.0 → **v0.36.0**
+- 📦 **Updated**: `golang.org/x/net` v0.52.0 → **v0.54.0**
+- 📦 **Updated**: `golang.org/x/text` v0.35.0 → **v0.37.0**
 
 ### Tests
 

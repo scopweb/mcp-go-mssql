@@ -129,7 +129,8 @@ Cada conexión dinámica puede tener su propia configuración de seguridad:
 |----------|-------------|
 | `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY` | `true` = solo lectura |
 | `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` | Tablas permitidas para modificación |
-| `MSSQL_DYNAMIC_<ALIAS>_AUTOPILOT` | `true` =跳过 validación de schema |
+| `MSSQL_DYNAMIC_<ALIAS>_AUTOPILOT` | `true` = saltarse validación de schema |
+| `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` | `true`/`false`/`disable` = override TLS (SQL 2008/2012 legacy) |
 
 ### Herramientas disponibles
 

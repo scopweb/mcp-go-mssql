@@ -29,6 +29,7 @@ MSSQL_DYNAMIC_IDENTITY_PASSWORD=ppppp
 - `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY`
 - `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES`
 - `MSSQL_DYNAMIC_<ALIAS>_AUTOPILOT`
+- `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` — `true`/`false`/`disable` (override TLS para SQL Server 2008/2012 legacy)
 
 **En Claude Desktop** solo necesitas:
 ```json

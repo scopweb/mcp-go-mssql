@@ -162,7 +162,8 @@ The server reads database connection from these environment variables. See `.env
   - In `query_database`, use parameter `connection=<alias>` to query a specific dynamic connection
   - If not specified, queries use the default database connection from environment variables
   - `MSSQL_DYNAMIC_MAX_CONNECTIONS`: Maximum number of dynamic connections (default: 10)
-  - **Dual-mode architecture**: If `MSSQL_SERVER` is set (from Claude Desktop JSON config), the server works in direct mode without loading `.env` or registering dynamic tools. If `MSSQL_SERVER` is not set, it loads `.env` and enables dynamic tools if `MSSQL_DYNAMIC_MODE=true`
+- `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT`: Per-connection TLS encryption override. Values: `true` (force TLS), `false` (TLS skip cert validation), `disable` (no TLS — for legacy SQL Server 2008/2012). Default: follows `DEVELOPER_MODE` (false in dev mode, true otherwise)
+- **Dual-mode architecture**: If `MSSQL_SERVER` is set (from Claude Desktop JSON config), the server works in direct mode without loading `.env` or registering dynamic tools. If `MSSQL_SERVER` is not set, it loads `.env` and enables dynamic tools if `MSSQL_DYNAMIC_MODE=true`
 
 **Configuration Examples:**
 ```bash
