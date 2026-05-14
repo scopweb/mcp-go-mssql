@@ -88,12 +88,19 @@ func (s *MCPMSSQLServer) handleDynamicConnect(id interface{}, params CallToolPar
 		}
 	}
 
+	// Encryption: per-connection override > devMode > default
+	// "disable" = skip TLS entirely (legacy SQL Server 2008/2012 without TLS 1.2)
 	encrypt := "true"
-	if s.devMode {
-		encrypt = "false"
-	}
 	trustCert := "false"
-	if s.devMode {
+	dynEncrypt := os.Getenv(prefix + "ENCRYPT")
+	if dynEncrypt != "" {
+		encrypt = strings.ToLower(dynEncrypt)
+	} else if s.devMode {
+		encrypt = "false"
+		trustCert = "true"
+	}
+	// "disable" means no TLS at all; "false" means TLS but skip cert validation
+	if dynEncrypt == "disable" {
 		trustCert = "true"
 	}
 
