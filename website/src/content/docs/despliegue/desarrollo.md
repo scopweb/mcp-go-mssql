@@ -12,7 +12,7 @@ description: Configuración del entorno de desarrollo para MCP-Go-MSSQL
 ## Configuración inicial
 
 ```bash
-git clone https://github.com/DavidSerrano-Rodriguez/mcp-go-mssql.git
+git clone https://github.com/scopweb/mcp-go-mssql.git
 cd mcp-go-mssql
 go mod tidy
 ```

@@ -12,7 +12,7 @@ description: How to install MCP-Go-MSSQL
 ## Clone the repository
 
 ```bash
-git clone https://github.com/DavidSerrano-Rodriguez/mcp-go-mssql.git
+git clone https://github.com/scopweb/mcp-go-mssql.git
 cd mcp-go-mssql
 ```
 
