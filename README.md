@@ -10,7 +10,7 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
 - ✅ **Temporal workspace** - Optional whitelist for AI to use temporary tables
 - ✅ **Smart restrictions** - Blocks dangerous operations while keeping AI fully functional
 
-**👉 See [AI Usage Guide](docs/AI_USAGE_GUIDE.md) for detailed examples of what Claude can and cannot do.**
+**👉 See the project website for [AI Usage Guide](https://scopweb.github.io/mcp-go-mssql/guias/uso-con-ia/) and examples of what Claude can and cannot do.**
 
 ## Features
 
@@ -160,7 +160,7 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
 }
 ```
 
-> ℹ️ **Windows Auth Note:** Uses current Windows user credentials automatically (no passwords needed). `MSSQL_SERVER="."` for local server, `"localhost"`, or server hostname for remote servers. `MSSQL_DATABASE` is optional - if omitted, connects to user's default database. Works with Active Directory and local Windows accounts. See [Windows Authentication Guide](docs/WINDOWS_AUTH_GUIDE.md) for detailed setup and troubleshooting.
+> ℹ️ **Windows Auth Note:** Uses current Windows user credentials automatically (no passwords needed). `MSSQL_SERVER="."` for local server, `"localhost"`, or server hostname for remote servers. `MSSQL_DATABASE` is optional - if omitted, connects to user's default database. Works with Active Directory and local Windows accounts. See the project website for [Windows Authentication Guide](https://scopweb.github.io/mcp-go-mssql/configuracion/autenticacion-windows/).
 
 **Legacy SQL Server (Custom Connection String):**
 ```json
@@ -208,7 +208,7 @@ All database connections use environment variables for security. See `.env.examp
   - Example: `"temp_ai,v_temp_ia"`
   - Enables AI to modify specific tables while protecting production data
   - Validates ALL tables in queries (including JOINs, subqueries, CTEs)
-  - See [WHITELIST_SECURITY.md](docs/WHITELIST_SECURITY.md) for details
+  - See the project website for [Whitelist Security](https://scopweb.github.io/mcp-go-mssql/seguridad/whitelist-tablas/) for details
 - `DEVELOPER_MODE`:
   - `"true"`: Development mode (detailed errors, allows self-signed certificates, disables encryption by default)
   - `"false"`: Production mode (generic errors, strict certificate validation, forces encryption)
@@ -420,19 +420,19 @@ See [claude-code/README.md](claude-code/README.md) for detailed Claude Code inte
 
 ## 📚 Documentation
 
-### For Users
-- **[AI Usage Guide](docs/AI_USAGE_GUIDE.md)** - How Claude/AI works with security restrictions
-- **[Windows Authentication Guide](docs/WINDOWS_AUTH_GUIDE.md)** - Setup and troubleshooting for Windows Integrated Auth (SSPI)
-- **[Whitelist Security](docs/WHITELIST_SECURITY.md)** - Configure granular table permissions
-- **[README (this file)](README.md)** - Installation and configuration
+All documentation is on the [project website](https://scopweb.github.io/mcp-go-mssql/).
 
-### For Security Audits
-- **[Security Analysis](docs/SECURITY_ANALYSIS.md)** - Comprehensive security assessment
-- **[Security Audit Report](docs/SECURITY_AUDIT_REPORT.md)** - Detailed audit findings
+### For Users
+- **[AI Usage Guide](https://scopweb.github.io/mcp-go-mssql/guias/uso-con-ia/)** - How Claude/AI works with security restrictions
+- **[Windows Authentication Guide](https://scopweb.github.io/mcp-go-mssql/configuracion/autenticacion-windows/)** - Setup and troubleshooting for Windows Integrated Auth (SSPI)
+- **[Whitelist Security](https://scopweb.github.io/mcp-go-mssql/seguridad/whitelist-tablas/)** - Configure granular table permissions
 
 ### For Developers
-- **[Claude Code Documentation](CLAUDE.md)** - Using with Claude Code
-- **[Test Results](docs/TEST_RESULTS_SUMMARY.md)** - Test coverage and results
+- **[CLAUDE.md](CLAUDE.md)** - Project documentation for Claude Code
+
+### For Security
+- **[Security Audit](https://scopweb.github.io/mcp-go-mssql/seguridad/auditoria/)** - Security assessment and findings
+- **[SECURITY.md](SECURITY.md)** - Security policy and vulnerability reporting
 
 ## Project Structure
 
@@ -440,26 +440,15 @@ See [claude-code/README.md](claude-code/README.md) for detailed Claude Code inte
 mcp-go-mssql/
 ├── main.go                          # MCP server for Claude Desktop
 ├── build.bat                        # Windows build script
-├── docs/                            # Documentation
-│   ├── AI_USAGE_GUIDE.md           # How to use with Claude/AI ⭐
-│   ├── SECURITY_ANALYSIS.md        # Security assessment
-│   ├── SECURITY_AUDIT_REPORT.md    # Audit report
-│   ├── SECURITY_SUMMARY.md         # Security summary
-│   ├── UPDATE_GO.md                # Go version upgrade guide
-│   ├── WHITELIST_SECURITY.md       # Table whitelist guide
-│   └── ...                         # Other documentation
-├── scripts/                         # Utility scripts
-│   ├── security-check.ps1          # Automated security validation
-│   ├── test-mcp-server.ps1         # Server testing
-│   └── ...                         # Other scripts
+├── cli/                             # CLI database tool
+│   ├── db-connector.go             # CLI database tool
+│   └── README.md                   # CLI documentation
+├── internal/                        # Internal packages
 ├── test/                            # Tests
 │   ├── security/                   # Security test suite
-│   │   ├── cves_test.go           # CVE checks
-│   │   └── security_tests.go       # Security validation
 │   └── test-connection.go          # Connection testing
-├── claude-code/                     # Claude Code integration
-│   ├── db-connector.go             # CLI database tool
-│   └── README.md                   # Claude Code documentation
+├── website/                         # Starlight documentation site
+├── scripts/                         # Utility scripts
 ├── .env.example                    # Environment variables template
 ├── config.example.json             # Claude Desktop config template
 ├── CLAUDE.md                       # Claude Code project documentation
