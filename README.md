@@ -2,16 +2,6 @@
 
 A secure Go-based solution for Microsoft SQL Server connectivity supporting both **Claude Desktop** (via MCP server) and **Claude Code** (via CLI tools).
 
-## 🤖 Designed for AI Assistants
-
-This server is **optimized for use with Claude Desktop and AI assistants**, providing:
-- ✅ **Safe production access** - AI can analyze without risk of data corruption
-- ✅ **Full query capabilities** - AI can perform complex SELECT queries, JOINs, CTEs
-- ✅ **Temporal workspace** - Optional whitelist for AI to use temporary tables
-- ✅ **Smart restrictions** - Blocks dangerous operations while keeping AI fully functional
-
-**👉 See the project website for [AI Usage Guide](https://scopweb.github.io/mcp-go-mssql/guias/uso-con-ia/) and examples of what Claude can and cannot do.**
-
 ## Features
 
 - **Security-first design** with configurable TLS encryption for database connections
@@ -160,7 +150,7 @@ This server is **optimized for use with Claude Desktop and AI assistants**, prov
 }
 ```
 
-> ℹ️ **Windows Auth Note:** Uses current Windows user credentials automatically (no passwords needed). `MSSQL_SERVER="."` for local server, `"localhost"`, or server hostname for remote servers. `MSSQL_DATABASE` is optional - if omitted, connects to user's default database. Works with Active Directory and local Windows accounts. See the project website for [Windows Authentication Guide](https://scopweb.github.io/mcp-go-mssql/configuracion/autenticacion-windows/).
+> ℹ️ **Windows Auth Note:** Uses current Windows user credentials automatically (no passwords needed). `MSSQL_SERVER="."` for local server, `"localhost"`, or server hostname for remote servers. `MSSQL_DATABASE` is optional - if omitted, connects to user's default database. Works with Active Directory and local Windows accounts. See the project website for [Windows Authentication Guide](https://mcp-go-mssql.scopweb.com/configuracion/autenticacion-windows/).
 
 **Legacy SQL Server (Custom Connection String):**
 ```json
@@ -208,7 +198,7 @@ All database connections use environment variables for security. See `.env.examp
   - Example: `"temp_ai,v_temp_ia"`
   - Enables AI to modify specific tables while protecting production data
   - Validates ALL tables in queries (including JOINs, subqueries, CTEs)
-  - See the project website for [Whitelist Security](https://scopweb.github.io/mcp-go-mssql/seguridad/whitelist-tablas/) for details
+  - See the project website for [Whitelist Security](https://mcp-go-mssql.scopweb.com/seguridad/whitelist-tablas/) for details
 - `DEVELOPER_MODE`:
   - `"true"`: Development mode (detailed errors, allows self-signed certificates, disables encryption by default)
   - `"false"`: Production mode (generic errors, strict certificate validation, forces encryption)
@@ -420,18 +410,18 @@ See [claude-code/README.md](claude-code/README.md) for detailed Claude Code inte
 
 ## 📚 Documentation
 
-All documentation is on the [project website](https://scopweb.github.io/mcp-go-mssql/).
+All documentation is on the [project website](https://mcp-go-mssql.scopweb.com/).
 
 ### For Users
-- **[AI Usage Guide](https://scopweb.github.io/mcp-go-mssql/guias/uso-con-ia/)** - How Claude/AI works with security restrictions
-- **[Windows Authentication Guide](https://scopweb.github.io/mcp-go-mssql/configuracion/autenticacion-windows/)** - Setup and troubleshooting for Windows Integrated Auth (SSPI)
-- **[Whitelist Security](https://scopweb.github.io/mcp-go-mssql/seguridad/whitelist-tablas/)** - Configure granular table permissions
+- **[AI Usage Guide](https://mcp-go-mssql.scopweb.com/guias/uso-con-ia/)** - How Claude/AI works with security restrictions
+- **[Windows Authentication Guide](https://mcp-go-mssql.scopweb.com/configuracion/autenticacion-windows/)** - Setup and troubleshooting for Windows Integrated Auth (SSPI)
+- **[Whitelist Security](https://mcp-go-mssql.scopweb.com/seguridad/whitelist-tablas/)** - Configure granular table permissions
 
 ### For Developers
 - **[CLAUDE.md](CLAUDE.md)** - Project documentation for Claude Code
 
 ### For Security
-- **[Security Audit](https://scopweb.github.io/mcp-go-mssql/seguridad/auditoria/)** - Security assessment and findings
+- **[Security Audit](https://mcp-go-mssql.scopweb.com/seguridad/auditoria/)** - Security assessment and findings
 - **[SECURITY.md](SECURITY.md)** - Security policy and vulnerability reporting
 
 ## Project Structure
