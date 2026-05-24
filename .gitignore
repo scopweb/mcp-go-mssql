@@ -110,12 +110,13 @@ Desktop.ini
 test-windows-auth-*.ps1
 final-test-windows-auth.ps1
 
-# Test executables
+# Test executables y backups
 test/*.exe
+tags-releases-backup/
 
 # =============================================================================
 # WEBSITE (Astro Starlight)
 # =============================================================================
 website/node_modules/
 website/dist/
-website/.astro/
+website/.astro/.env.private
