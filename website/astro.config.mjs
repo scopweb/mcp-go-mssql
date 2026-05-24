@@ -22,7 +22,7 @@ export default defineConfig({
 				Head: './src/components/Head.astro',
 			},
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/DavidSerrano-Rodriguez/mcp-go-mssql' },
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/scopweb/mcp-go-mssql' },
 			],
 			defaultLocale: 'root',
 			locales: {
