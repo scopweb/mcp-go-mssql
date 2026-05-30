@@ -176,7 +176,6 @@ Aunque pongas `READ_ONLY=false`, el usuario de base de datos debe tener permisos
 | Usar `WHITELIST_TABLES` en escritura  | Siempre              | Limita el radio de explosión |
 | Usuario de BD por tipo de alias       | Diferente            | `app_ai_read` vs `app_ai_writer` |
 | Exponer todas las bases de la empresa | Nunca                | Define solo lo de esta aplicación |
-| `AUTOPILOT=true`                      | Evitar               | Especialmente en aliases con escritura |
 
 ---
 

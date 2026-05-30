@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **AUTOPILOT concept completely removed**: The `AUTOPILOT` / `MSSQL_AUTOPILOT` idea (never fully implemented) has been fully excised from the codebase and all documentation. The name had become misleading over time and generated conflicting guidance. All references (code stub, examples, and recommendations) have been cleaned up.
+
+### Changed
+- **Read-only mode: controlled support for safe administrative/schema introspection**:
+  - Added narrow, explicit allow-list for common read-only system procedures used in schema discovery (`EXEC sp_help`, `sp_helptext`, `sp_spaceused`, `sp_columns`, `sp_fkeys`, etc.).
+  - These can now be called directly via `query_database` (or raw SQL) when `READ_ONLY=true`, improving the experience for legitimate administrative and schema exploration tasks.
+  - The general `EXEC` / `EXECUTE` keyword remains dangerous and blocked for everything else. Dangerous procedures (`xp_cmdshell`, `sp_executesql`, `sp_configure`, etc.) stay explicitly forbidden.
+  - This is a deliberate, minimal, and auditable relaxation that addresses real schema-discovery friction without weakening the overall security posture.
+  - New unit tests + fuzz coverage added for the new paths. All existing security properties preserved.
+
+### Documentation
+- Updated "Modo solo lectura" / "Read-only mode" guides (ES + EN) with clear examples of allowed administrative procedures and explicit warnings about what remains blocked.
+- Removed all outdated `AUTOPILOT=true` examples and recommendations from dynamic connections guides and FAQ.
+- FAQ de conexiones dinámicas now has a clean `.env` example without any AUTOPILOT references.
+
 ### Security
 
 - 🛡️ **Critical fix: Dynamic multi-connection mode + global READ_ONLY=false exposure** (high-severity):

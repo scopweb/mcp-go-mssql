@@ -176,7 +176,6 @@ Even if you set `READ_ONLY=false`, the database user should only have permission
 | Use `WHITELIST_TABLES` when writing        | Always          | Limits blast radius |
 | Different DB user per alias type           | Yes             | `app_ai_read` vs `app_ai_writer` |
 | Expose all company databases               | Never           | Only define aliases for this application |
-| `AUTOPILOT=true`                           | Avoid           | Especially on aliases with write access |
 
 ---
 

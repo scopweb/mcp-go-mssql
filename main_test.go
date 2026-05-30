@@ -551,6 +551,48 @@ func TestReadOnlyValidation(t *testing.T) {
 			query:   "SELECT deleted FROM users WHERE deleted = 0",
 			wantErr: false,
 		},
+		// === New admin/schema introspection cases (safe EXEC allowed in read-only) ===
+		{
+			name:    "EXEC sp_help - allowed for schema discovery",
+			query:   "EXEC sp_help 'dbo.Users'",
+			wantErr: false,
+		},
+		{
+			name:    "EXEC sp_helptext - allowed for procedure source",
+			query:   "EXEC sp_helptext 'dbo.MyProc'",
+			wantErr: false,
+		},
+		{
+			name:    "EXEC sp_spaceused - allowed for table size info",
+			query:   "EXEC sp_spaceused 'dbo.Orders'",
+			wantErr: false,
+		},
+		{
+			name:    "EXECUTE sp_columns - allowed (alternative syntax)",
+			query:   "EXECUTE sp_columns @table_name = 'Products'",
+			wantErr: false,
+		},
+		{
+			name:    "EXEC sp_help with schema prefix - allowed",
+			query:   "EXEC dbo.sp_help 'Sales.Customers'",
+			wantErr: false,
+		},
+		// These must still be blocked
+		{
+			name:    "EXEC sp_executesql - must remain blocked",
+			query:   "EXEC sp_executesql N'SELECT 1'",
+			wantErr: true,
+		},
+		{
+			name:    "EXEC xp_cmdshell - always blocked",
+			query:   "EXEC xp_cmdshell 'dir'",
+			wantErr: true,
+		},
+		{
+			name:    "EXEC unknown procedure - blocked",
+			query:   "EXEC sp_made_up_procedure 'foo'",
+			wantErr: true,
+		},
 	}
 
 	for _, tc := range readOnlyTestCases {
