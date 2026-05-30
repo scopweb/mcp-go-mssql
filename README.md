@@ -96,6 +96,23 @@ go run main.go
 
 See the full development guide in the [documentation](https://mcp-go-mssql.scopweb.com/despliegue/desarrollo).
 
+---
+
+## Using Dynamic Connections Securely
+
+If your application needs to access **multiple related databases** (e.g. Main + Identity + Audit) but you want to load only **one MCP server**, use Dynamic Mode.
+
+**Important**: There was a previous security incident caused by combining dynamic mode with global full write access. The project now has strong guardrails.
+
+**Recommended reading (secure configuration for this exact use case):**
+
+→ **[Secure Dynamic Mode for One Application with Multiple Related Databases](https://mcp-go-mssql.scopweb.com/guias/modo-dinamico-una-aplicacion-varias-bases)**
+
+Key principles:
+- Only define aliases for the databases that belong to this application.
+- Default to `READ_ONLY=true` on all real/important databases.
+- Use a dedicated, heavily whitelisted alias if the AI needs any write capability.
+
 ## Configuration
 
 ### Claude Desktop Configuration Examples

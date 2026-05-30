@@ -1,5 +1,8 @@
 # ❓ FAQ #8: Configurar MCP MSSQL con conexiones dinámicas en Grok Build
 
+> **📌 Recomendado**: Si tu caso es "una sola aplicación que necesita acceder a varias bases de datos relacionadas", lee primero esta guía más específica y segura:  
+> **[Modo Dinámico para Una Aplicación con Varias Bases de Datos Relacionadas](./modo-dinamico-una-aplicacion-varias-bases.md)**
+
 **Etiquetas**: `mssql`, `dynamic-connections`, `grok-build`, `configuration`, `faq`
 
 ## 🎯 **Problema**
@@ -187,6 +190,7 @@ Estas variables se **combinan** con las que ya carga el servidor desde su `.env`
 
 ### **📚 Recursos Relacionados**
 
+- **[Guía recomendada]** Modo Dinámico para Una Aplicación con Varias Bases de Datos Relacionadas → [Leer guía](./modo-dinamico-una-aplicacion-varias-bases.md)
 - [FAQ #5: Configuración en Claude Desktop](./FAQ-05-claude-config.md)
 - [FAQ #7: Troubleshooting general](./FAQ-07-troubleshooting.md)
 - Documentación oficial de Grok: `~/.grok/docs/user-guide/07-mcp-servers.md`

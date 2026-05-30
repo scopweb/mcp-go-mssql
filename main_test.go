@@ -317,6 +317,7 @@ func TestMCPToolsList(t *testing.T) {
 
 	expectedTools := []string{
 		"query_database", "get_database_info", "explore", "inspect", "execute_procedure", "explain_query",
+		"dynamic_available", "dynamic_connect", "dynamic_disconnect", "dynamic_list", "confirm_operation",
 	}
 	if len(toolsResult.Tools) != len(expectedTools) {
 		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(toolsResult.Tools))

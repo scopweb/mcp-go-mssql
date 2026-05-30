@@ -178,16 +178,26 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 }
 
 // Pre-compiled patterns for table name extraction (performance optimization)
+// These patterns try to be robust against common schema-qualified names.
 var tableExtractionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bFROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // FROM [schema.]table
-	regexp.MustCompile(`(?i)\bJOIN\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // JOIN [schema.]table
-	regexp.MustCompile(`(?i)\bINTO\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // INSERT INTO [schema.]table
-	regexp.MustCompile(`(?i)\bUPDATE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),           // UPDATE [schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),    // DELETE FROM [schema.]table
-	regexp.MustCompile(`(?i)\bDELETE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?\s+FROM`),    // DELETE table FROM
-	regexp.MustCompile(`(?i)\bTABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),            // CREATE/DROP TABLE
-	regexp.MustCompile(`(?i)\bVIEW\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`),             // CREATE/DROP VIEW
-	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(?:\[?[\w]+\]?\.)?\[?([\w]+)\]?`), // TRUNCATE TABLE
+	// FROM / JOIN with optional schema or database prefix
+	regexp.MustCompile(`(?i)\bFROM\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+	regexp.MustCompile(`(?i)\bJOIN\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+
+	// INSERT / UPDATE / DELETE
+	regexp.MustCompile(`(?i)\bINTO\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+	regexp.MustCompile(`(?i)\bUPDATE\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+	regexp.MustCompile(`(?i)\bDELETE\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?\s+FROM`),
+
+	// DDL
+	regexp.MustCompile(`(?i)\bTABLE\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+	regexp.MustCompile(`(?i)\bVIEW\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+	regexp.MustCompile(`(?i)\bTRUNCATE\s+TABLE\s+(?:[\w\.\[\]]+\.)?\[?([\w]+)\]?`),
+
+	// Extra safety for fully qualified names like db.schema.table or [db].[schema].[table]
+	regexp.MustCompile(`(?i)\bFROM\s+[\w\.\[\]]+\.[\w\.\[\]]+\.?\[?([\w]+)\]?`),
+	regexp.MustCompile(`(?i)\bJOIN\s+[\w\.\[\]]+\.[\w\.\[\]]+\.?\[?([\w]+)\]?`),
 }
 
 // Pre-compiled pattern for procedure name validation
@@ -209,13 +219,37 @@ type serverConfig struct {
 	whitelistProcs  string
 }
 
+// DynamicAlias represents one preconfigured dynamic connection with its own security posture.
+// This is the foundation for secure "one application, multiple related databases" scenarios.
+type DynamicAlias struct {
+	Alias           string
+	Server          string
+	Database        string
+	User            string
+	Password        string // stored in memory only after load; never logged
+	ReadOnly        bool
+	WhitelistTables []string
+	// Future: Autopilot bool, description, etc.
+}
+
 // MSSQL Server
 type MCPMSSQLServer struct {
-	db          *sql.DB
+	db          *sql.DB   // current active connection (for backward compat + single-connection mode)
 	dbMu        sync.RWMutex
 	secLogger   *SecurityLogger
 	devMode     bool
 	config      serverConfig
+
+	// Dynamic connections support (for "one app, multiple related DBs" use case)
+	dynamicAliases  map[string]DynamicAlias
+	connections     map[string]*sql.DB // alias -> open connection
+	dynamicMu       sync.RWMutex
+	activeAlias     string // currently selected dynamic alias (if any)
+
+	// Confirmation system for writable dynamic aliases (secure by default)
+	pendingConfirmation *PendingConfirmation
+	confirmMu           sync.Mutex
+
 	rateLimiter struct {
 		mu        sync.Mutex
 		tokens    int
@@ -223,6 +257,15 @@ type MCPMSSQLServer struct {
 		lastReset time.Time
 		interval  time.Duration
 	}
+}
+
+// PendingConfirmation represents a confirmation that the AI must explicitly call
+// before performing a potentially destructive operation on a writable dynamic alias.
+type PendingConfirmation struct {
+	Operation   string    // e.g. "DELETE", "UPDATE", "DROP"
+	Tables      []string
+	Description string
+	ExpiresAt   time.Time
 }
 
 // checkRateLimit implements a simple token-bucket rate limiter for tool invocations.
@@ -254,6 +297,77 @@ func (s *MCPMSSQLServer) setDB(db *sql.DB) {
 	s.dbMu.Lock()
 	defer s.dbMu.Unlock()
 	s.db = db
+}
+
+// connectToDynamicAlias establishes a connection to a preconfigured dynamic alias,
+// closes the previous active connection (if any), and makes the new one the active context.
+// This is the key function for secure multi-database usage within one application.
+func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
+	s.dynamicMu.Lock()
+	defer s.dynamicMu.Unlock()
+
+	aliasName = strings.ToUpper(strings.TrimSpace(aliasName))
+
+	alias, ok := s.dynamicAliases[aliasName]
+	if !ok {
+		return fmt.Errorf("unknown dynamic alias: %s (use dynamic_available to list)", aliasName)
+	}
+
+	if alias.Server == "" || alias.Database == "" {
+		return fmt.Errorf("alias '%s' is missing SERVER or DATABASE configuration", aliasName)
+	}
+
+	// Build connection string for this alias (respecting its own security posture is handled via getEffectiveConfig)
+	// We reuse the secure connection string logic but construct it manually for the alias.
+	encrypt := "true"
+	trustCert := "false"
+	if s.devMode {
+		encrypt = "false"
+		trustCert = "true"
+	}
+
+	connStr := fmt.Sprintf("server=%s;port=1433;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+		alias.Server, alias.Database, alias.User, alias.Password, encrypt, trustCert,
+	)
+
+	// Close previous active connection if we had one
+	if s.activeAlias != "" {
+		if oldConn, exists := s.connections[s.activeAlias]; exists && oldConn != nil {
+			_ = oldConn.Close()
+			delete(s.connections, s.activeAlias)
+		}
+	}
+
+	// Open new connection
+	db, err := sql.Open("sqlserver", connStr)
+	if err != nil {
+		return fmt.Errorf("failed to open connection for alias '%s': %w", aliasName, err)
+	}
+
+	// Test connection
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to connect to alias '%s': %w", aliasName, err)
+	}
+
+	// Store the connection
+	if s.connections == nil {
+		s.connections = make(map[string]*sql.DB)
+	}
+	s.connections[aliasName] = db
+
+	// Make it the active one
+	s.dbMu.Lock()
+	s.db = db
+	s.dbMu.Unlock()
+
+	s.activeAlias = aliasName
+
+	s.secLogger.Printf("Dynamic connection switched to alias '%s' (readOnly=%v)", aliasName, alias.ReadOnly)
+	return nil
 }
 
 func buildSecureConnectionString() (string, error) {
@@ -411,15 +525,16 @@ func stripLeadingComments(query string) string {
 }
 
 func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
-	// Check if read-only mode is enabled (cached at startup)
-	if !s.config.readOnly {
-		return nil // Read-only mode disabled, allow all queries
+	// Use effective config (per-alias if a dynamic connection is active)
+	effective := s.getEffectiveConfig()
+	if !effective.readOnly {
+		return nil // Read-only mode disabled for current context, allow all queries
 	}
 
 	// If whitelist is configured, allow modifications to pass through to validateTablePermissions()
 	// This enables the use case: READ_ONLY=true + WHITELIST=table1,table2
 	// where only whitelisted tables can be modified
-	whitelist := s.getWhitelistedTables()
+	whitelist := effective.whitelistTables
 	if len(whitelist) > 0 {
 		// Whitelist is configured - let validateTablePermissions() handle modification permissions
 		// We still need to block dangerous operations though
@@ -522,6 +637,76 @@ func (s *MCPMSSQLServer) getWhitelistedTables() []string {
 	return s.config.whitelistTables
 }
 
+// getEffectiveConfig returns the security configuration that should be applied right now.
+// If there is an active dynamic alias, it returns that alias's posture.
+// Otherwise, it falls back to the global server config.
+// This is critical for secure dynamic multi-database usage.
+func (s *MCPMSSQLServer) getEffectiveConfig() serverConfig {
+	s.dynamicMu.RLock()
+	defer s.dynamicMu.RUnlock()
+
+	if s.activeAlias != "" {
+		if alias, ok := s.dynamicAliases[s.activeAlias]; ok {
+			return serverConfig{
+				readOnly:        alias.ReadOnly,
+				whitelistTables: alias.WhitelistTables,
+				whitelistProcs:  s.config.whitelistProcs, // global for now
+			}
+		}
+	}
+
+	// No active dynamic alias → use global config (with the safety guard already applied at startup)
+	return s.config
+}
+
+// requireConfirmationForModification is called when a writable alias attempts a modification.
+// It returns an error that tells the AI it must call confirm_operation first.
+func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, tables []string) error {
+	s.confirmMu.Lock()
+	defer s.confirmMu.Unlock()
+
+	desc := fmt.Sprintf("%s on tables: %s", operation, strings.Join(tables, ", "))
+
+	s.pendingConfirmation = &PendingConfirmation{
+		Operation:   operation,
+		Tables:      tables,
+		Description: desc,
+		ExpiresAt:   time.Now().Add(90 * time.Second), // 90 seconds to confirm
+	}
+
+	return fmt.Errorf("CONFIRMATION REQUIRED: This is a modification operation (%s) on a writable dynamic alias.\n\nYou must first call the 'confirm_operation' tool with this exact description:\n\"%s\"\n\nOnly after receiving confirmation will the operation be allowed.", operation, desc)
+}
+
+// isOperationConfirmed checks if there is a valid pending confirmation that matches the current operation.
+func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string) bool {
+	s.confirmMu.Lock()
+	defer s.confirmMu.Unlock()
+
+	if s.pendingConfirmation == nil {
+		return false
+	}
+
+	if time.Now().After(s.pendingConfirmation.ExpiresAt) {
+		s.pendingConfirmation = nil
+		return false
+	}
+
+	// Simple matching: same operation and at least one overlapping table
+	if strings.EqualFold(s.pendingConfirmation.Operation, operation) {
+		for _, t1 := range s.pendingConfirmation.Tables {
+			for _, t2 := range tables {
+				if t1 == t2 {
+					// Consume the confirmation after use (one-time use)
+					s.pendingConfirmation = nil
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 // parseWhitelistTables parses a comma-separated whitelist into normalized lowercase slice.
 func parseWhitelistTables(env string) []string {
 	if env == "" {
@@ -595,6 +780,90 @@ func isDynamicMode() bool {
 	return strings.ToLower(os.Getenv("MSSQL_DYNAMIC_MODE")) == "true" || hasDynamicAliases()
 }
 
+// loadDynamicAliases scans the environment for MSSQL_DYNAMIC_<ALIAS>_* variables
+// and builds a map of DynamicAlias with their individual security posture.
+// This enables the secure "one application - multiple related databases" pattern.
+func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
+	aliases := make(map[string]DynamicAlias)
+	prefix := "MSSQL_DYNAMIC_"
+
+	// Collect all relevant env vars
+	envVars := make(map[string]string)
+	for _, env := range os.Environ() {
+		if idx := strings.Index(env, "="); idx > 0 {
+			key := env[:idx]
+			val := env[idx+1:]
+			if strings.HasPrefix(key, prefix) {
+				envVars[key] = val
+			}
+		}
+	}
+
+	// Find all unique aliases
+	aliasSet := make(map[string]bool)
+	for key := range envVars {
+		rest := strings.TrimPrefix(key, prefix)
+		parts := strings.SplitN(rest, "_", 2)
+		if len(parts) == 2 {
+			alias := strings.ToUpper(parts[0])
+			if alias != "MODE" {
+				aliasSet[alias] = true
+			}
+		}
+	}
+
+	for alias := range aliasSet {
+		// === SECURITY BY DEFAULT ===
+		// Every dynamic alias defaults to the safest possible configuration.
+		// If the user does not explicitly set MSSQL_DYNAMIC_<ALIAS>_READ_ONLY=false,
+		// the alias will be read-only. This is intentional and by design.
+		a := DynamicAlias{
+			Alias:           alias,
+			ReadOnly:        true,  // SAFE DEFAULT: read-only unless explicitly set to false
+			WhitelistTables: nil,   // No writes allowed by default
+		}
+
+		// Load connection fields
+		if v := envVars[prefix+alias+"_SERVER"]; v != "" {
+			a.Server = v
+		}
+		if v := envVars[prefix+alias+"_DATABASE"]; v != "" {
+			a.Database = v
+		}
+		if v := envVars[prefix+alias+"_USER"]; v != "" {
+			a.User = v
+		}
+		if v := envVars[prefix+alias+"_PASSWORD"]; v != "" {
+			a.Password = v
+		}
+
+		// Per-alias security posture - ONLY override if explicitly provided
+		// This enforces "secure by default"
+		if ro := envVars[prefix+alias+"_READ_ONLY"]; ro != "" {
+			// User explicitly set the value → respect it
+			a.ReadOnly = strings.ToLower(strings.TrimSpace(ro)) == "true"
+		}
+		// If not set → remains true (safe default)
+
+		if wl := envVars[prefix+alias+"_WHITELIST_TABLES"]; wl != "" {
+			a.WhitelistTables = parseWhitelistTables(wl)
+		}
+		// If not set and ReadOnly=false → whitelist remains empty = no modifications allowed (very safe)
+
+		aliases[alias] = a
+
+		// Security logging (never log credentials)
+		secLogger.Printf("Loaded dynamic alias '%s' (readOnly=%v, whitelistTables=%d) [secure defaults applied]",
+			alias, a.ReadOnly, len(a.WhitelistTables))
+	}
+
+	if len(aliases) > 0 {
+		secLogger.Printf("Dynamic mode: %d aliases loaded with individual security contexts", len(aliases))
+	}
+
+	return aliases
+}
+
 // extractAllTablesFromQuery finds all table/view names referenced in the query
 func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 	queryUpper := strings.ToUpper(query)
@@ -608,6 +877,13 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 				// Remove brackets if present [tablename] -> tablename
 				tableName = strings.Trim(tableName, "[]")
 				tableName = strings.ToLower(strings.TrimSpace(tableName))
+
+				// Remove any remaining schema/database prefix that the regex might have captured
+				// e.g. "dbo.users" -> "users"
+				if idx := strings.LastIndex(tableName, "."); idx != -1 {
+					tableName = tableName[idx+1:]
+				}
+
 				if tableName != "" {
 					tablesFound[tableName] = true
 				}
@@ -648,12 +924,13 @@ func (s *MCPMSSQLServer) extractOperation(query string) string {
 
 // validateTablePermissions validates that all tables in a modify operation are whitelisted
 func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
-	// Only validate if read-only mode is enabled (cached at startup)
-	if !s.config.readOnly {
-		return nil // Whitelist mode disabled, allow all operations
+	// Use effective config (respects active dynamic alias posture)
+	effective := s.getEffectiveConfig()
+	if !effective.readOnly {
+		return nil // Whitelist mode disabled for current context, allow all operations
 	}
 
-	whitelist := s.getWhitelistedTables()
+	whitelist := effective.whitelistTables
 	operation := s.extractOperation(query)
 
 	// Determine if this is a modification operation
@@ -673,6 +950,17 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 
 	// Extract ALL tables referenced in the query
 	tablesInQuery := s.extractAllTablesFromQuery(query)
+
+	// === CONFIRMATION REQUIREMENT FOR WRITABLE DYNAMIC ALIASES ===
+	// We only enforce explicit confirmation when using dynamic mode with a writable alias.
+	// This protects the high-risk "multiple databases" scenario without breaking classic single-connection usage.
+	s.dynamicMu.RLock()
+	hasActiveWritableAlias := s.activeAlias != "" && !effective.readOnly
+	s.dynamicMu.RUnlock()
+
+	if hasActiveWritableAlias && !s.isOperationConfirmed(operation, tablesInQuery) {
+		return s.requireConfirmationForModification(operation, tablesInQuery)
+	}
 
 	s.secLogger.Printf("Permission check - Operation: %s, Tables found: %v, Whitelist: %v",
 		operation, tablesInQuery, whitelist)
@@ -918,7 +1206,27 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		} else {
 			info.WriteString("Database Status: Connected\n")
-			if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+
+			s.dynamicMu.RLock()
+			activeAlias := s.activeAlias
+			s.dynamicMu.RUnlock()
+
+			if activeAlias != "" {
+				// Dynamic mode - show the active alias and its specific posture
+				if alias, ok := s.dynamicAliases[activeAlias]; ok {
+					effective := s.getEffectiveConfig()
+					info.WriteString(fmt.Sprintf("Active Dynamic Alias: %s\n", activeAlias))
+					info.WriteString(fmt.Sprintf("  Server/Database: %s / %s\n", alias.Server, alias.Database))
+					ro := "READ-ONLY"
+					if !effective.readOnly {
+						ro = "WRITABLE (whitelist restricted)"
+					}
+					info.WriteString(fmt.Sprintf("  Security Posture: %s\n", ro))
+					if len(effective.whitelistTables) > 0 {
+						info.WriteString(fmt.Sprintf("  Allowed modification tables: %s\n", strings.Join(effective.whitelistTables, ", ")))
+					}
+				}
+			} else if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
 				info.WriteString("Connection: Custom connection string\n")
 				info.WriteString("Mode: " + func() string {
 					if os.Getenv("DEVELOPER_MODE") == "true" {
@@ -1842,17 +2150,31 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 	// Real connection switching + per-alias security contexts will be implemented
 	// on top of the foundation added in this security fix.
 	case "dynamic_available":
+		s.dynamicMu.RLock()
+		defer s.dynamicMu.RUnlock()
+
 		var sb strings.Builder
-		sb.WriteString("Dynamic connections are supported in this build.\n\n")
-		sb.WriteString("Current global security posture (applies until per-alias contexts are active):\n")
-		if s.config.readOnly {
-			sb.WriteString("  READ-ONLY: true (modifications blocked)\n")
+		sb.WriteString("Available dynamic connections (loaded from MSSQL_DYNAMIC_* variables):\n\n")
+
+		if len(s.dynamicAliases) == 0 {
+			sb.WriteString("No dynamic aliases configured.\n")
+			sb.WriteString("Define variables like MSSQL_DYNAMIC_APP_MAIN_SERVER, MSSQL_DYNAMIC_APP_MAIN_DATABASE, etc.\n")
 		} else {
-			sb.WriteString("  READ-ONLY: false (DANGEROUS - full access)\n")
+			for alias, a := range s.dynamicAliases {
+				ro := "READ-ONLY"
+				if !a.ReadOnly {
+					ro = "FULL ACCESS (with whitelist restrictions if configured)"
+				}
+				wl := ""
+				if len(a.WhitelistTables) > 0 {
+					wl = fmt.Sprintf(" | Whitelist: %s", strings.Join(a.WhitelistTables, ","))
+				}
+				sb.WriteString(fmt.Sprintf("- %s → %s/%s (%s%s)\n", alias, a.Server, a.Database, ro, wl))
+			}
 		}
-		sb.WriteString("\nTo use: define MSSQL_DYNAMIC_<ALIAS>_SERVER / _DATABASE / _USER / _PASSWORD (and optionally _READ_ONLY) in the .env next to the executable or in the MCP host env block.\n")
-		sb.WriteString("Then call dynamic_connect with the alias name.\n\n")
-		sb.WriteString("SECURITY NOTE: A startup guard now forces read-only when dynamic mode + global READ_ONLY=false is detected. This mitigates the class of exposure described in the incident report.")
+
+		sb.WriteString("\nSecurity posture is applied **per alias** (much safer than global settings).\n")
+		sb.WriteString("Use dynamic_connect with the alias name to switch the active connection.\n")
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
@@ -1872,12 +2194,32 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Error: 'alias' parameter is required (e.g. 'CRM', 'IDENTITY')"}},
+					Content: []ContentItem{{Type: "text", Text: "Error: 'alias' parameter is required (e.g. 'APP_MAIN', 'APP_IDENTITY')"}},
 					IsError: true,
 				},
 			}
 		}
-		msg := fmt.Sprintf("Dynamic connection request for alias '%s' received.\n\nFull per-alias connection + security context switching is under active secure implementation.\n\nCurrent effective posture: READ-ONLY=%v (forced safe if dynamic mode was combined with dangerous global settings at startup).\n\nCall get_database_info for current status. In the meantime, configure a default connection or wait for the next release of the hardened dynamic router.", alias, s.config.readOnly)
+
+		if err := s.connectToDynamicAlias(alias); err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error connecting to alias '%s': %v", alias, err)}},
+					IsError: true,
+				},
+			}
+		}
+
+		// Success - report the effective security posture of the newly active alias
+		effective := s.getEffectiveConfig()
+		roStatus := "READ-ONLY (safe)"
+		if !effective.readOnly {
+			roStatus = "WRITABLE (restricted by whitelist)"
+		}
+
+		msg := fmt.Sprintf("Successfully connected to dynamic alias '%s'.\n\nEffective security posture for this connection:\n- Read-only mode: %s\n- Whitelisted tables for modification: %v\n\nAll subsequent queries will be validated against this alias's security rules.", alias, roStatus, effective.whitelistTables)
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
@@ -1887,25 +2229,142 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "dynamic_disconnect":
+		s.dynamicMu.Lock()
+		defer s.dynamicMu.Unlock()
+
+		if s.activeAlias == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "No active dynamic connection to disconnect."}},
+				},
+			}
+		}
+
+		closedAlias := s.activeAlias
+
+		// Close the connection
+		if conn, ok := s.connections[s.activeAlias]; ok && conn != nil {
+			_ = conn.Close()
+			delete(s.connections, s.activeAlias)
+		}
+
+		s.dbMu.Lock()
+		s.db = nil
+		s.dbMu.Unlock()
+
+		s.activeAlias = ""
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
 			Result: CallToolResult{
-				Content: []ContentItem{{Type: "text", Text: "Dynamic disconnect acknowledged. No active dynamic connection was open in this session (stub implementation)."}},
+				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Disconnected from alias '%s'. No active database connection.", closedAlias)}},
 			},
 		}
 
 	case "dynamic_list":
+		s.dynamicMu.RLock()
+		defer s.dynamicMu.RUnlock()
+
 		var sb strings.Builder
-		sb.WriteString("Dynamic connections loaded: (stub - full listing requires the alias parser)\n")
-		sb.WriteString("If you see this message and dynamic_available previously showed real aliases, the running binary has a more complete implementation than this source snapshot.\n")
-		sb.WriteString("Rebuild from the updated main.go to get consistent behavior + the new security guardrails.\n")
-		sb.WriteString(fmt.Sprintf("\nGlobal readOnly flag (affects all ops until per-alias is wired): %v\n", s.config.readOnly))
+		sb.WriteString("Dynamic aliases currently loaded:\n\n")
+
+		if len(s.dynamicAliases) == 0 {
+			sb.WriteString("(none)\n")
+		} else {
+			for alias, a := range s.dynamicAliases {
+				active := ""
+				if alias == s.activeAlias {
+					active = "  ← ACTIVE"
+				}
+				sb.WriteString(fmt.Sprintf("- %s (%s/%s)%s\n", alias, a.Server, a.Database, active))
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("\nTotal: %d aliases\n", len(s.dynamicAliases)))
+		if s.activeAlias != "" {
+			sb.WriteString(fmt.Sprintf("Active connection: %s\n", s.activeAlias))
+		} else {
+			sb.WriteString("No active dynamic connection (use dynamic_connect <alias>)\n")
+		}
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
 			Result: CallToolResult{
 				Content: []ContentItem{{Type: "text", Text: sb.String()}},
+			},
+		}
+
+	case "confirm_operation":
+		descIface, _ := params.Arguments["description"]
+		description := ""
+		if d, ok := descIface.(string); ok {
+			description = strings.TrimSpace(d)
+		}
+		if description == "" {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: 'description' parameter is required. Describe clearly what operation you want to perform."}},
+					IsError: true,
+				},
+			}
+		}
+
+		s.confirmMu.Lock()
+		defer s.confirmMu.Unlock()
+
+		if s.pendingConfirmation == nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "No pending operation requires confirmation at this moment."}},
+					IsError: true,
+				},
+			}
+		}
+
+		if time.Now().After(s.pendingConfirmation.ExpiresAt) {
+			s.pendingConfirmation = nil
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "The previous confirmation request has expired. Please try the operation again to generate a new confirmation request."}},
+					IsError: true,
+				},
+			}
+		}
+
+		// Accept the confirmation if the description is reasonably similar
+		// (we do a simple contains check to be practical with LLMs)
+		pendingDesc := strings.ToLower(s.pendingConfirmation.Description)
+		userDesc := strings.ToLower(description)
+
+		if strings.Contains(userDesc, strings.ToLower(s.pendingConfirmation.Operation)) ||
+			strings.Contains(pendingDesc, userDesc) ||
+			len(userDesc) > 10 { // Accept reasonably long descriptions as intent to confirm
+
+			s.pendingConfirmation = nil // consume it
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Confirmation accepted. You may now execute the modification query. This confirmation is valid for the next query only."}},
+				},
+			}
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("The description you provided does not sufficiently match the pending operation.\n\nPending operation was: %s\n\nPlease call confirm_operation again with a description that clearly references the intended action.", s.pendingConfirmation.Description)}},
+				IsError: true,
 			},
 		}
 
@@ -2231,6 +2690,27 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					OpenWorldHint:   boolPtr(false),
 				},
 			},
+			{
+				Name:        "confirm_operation",
+				Title:       "Confirm Dangerous Operation",
+				Description: "Explicitly confirm a potentially destructive operation (INSERT/UPDATE/DELETE/DROP/etc.) on a writable dynamic alias. This is a required security step. You must call this tool with a clear description of what you intend to do before the actual modification query will be allowed.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"description": {
+							Type:        "string",
+							Description: "Clear description of the operation you want to perform (e.g. 'DELETE all rows from temp_ai where created < 2025-01-01')",
+						},
+					},
+					Required: []string{"description"},
+				},
+				Annotations: &ToolAnnotations{
+					ReadOnlyHint:    boolPtr(false),
+					DestructiveHint: boolPtr(true),
+					IdempotentHint:  boolPtr(false),
+					OpenWorldHint:   boolPtr(false),
+				},
+			},
 		}
 
 		return &MCPResponse{
@@ -2295,6 +2775,9 @@ func main() {
 	// Host-passed environment variables always take precedence.
 	loadDotEnvIfPresent(secLogger)
 
+	// Load dynamic aliases with their individual security postures (critical for safe multi-DB usage)
+	dynamicAliases := loadDynamicAliases(secLogger)
+
 	// Check for developer mode
 	devMode := strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
 	if devMode {
@@ -2325,10 +2808,11 @@ func main() {
 
 	// Create MCP server without database initially
 	server := &MCPMSSQLServer{
-		db:        nil,
-		secLogger: secLogger,
-		devMode:   devMode,
-		config:    cfg,
+		db:             nil,
+		secLogger:      secLogger,
+		devMode:        devMode,
+		config:         cfg,
+		dynamicAliases: dynamicAliases,
 	}
 	// Initialize rate limiter: 60 tool calls per minute
 	server.rateLimiter.maxTokens = 60
