@@ -45,10 +45,28 @@ CREATE TABLE temp (id INT)    -- Bloqueado
 DROP TABLE users              -- Bloqueado
 ALTER TABLE users ADD col INT -- Bloqueado
 
--- Ejecución de código
-EXEC sp_help                  -- Bloqueado (excepto procedimientos seguros)
+-- Ejecución de código peligrosa
 EXEC xp_cmdshell 'dir'       -- Siempre bloqueado
+EXEC sp_executesql '...'     -- Siempre bloqueado
+EXEC sp_configure ...        -- Siempre bloqueado
 ```
+
+### Lecturas administrativas y de esquema permitidas
+
+Aunque el modo es de solo lectura, se permiten ciertas operaciones de **administración e introspección de esquema** que son inherentemente de solo lectura. Esto facilita el descubrimiento de la base de datos por parte de herramientas y asistentes de IA:
+
+```sql
+-- Procedimientos de sistema seguros para exploración de esquema
+EXEC sp_help 'dbo.Usuarios'           -- Estructura de una tabla
+EXEC sp_helptext 'dbo.MiProcedimiento' -- Código fuente de un objeto
+EXEC sp_spaceused 'dbo.Pedidos'       -- Tamaño y uso de espacio
+EXEC sp_columns @table_name = 'Clientes'
+EXEC sp_fkeys 'Pedidos'
+```
+
+Estos procedimientos están explícitamente permitidos porque no modifican datos ni configuración. Cualquier otro procedimiento del sistema (o EXEC de SQL dinámico) sigue estando bloqueado. 
+
+Se recomienda preferentemente el uso de las herramientas dedicadas `explore` e `inspect` para la mayoría de los casos de descubrimiento de esquema.
 
 ## Validación de consultas
 

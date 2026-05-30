@@ -177,6 +177,18 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 	"BCP":      regexp.MustCompile(`(?i)\bBCP\b`),
 }
 
+// readOnlyDangerousSPs is the single source of truth for system procedures
+// that must always be blocked in read-only contexts, even when we allow
+// certain safe administrative procedures via EXEC.
+var readOnlyDangerousSPs = []string{
+	"XP_CMDSHELL", "XP_REGREAD", "XP_REGWRITE", "XP_FILEEXIST",
+	"XP_DIRTREE", "XP_FIXEDDRIVES", "XP_SERVICECONTROL",
+	"SP_CONFIGURE", "SP_ADDLOGIN", "SP_DROPLOGIN",
+	"SP_ADDSRVROLEMEMBER", "SP_DROPSRVROLEMEMBER",
+	"SP_ADDROLEMEMBER", "SP_DROPROLEMEMBER",
+	"SP_EXECUTESQL", "SP_OACREATE", "SP_OAMETHOD",
+}
+
 // Pre-compiled patterns for table name extraction (performance optimization)
 // These patterns try to be robust against common schema-qualified names.
 var tableExtractionPatterns = []*regexp.Regexp{
@@ -229,7 +241,6 @@ type DynamicAlias struct {
 	Password        string // stored in memory only after load; never logged
 	ReadOnly        bool
 	WhitelistTables []string
-	// Future: Autopilot bool, description, etc.
 }
 
 // MSSQL Server
@@ -542,17 +553,8 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 		_ = normalizedQuery // used for future pattern matching if needed
 
 		// Block dangerous system procedures even with whitelist
-		dangerousSPs := []string{
-			"XP_CMDSHELL", "XP_REGREAD", "XP_REGWRITE", "XP_FILEEXIST",
-			"XP_DIRTREE", "XP_FIXEDDRIVES", "XP_SERVICECONTROL",
-			"SP_CONFIGURE", "SP_ADDLOGIN", "SP_DROPLOGIN",
-			"SP_ADDSRVROLEMEMBER", "SP_DROPSRVROLEMEMBER",
-			"SP_ADDROLEMEMBER", "SP_DROPROLEMEMBER",
-			"SP_EXECUTESQL", "SP_OACREATE", "SP_OAMETHOD",
-		}
-
 		queryUpper := strings.ToUpper(query)
-		for _, sp := range dangerousSPs {
+		for _, sp := range readOnlyDangerousSPs {
 			if strings.Contains(queryUpper, sp) {
 				return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
 			}
@@ -565,7 +567,21 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	// No whitelist configured - enforce strict read-only mode
 	normalizedQuery := stripLeadingComments(query)
 
-	// List of allowed read-only operations
+	// Special case (new for admin introspection support):
+	// Allow EXEC/EXECUTE of a small set of known read-only system procedures
+	// used for schema discovery and database administration.
+	// This is deliberately narrow and does not relax the general ban on EXEC.
+	if isSafeReadOnlyAdminProcedure(query) {
+		queryUpper := strings.ToUpper(query)
+		for _, sp := range readOnlyDangerousSPs {
+			if strings.Contains(queryUpper, sp) {
+				return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
+			}
+		}
+		return nil
+	}
+
+	// List of allowed read-only operations (traditional path)
 	allowedPrefixes := []string{
 		"SELECT",
 		"WITH", // Common Table Expressions that start with WITH
@@ -585,30 +601,20 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 				}
 			}
 
-			// Dangerous system procedures (block these)
-			dangerousSPs := []string{
-				"XP_CMDSHELL", "XP_REGREAD", "XP_REGWRITE", "XP_FILEEXIST",
-				"XP_DIRTREE", "XP_FIXEDDRIVES", "XP_SERVICECONTROL",
-				"SP_CONFIGURE", "SP_ADDLOGIN", "SP_DROPLOGIN",
-				"SP_ADDSRVROLEMEMBER", "SP_DROPSRVROLEMEMBER",
-				"SP_ADDROLEMEMBER", "SP_DROPROLEMEMBER",
-				"SP_EXECUTESQL", "SP_OACREATE", "SP_OAMETHOD",
+			// Check for dangerous SPs (single source of truth)
+			queryUpper := strings.ToUpper(query)
+			for _, sp := range readOnlyDangerousSPs {
+				if strings.Contains(queryUpper, sp) {
+					return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
+				}
 			}
 
-			// Safe read-only system procedures (allow these)
+			// Safe read-only system procedures (legacy path for SELECT queries that mention SP_ names)
 			safeSPs := []string{
 				"SP_HELP", "SP_HELPTEXT", "SP_HELPINDEX", "SP_HELPCONSTRAINT",
 				"SP_COLUMNS", "SP_TABLES", "SP_STORED_PROCEDURES",
 				"SP_FKEYS", "SP_PKEYS", "SP_STATISTICS",
 				"SP_DATABASES", "SP_HELPDB",
-			}
-
-			queryUpper := strings.ToUpper(query)
-			// Check for dangerous SPs
-			for _, sp := range dangerousSPs {
-				if strings.Contains(queryUpper, sp) {
-					return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
-				}
 			}
 
 			// If query contains SP_ or XP_, verify it's in the safe list
@@ -630,6 +636,56 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	}
 
 	return fmt.Errorf("read-only mode: only SELECT and read operations are allowed")
+}
+
+// isSafeReadOnlyAdminProcedure reports whether the query is an invocation
+// of a well-known read-only system stored procedure used for schema discovery
+// and administrative introspection (e.g. sp_help, sp_helptext, sp_spaceused).
+//
+// This is the controlled relaxation that allows legitimate administrative reads
+// via EXEC while the general EXEC/EXECUTE keyword remains dangerous for everything else.
+func isSafeReadOnlyAdminProcedure(query string) bool {
+	q := strings.ToUpper(stripLeadingComments(query))
+	q = strings.TrimSpace(q)
+
+	// Match common forms:
+	//   EXEC sp_help 'dbo.Table'
+	//   EXECUTE dbo.sp_helptext 'proc'
+	//   EXEC [dbo].[sp_columns] @table_name='x'
+	// We capture the procedure name (last identifier before any parameters).
+	re := regexp.MustCompile(`^\s*EXEC(UTE)?\s+(?:\[?[\w$]+\]?\.)*(?:\[?([\w$]+)\]?)\b`)
+	matches := re.FindStringSubmatch(q)
+	if len(matches) < 3 {
+		return false
+	}
+
+	proc := strings.ToUpper(matches[2])
+
+	// Conservative allowlist of read-only administrative / schema procedures.
+	// Only add procedures that are:
+	//   - Documented as read-only / no side effects
+	//   - Commonly used for legitimate schema and admin discovery
+	//   - Do not allow arbitrary code execution or configuration changes
+	safeAdminProcs := map[string]bool{
+		"SP_HELP":              true,
+		"SP_HELPTEXT":          true,
+		"SP_HELPINDEX":         true,
+		"SP_HELPCONSTRAINT":    true,
+		"SP_HELPTRIGGER":       true,
+		"SP_COLUMNS":           true,
+		"SP_TABLES":            true,
+		"SP_STORED_PROCEDURES": true,
+		"SP_FKEYS":             true,
+		"SP_PKEYS":             true,
+		"SP_STATISTICS":        true,
+		"SP_DATABASES":         true,
+		"SP_HELPDB":            true,
+		"SP_SPACEUSED":         true,
+		// Intentionally not including sp_who / sp_lock in the initial set
+		// to keep the surface minimal. Can be evaluated later.
+	}
+
+	return safeAdminProcs[proc]
 }
 
 // getWhitelistedTables returns the cached list of tables/views allowed for modification.

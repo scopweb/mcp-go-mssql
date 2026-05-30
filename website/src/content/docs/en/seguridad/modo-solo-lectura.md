@@ -45,10 +45,28 @@ CREATE TABLE temp (id INT)    -- Blocked
 DROP TABLE users              -- Blocked
 ALTER TABLE users ADD col INT -- Blocked
 
--- Code execution
-EXEC sp_help                  -- Blocked (except safe procedures)
+-- Dangerous code execution
 EXEC xp_cmdshell 'dir'       -- Always blocked
+EXEC sp_executesql '...'     -- Always blocked
+EXEC sp_configure ...        -- Always blocked
 ```
+
+### Allowed administrative and schema reads
+
+Even in read-only mode, a small set of **administrative and schema introspection** operations are permitted because they are inherently read-only. This makes database discovery much more practical for tools and AI assistants:
+
+```sql
+-- Safe system procedures for schema exploration
+EXEC sp_help 'dbo.Users'              -- Table structure
+EXEC sp_helptext 'dbo.MyProcedure'    -- Source code of an object
+EXEC sp_spaceused 'dbo.Orders'        -- Space usage information
+EXEC sp_columns @table_name = 'Customers'
+EXEC sp_fkeys 'Orders'
+```
+
+These procedures are explicitly allowed because they do not modify data or server configuration. Any other system procedure (or dynamic SQL via EXEC) remains blocked.
+
+For most schema discovery use cases we recommend the dedicated `explore` and `inspect` tools instead of raw queries.
 
 ## Query validation
 
