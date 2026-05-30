@@ -120,3 +120,37 @@ tags-releases-backup/
 website/node_modules/
 website/dist/
 website/.astro/.env.private
+
+# =============================================================================
+# LOCAL DEVELOPMENT ARTIFACTS (never commit these)
+# =============================================================================
+
+# Local build outputs and temporary binaries
+*.exe
+*.exe~
+build/
+dist/
+
+# Local debug and scratch directories
+debug/
+debug-*/
+tmp/
+temp/
+scratch/
+
+# Local environment and config overrides
+.env
+.env.*
+!.env.example
+config.json
+claude_desktop_config.json
+
+# IDE / AI agent local state (extra safety)
+.claude/
+.agents/
+.cursor/
+.aider/
+
+# OS generated
+.DS_Store
+Thumbs.db
