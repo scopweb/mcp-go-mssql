@@ -1,70 +1,100 @@
-# MCP-Go-MSSQL
+# MCP Go MSSQL
 
-A secure Go-based solution for Microsoft SQL Server connectivity supporting both **Claude Desktop** (via MCP server) and **Claude Code** (via CLI tools).
+**The most secure way to give Claude, Grok, and other AI agents access to Microsoft SQL Server.**
 
-## Features
+Production-grade MCP server + CLI with mandatory TLS, SQL injection protection, granular read-only mode, and explicit support for legacy SQL Server 2008/2012.
 
-- **Security-first design** with configurable TLS encryption for database connections
-- **Granular table permissions** with whitelist for AI-safe database access
-- **SQL injection protection** using prepared statements exclusively
-- **Multi-table query validation** preventing unauthorized access via JOINs/subqueries
-- **Connection timeouts** and resource limits with pooling
-- **Flexible connection support** for modern and legacy SQL Server versions
-- **Custom connection strings** for special configurations (SQL Server 2008+)
-- **Configurable security parameters** for production and development environments
-- **Secure logging** with automatic sensitive data sanitization
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Security](https://img.shields.io/badge/Security-Hardened-green)](SECURITY.md)
+[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-purple)](https://modelcontextprotocol.io)
 
-## Quick Start
+**🌐 Full documentation & guides:** [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com)
 
-### 1. **Setup Dependencies**
-   ```bash
-   go mod tidy
-   ```
+---
 
-### 2. **Configure Database Connection**
-   
-   **Option A: Environment Variables (Recommended)**
-   ```bash
-   # Copy the example environment file
-   cp .env.example .env
-   
-   # Edit .env with your database credentials
-   # Then load the environment variables:
-   source .env  # Linux/Mac
-   # or for Windows PowerShell:
-   # Get-Content .env | ForEach-Object { $name, $value = $_ -split '=', 2; [Environment]::SetEnvironmentVariable($name, $value) }
-   ```
-   
-   **Option B: Direct Export (Linux/Mac)**
-   ```bash
-   export MSSQL_SERVER="your-server.database.windows.net"
-   export MSSQL_DATABASE="YourDatabase"
-   export MSSQL_USER="your_user"
-   export MSSQL_PASSWORD="your_password"
-   export DEVELOPER_MODE="false"
-   ```
-   
-   **Option C: Claude Desktop Integration**
-   ```bash
-   # Use config.example.json as template for Claude Desktop
-   cp config.example.json config.json
-   # Edit config.json with your database credentials
-   ```
+## Why This Project Exists
 
-3. **Build and Run**
-   ```bash
-   # Quick build (Windows)
-   build.bat
+Most MCP SQL connectors are either:
+- Too permissive for production use, or
+- Incompatible with older corporate SQL Server instances.
 
-   # Manual build
-   go build -o mcp-go-mssql.exe
+**MCP-Go-MSSQL** was built specifically for real enterprise environments where:
+- You need **AI access** to data without risking destructive operations
+- You still run **SQL Server 2008/2012** (or any version without modern TLS)
+- You want **fine-grained control** (per-table whitelist, read-only mode, dynamic connections)
 
-   # Development mode (detailed errors)
-   go run main.go
+It is used in production with both Claude Desktop and Grok Build.
 
-   # Production build (optimized)
-   go build -ldflags "-w -s" -o mcp-go-mssql-secure.exe
-   ```
+---
+
+## Key Security Features
+
+- **Mandatory TLS** by default (configurable for legacy servers)
+- **Prepared statements only** — zero dynamic SQL
+- **Read-only mode + whitelist** — block all modifications except on explicitly allowed tables (even through JOINs/subqueries)
+- **Per-connection security contexts** (dynamic mode)
+- **Automatic sensitive data sanitization** in logs
+- **Connection pooling + timeouts** to prevent resource exhaustion
+
+---
+
+## Quick Start (Claude Desktop)
+
+### 1. Download the latest release
+
+Get the prebuilt binary for your platform from the [Releases](https://github.com/scopweb/mcp-go-mssql/releases) page.
+
+### 2. Add to your Claude Desktop config
+
+```json
+{
+  "mcpServers": {
+    "mssql": {
+      "command": "C:\\MCPs\\mcp-go-mssql.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "your-server.database.windows.net",
+        "MSSQL_DATABASE": "YourDatabase",
+        "MSSQL_USER": "ai_user",
+        "MSSQL_PASSWORD": "your_password",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true"
+      }
+    }
+  }
+}
+```
+
+### 3. (Recommended) Use AI-Safe mode
+
+For maximum safety in production, combine:
+
+```env
+MSSQL_READ_ONLY=true
+MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
+```
+
+This allows the AI to read everything but only modify the tables you explicitly whitelist.
+
+**Full guides (including Windows Auth, dynamic connections, legacy SQL Server, and Grok Build setup):** [Documentation](https://mcp-go-mssql.scopweb.com)
+
+---
+
+## Quick Start (Development / From Source)
+
+```bash
+git clone https://github.com/scopweb/mcp-go-mssql.git
+cd mcp-go-mssql
+
+# Build
+go build -ldflags "-w -s" -o mcp-go-mssql.exe
+
+# Run with your .env (see .env.example)
+go run main.go
+```
+
+See the full development guide in the [documentation](https://mcp-go-mssql.scopweb.com/despliegue/desarrollo).
 
 ## Configuration
 
