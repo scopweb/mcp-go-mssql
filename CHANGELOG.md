@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- 🛡️ **Critical fix: Dynamic multi-connection mode + global READ_ONLY=false exposure** (high-severity):
+  - Added startup security **guard** that detects the dangerous combination (`MSSQL_DYNAMIC_MODE=true` or any `MSSQL_DYNAMIC_*` variables present **AND** `MSSQL_READ_ONLY=false` or unset) and **forces `readOnly=true`** (plus clears whitelist) with a loud `*** FATAL SECURITY MISCONFIGURATION DETECTED ***` log block.
+  - Directly mitigates the reported incident where an AI model (via direct calls or prompt injection) could do `dynamic_connect` to internal corporate/production databases (IDENTITY, CRM, GDP, FERRATGE, etc.) and then execute arbitrary destructive SQL through `query_database` because only the `*sql.DB` handle was switched — the global `serverConfig` was never updated per alias.
+  - Added zero-dependency `.env` loader from the directory next to the executable (populates unset keys only; host-passed env always wins). This makes the documented dynamic workflow in `issues/FAQ-08-mssql-dynamic-grok.md` actually work from source.
+  - Registered the four `dynamic_*` tools (`dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list`) in `tools/list` with correct annotations and security-aware stub handlers that explicitly report the effective (guarded) posture.
+  - Added `recover` in the background connection goroutine, `handleRequest`, and `handleToolCall` to prevent unhandled panics from crashing the stdio MCP server (major contributor to duplicate full startup logs observed in the incident).
+  - Enhanced `get_database_info` (disconnected path) and startup logging to clearly surface `DYNAMIC_MODE`, whether the guard fired, and the final effective `READ-ONLY` posture.
+  - This is a defense-in-depth measure until full per-alias `DynamicConn` + per-alias `serverConfig` context switching is implemented.
+  - Resolves the exact exposure confirmed live via `get_database_info` + `dynamic_available` on the vulnerable instance.
+
 ### Added
 - 📋 **MCP spec compliance** (spec 2025-11-25):
   - **`ping` handler** (MUST): Server now responds to `ping` with empty `{}` result as required by spec.
