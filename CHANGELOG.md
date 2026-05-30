@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - This is a defense-in-depth measure until full per-alias `DynamicConn` + per-alias `serverConfig` context switching is implemented.
   - Resolves the exact exposure confirmed live via `get_database_info` + `dynamic_available` on the vulnerable instance.
 
+- 🛡️ **Major hardening of Dynamic Connections (secure-by-default philosophy)**:
+  - Dynamic aliases now load with **strong safe defaults**: `READ_ONLY=true` if `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY` is not explicitly set to `false`. Empty whitelist when writable = no modifications allowed.
+  - Implemented real **per-alias security context**: `validateReadOnlyQuery` and `validateTablePermissions` now respect the active dynamic alias's `ReadOnly` + `WhitelistTables` configuration via `getEffectiveConfig()`.
+  - `dynamic_connect` / `dynamic_disconnect` are now fully functional: they open/close real connections, switch the active DB, and apply the alias-specific security posture.
+  - Added `confirm_operation` tool: Any modification attempt on a writable dynamic alias now **requires explicit prior confirmation** via this tool (90-second, one-time-use token). This prevents silent or prompt-injected destructive operations.
+  - Significantly improved table name extraction regex to better handle schema-qualified names (`dbo.Table`, `[schema].[table]`, etc.), making whitelist enforcement more reliable.
+  - Added multi-connection management (`connections` map per alias) with proper cleanup on switch/disconnect.
+  - `get_database_info` now clearly reports the active dynamic alias and its effective security posture.
+  - These changes make the "one application, multiple related databases" pattern much safer and practical.
+
 ### Added
 - 📋 **MCP spec compliance** (spec 2025-11-25):
   - **`ping` handler** (MUST): Server now responds to `ping` with empty `{}` result as required by spec.

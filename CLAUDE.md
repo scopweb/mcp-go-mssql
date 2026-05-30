@@ -125,6 +125,19 @@ The server reads database connection from these environment variables. See `.env
   - All other tables remain read-only
   - Prevents accidental data modification in production databases while allowing AI to work with temporary tables
 
+**Dynamic Connections (MSSQL_DYNAMIC_*)** — For accessing multiple related databases with a single MCP server load:
+
+**Critical Security Rule**: When using dynamic mode, **never set global `MSSQL_READ_ONLY=false`**. This was the cause of a previous high-severity exposure.
+
+Recommended secure pattern for "One Application + Multiple Related Databases":
+- Define only the aliases that belong to that logical application (e.g. `APP_MAIN`, `APP_IDENTITY`, `APP_AUDIT`).
+- Set `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY=true` for all production/important databases.
+- Use `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` if you allow any writes.
+- Create one dedicated "AI work" database/alias with very strict whitelist for any write operations the AI needs.
+
+Full recommended configuration and best practices: see the guide  
+`website/src/content/docs/guias/modo-dinamico-una-aplicacion-varias-bases.md` (and English version).
+
 **Configuration Examples:**
 ```bash
 # Production Azure SQL with AI Whitelist (RECOMMENDED for AI assistants)
@@ -163,6 +176,23 @@ DEVELOPER_MODE=true
 MSSQL_ENCRYPT=false
 # No user/password needed — uses Windows credentials
 # MSSQL_ENCRYPT=false is required because SQL 2008 doesn't support TLS 1.2
+
+# Secure Dynamic Mode - One Application, Multiple Related Databases (RECOMMENDED pattern)
+MSSQL_DYNAMIC_MODE=true
+DEVELOPER_MODE=false
+
+# All real production/important DBs → read only
+MSSQL_DYNAMIC_APP_MAIN_READ_ONLY=true
+MSSQL_DYNAMIC_APP_IDENTITY_READ_ONLY=true
+MSSQL_DYNAMIC_APP_AUDIT_READ_ONLY=true
+
+# Only one controlled alias for AI write operations (with strict whitelist)
+MSSQL_DYNAMIC_APP_AIWORK_SERVER=devsql01.local
+MSSQL_DYNAMIC_APP_AIWORK_DATABASE=AI_WorkArea
+MSSQL_DYNAMIC_APP_AIWORK_USER=ai_limited_writer
+MSSQL_DYNAMIC_APP_AIWORK_PASSWORD=...
+MSSQL_DYNAMIC_APP_AIWORK_READ_ONLY=false
+MSSQL_DYNAMIC_APP_AIWORK_WHITELIST_TABLES=ai_temp_tasks,ai_results,ai_audit
 ```
 
 ### TLS Certificate Handling
