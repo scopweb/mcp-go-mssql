@@ -18,7 +18,9 @@ import (
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
-	_ "github.com/microsoft/go-mssqldb/integratedauth/winsspi"
+	// NOTE: Windows Integrated Auth (winsspi) is conditionally imported in
+	// integrated_auth_windows.go using a //go:build windows tag so that
+	// `go build` and govulncheck succeed on Linux CI runners.
 )
 
 // MCP Protocol structures
@@ -475,7 +477,7 @@ func buildSecureConnectionString() (string, error) {
 		return connStr, nil
 	case "azure":
 		// Azure AD auth needs an additional implementation to obtain tokens
-		return "", fmt.Errorf("Azure AD authentication not implemented in buildSecureConnectionString; use MSSQL_CONNECTION_STRING or set MSSQL_AUTH=sql")
+		return "", fmt.Errorf("Azure AD authentication not implemented in buildSecureConnectionString; use MSSQL_CONNECTION_STRING or set MSSQL_AUTH=sql") //nolint:staticcheck // intentional capitalization for user-facing error
 	default:
 		// Default to SQL Server authentication
 		return fmt.Sprintf("server=%s;port=%s;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
@@ -730,7 +732,7 @@ func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, ta
 		ExpiresAt:   time.Now().Add(90 * time.Second), // 90 seconds to confirm
 	}
 
-	return fmt.Errorf("CONFIRMATION REQUIRED: This is a modification operation (%s) on a writable dynamic alias.\n\nYou must first call the 'confirm_operation' tool with this exact description:\n\"%s\"\n\nOnly after receiving confirmation will the operation be allowed.", operation, desc)
+	return fmt.Errorf("CONFIRMATION REQUIRED: This is a modification operation (%s) on a writable dynamic alias.\n\nYou must first call the 'confirm_operation' tool with this exact description:\n\"%s\"\n\nOnly after receiving confirmation will the operation be allowed.", operation, desc) //nolint:staticcheck // multi-line user-facing message; capitalization + punctuation are intentional
 }
 
 // isOperationConfirmed checks if there is a valid pending confirmation that matches the current operation.
@@ -1193,7 +1195,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					auth = "sql"
 				}
 				info.WriteString("MSSQL_AUTH: " + auth + "\n")
-				if auth == "sql" {
+				if auth == "sql" { //nolint:staticcheck // QF1003: switch would be slightly cleaner but if-else is fine here
 					if os.Getenv("MSSQL_USER") == "" {
 						info.WriteString("MSSQL_USER: NOT SET (required for SQL auth)\n")
 					} else {
@@ -2240,7 +2242,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "dynamic_connect":
-		aliasIface, _ := params.Arguments["alias"]
+		aliasIface := params.Arguments["alias"]
 		alias := ""
 		if s, ok := aliasIface.(string); ok {
 			alias = strings.ToUpper(strings.TrimSpace(s))
@@ -2354,7 +2356,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "confirm_operation":
-		descIface, _ := params.Arguments["description"]
+		descIface := params.Arguments["description"]
 		description := ""
 		if d, ok := descIface.(string); ok {
 			description = strings.TrimSpace(d)

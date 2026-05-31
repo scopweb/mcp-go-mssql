@@ -1,0 +1,62 @@
+# golangci-lint v2 configuration for mcp-go-mssql
+# This project is a security-critical MCP server for MSSQL with many
+# database Close() patterns where errors are intentionally ignored
+# (standard practice in Go DB code).
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # We use a conservative set that provides value without blocking the
+  # project while the large existing codebase is gradually cleaned up.
+  # The goal is "security and obvious bugs" rather than "style police".
+  default: standard
+  disable:
+    # Too noisy on this codebase (hundreds of exported types in main.go
+    # without perfect godoc comments, common in older Go projects).
+    - revive
+    # Extremely noisy because of the idiomatic Go pattern
+    # `defer rows.Close()` / `defer db.Close()` everywhere.
+    - errcheck
+
+  enable:
+    - gosec          # Security linter (SQLi, weak crypto, etc.)
+    # staticcheck, govet, ineffassign, unused, etc. come from "standard"
+
+  exclusions:
+    presets:
+      - common-false-positives
+      - legacy
+    rules:
+      # Test and debug utilities intentionally contain insecure patterns
+      # (hardcoded credentials for negative testing, etc.). Do not fail CI on them.
+      - path: ^test/
+        linters:
+          - gosec
+          - revive
+      - path: ^scripts/
+        linters:
+          - gosec
+      - path: ^website/
+        linters:
+          - gosec
+          - revive
+          - staticcheck
+          - govet
+          - ineffassign
+          - unused
+
+      # The example CLI connector is a standalone tool, not production server code.
+      - path: ^examples/
+        linters:
+          - gosec
+
+# Output configuration (v2 syntax)
+output:
+  formats:
+    text:
+      path: stdout
+  sort-results: true

@@ -60,12 +60,8 @@ func setupTestEnv() {
 		os.Setenv("MSSQL_AUTH", "sql")
 	}
 
-	// Verify required credentials are set before proceeding with database tests
-	// If not set, database tests will be skipped
-	if os.Getenv("MSSQL_SERVER") == "" || os.Getenv("MSSQL_DATABASE") == "" ||
-		os.Getenv("MSSQL_USER") == "" || os.Getenv("MSSQL_PASSWORD") == "" {
-		// This is intentional - tests requiring database should be skipped if credentials aren't set
-	}
+	// Database tests will skip themselves if the required environment
+	// variables (MSSQL_SERVER, MSSQL_DATABASE, etc.) are not set.
 }
 
 // newTestMCPServer creates an MCPMSSQLServer with rate limiter initialized for testing.
