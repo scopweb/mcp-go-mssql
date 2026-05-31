@@ -311,12 +311,17 @@ func TestMCPToolsList(t *testing.T) {
 		t.Fatalf("Failed to unmarshal tools result: %v", err)
 	}
 
+	// In the default test server (no MSSQL_DYNAMIC_* vars, no explicit DYNAMIC_MODE=true,
+	// and the test helper does not set classic MSSQL_* either), we are in classic mode.
+	// Therefore only the 6 core tools are exposed. This is the desired behavior:
+	// classic servers (the majority of real .mcp.json usage) must not advertise
+	// dynamic_* tools so the AI does not get confused.
 	expectedTools := []string{
 		"query_database", "get_database_info", "explore", "inspect", "execute_procedure", "explain_query",
-		"dynamic_available", "dynamic_connect", "dynamic_disconnect", "dynamic_list", "confirm_operation",
 	}
 	if len(toolsResult.Tools) != len(expectedTools) {
-		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(toolsResult.Tools))
+		t.Errorf("Expected %d tools (classic mode), got %d. Tools: %+v",
+			len(expectedTools), len(toolsResult.Tools), toolsResult.Tools)
 	}
 
 	for _, expectedTool := range expectedTools {
@@ -329,6 +334,13 @@ func TestMCPToolsList(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("Expected tool %s not found", expectedTool)
+		}
+	}
+
+	// Verify that no dynamic tools leaked into a classic server
+	for _, tool := range toolsResult.Tools {
+		if strings.HasPrefix(tool.Name, "dynamic_") || tool.Name == "confirm_operation" {
+			t.Errorf("Dynamic tool %s should not be present on a classic test server", tool.Name)
 		}
 	}
 }
