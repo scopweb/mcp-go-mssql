@@ -252,6 +252,7 @@ type MCPMSSQLServer struct {
 	secLogger   *SecurityLogger
 	devMode     bool
 	config      serverConfig
+	isDynamic   bool // frozen at startup from isDynamicMode(); controls tool surface + connection behavior
 
 	// Dynamic connections support (for "one app, multiple related DBs" use case)
 	dynamicAliases  map[string]DynamicAlias
@@ -785,7 +786,18 @@ func parseWhitelistTables(env string) []string {
 // if it exists. It only sets variables that are not already present in the environment
 // (MCP host-passed env takes precedence). This enables the documented dynamic
 // connection workflow where credentials live next to the exe.
+//
+// Users running multiple isolated MCP server instances (classic + dynamic, or multiple
+// classic for different DBs) can set MSSQL_IGNORE_LOCAL_ENV=true in their .mcp.json
+// "env" block to completely disable .env loading for that instance. This provides
+// strong isolation even if a .env file was accidentally left next to the executable.
 func loadDotEnvIfPresent(secLogger *SecurityLogger) {
+	// Nuclear option for isolation: completely ignore any .env next to the exe.
+	// Intended for classic servers configured purely via Claude Desktop .mcp.json env.
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("MSSQL_IGNORE_LOCAL_ENV"))); v == "true" || v == "1" || v == "yes" {
+		return
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return // cannot determine location, skip .env (rely on passed env)
@@ -824,6 +836,7 @@ func loadDotEnvIfPresent(secLogger *SecurityLogger) {
 }
 
 // hasDynamicAliases returns true if any MSSQL_DYNAMIC_* variables are present in env.
+// Note: This is only used for auto-detection when MSSQL_DYNAMIC_MODE is not explicitly set.
 func hasDynamicAliases() bool {
 	for _, env := range os.Environ() {
 		if strings.HasPrefix(env, "MSSQL_DYNAMIC_") {
@@ -833,9 +846,44 @@ func hasDynamicAliases() bool {
 	return false
 }
 
-// isDynamicMode reports whether the server should expose dynamic connection tools.
+// isDynamicMode reports whether the server should operate in dynamic multi-connection mode
+// (exposing dynamic_available / dynamic_connect / etc. and loading per-alias configs).
+//
+// Precedence (highest to lowest):
+//   1. Explicit MSSQL_DYNAMIC_MODE=false  → always classic (even if DYNAMIC_* vars exist anywhere)
+//   2. Explicit MSSQL_DYNAMIC_MODE=true   → always dynamic
+//   3. No explicit setting:
+//        - If any classic connection config is present (MSSQL_SERVER, MSSQL_CONNECTION_STRING,
+//          or MSSQL_DATABASE) → classic mode. This protects users who configure classic servers
+//          via .mcp.json "env" blocks or who have polluted parent environments.
+//        - Otherwise, if any MSSQL_DYNAMIC_* vars exist → dynamic mode (auto-detect).
+//        - Otherwise → classic (no DB configured).
+//
+// This design allows safe co-existence of multiple mcp-go-mssql instances (some classic,
+// some dynamic) under Claude Desktop, even when the host process environment contains
+// stray dynamic variables from other .env files or previous sessions.
 func isDynamicMode() bool {
-	return strings.ToLower(os.Getenv("MSSQL_DYNAMIC_MODE")) == "true" || hasDynamicAliases()
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("MSSQL_DYNAMIC_MODE")))
+	if mode == "false" || mode == "0" || mode == "no" || mode == "off" {
+		return false // explicit opt-out always wins, multiple spellings accepted
+	}
+	if mode == "true" || mode == "1" || mode == "yes" || mode == "on" {
+		return true
+	}
+
+	// No explicit MSSQL_DYNAMIC_MODE → decide based on what the user actually configured.
+	hasClassicConfig := os.Getenv("MSSQL_SERVER") != "" ||
+		os.Getenv("MSSQL_CONNECTION_STRING") != "" ||
+		os.Getenv("MSSQL_DATABASE") != ""
+
+	if hasClassicConfig {
+		// User (or .mcp.json) provided a default connection → treat as classic.
+		// Ignore any stray MSSQL_DYNAMIC_* that may have leaked from parent env or other .env files.
+		return false
+	}
+
+	// No classic default configured → fall back to presence of dynamic aliases.
+	return hasDynamicAliases()
 }
 
 // loadDynamicAliases scans the environment for MSSQL_DYNAMIC_<ALIAS>_* variables
@@ -2203,11 +2251,20 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			},
 		}
 
-	// === Dynamic multi-connection tool stubs (security-hardened) ===
-	// These tools are always advertised when dynamic mode is possible.
-	// Real connection switching + per-alias security contexts will be implemented
-	// on top of the foundation added in this security fix.
+	// === Dynamic multi-connection tools (only reachable when s.isDynamic) ===
+	// When !s.isDynamic these cases are unreachable because the tools are not
+	// advertised in tools/list, but we keep cheap runtime guards for safety.
 	case "dynamic_available":
+		if !s.isDynamic {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: dynamic tools are not available in this server instance (classic single-connection mode). This usually means the server was started with classic MSSQL_SERVER / MSSQL_DATABASE configuration."}},
+					IsError: true,
+				},
+			}
+		}
 		s.dynamicMu.RLock()
 		defer s.dynamicMu.RUnlock()
 
@@ -2242,6 +2299,16 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "dynamic_connect":
+		if !s.isDynamic {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: dynamic_connect is not available in this server instance (classic single-connection mode)."}},
+					IsError: true,
+				},
+			}
+		}
 		aliasIface := params.Arguments["alias"]
 		alias := ""
 		if s, ok := aliasIface.(string); ok {
@@ -2287,6 +2354,16 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "dynamic_disconnect":
+		if !s.isDynamic {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: dynamic_disconnect is not available in this server instance (classic single-connection mode)."}},
+					IsError: true,
+				},
+			}
+		}
 		s.dynamicMu.Lock()
 		defer s.dynamicMu.Unlock()
 
@@ -2323,6 +2400,16 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "dynamic_list":
+		if !s.isDynamic {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: dynamic_list is not available in this server instance (classic single-connection mode)."}},
+					IsError: true,
+				},
+			}
+		}
 		s.dynamicMu.RLock()
 		defer s.dynamicMu.RUnlock()
 
@@ -2356,6 +2443,16 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 	case "confirm_operation":
+		if !s.isDynamic {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: confirm_operation is only relevant for writable dynamic aliases and is not available in classic single-connection mode."}},
+					IsError: true,
+				},
+			}
+		}
 		descIface := params.Arguments["description"]
 		description := ""
 		if d, ok := descIface.(string); ok {
@@ -2478,7 +2575,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Title:   "MSSQL Database Connector",
 					Version: "1.0.0",
 				},
-				Instructions: "This server provides secure access to a Microsoft SQL Server database. Use get_database_info to check connection status (including active dynamic alias and effective read-only posture), explore/inspect for schema, query_database to run queries (subject to active security config), and the dynamic_* tools (dynamic_available, dynamic_connect, etc.) when MSSQL_DYNAMIC_* variables are configured. All modifications are governed by the active read-only + whitelist policy.",
+				Instructions: "This server provides secure access to a Microsoft SQL Server database. Use get_database_info to check connection status, explore/inspect for schema, query_database / execute_procedure for operations (subject to read-only + whitelist policy). When configured for dynamic multi-DB mode (MSSQL_DYNAMIC_* variables + no classic MSSQL_SERVER), the dynamic_available / dynamic_connect / dynamic_list / confirm_operation tools become available. All modifications are governed by the active security posture.",
 			},
 		}
 
@@ -2678,97 +2775,107 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					OpenWorldHint:   boolPtr(false),
 				},
 			},
-			// Dynamic multi-connection tools (enabled when MSSQL_DYNAMIC_MODE or MSSQL_DYNAMIC_* vars are present)
-			{
-				Name:        "dynamic_available",
-				Title:       "List Dynamic Connections",
-				Description: "List all preconfigured dynamic database connections (aliases defined via MSSQL_DYNAMIC_<ALIAS>_* environment variables). Does not expose credentials. Use dynamic_connect to activate one.",
-				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
-					Required:   []string{},
-				},
-				Annotations: &ToolAnnotations{
-					ReadOnlyHint:    boolPtr(true),
-					DestructiveHint: boolPtr(false),
-					IdempotentHint:  boolPtr(true),
-					OpenWorldHint:   boolPtr(false),
-				},
-			},
-			{
-				Name:        "dynamic_connect",
-				Title:       "Connect to Dynamic Alias",
-				Description: "Switch the active database connection to one of the preconfigured dynamic aliases (e.g. 'CRM', 'IDENTITY', 'GDP'). The security posture (read-only vs full access) is determined by the alias configuration or global safe defaults. After connecting, use get_database_info to verify the active alias and its effective permissions.",
-				InputSchema: InputSchema{
-					Type: "object",
-					Properties: map[string]Property{
-						"alias": {
-							Type:        "string",
-							Description: "The alias name of the preconfigured connection (case-insensitive, e.g. 'CRM' or 'crm')",
-						},
+		}
+
+		// Dynamic tools (and confirm_operation) are ONLY included in the tool list
+		// for servers that started in dynamic mode. Classic servers (the common case
+		// when using .mcp.json "env" with plain MSSQL_SERVER etc.) will never see
+		// dynamic_available, dynamic_connect, etc. This eliminates the "AI always
+		// tries dynamic connections" problem reported by users running multiple
+		// isolated server instances.
+		if s.isDynamic {
+			tools = append(tools,
+				Tool{
+					Name:        "dynamic_available",
+					Title:       "List Dynamic Connections",
+					Description: "List all preconfigured dynamic database connections (aliases defined via MSSQL_DYNAMIC_<ALIAS>_* environment variables). Does not expose credentials. Use dynamic_connect to activate one.",
+					InputSchema: InputSchema{
+						Type:       "object",
+						Properties: map[string]Property{},
+						Required:   []string{},
 					},
-					Required: []string{"alias"},
-				},
-				Annotations: &ToolAnnotations{
-					ReadOnlyHint:    boolPtr(false),
-					DestructiveHint: boolPtr(false), // depends on the *alias* posture, not global
-					IdempotentHint:  boolPtr(false),
-					OpenWorldHint:   boolPtr(false),
-				},
-			},
-			{
-				Name:        "dynamic_disconnect",
-				Title:       "Disconnect Dynamic Connection",
-				Description: "Close the currently active dynamic connection and return to disconnected state. Does not affect other aliases.",
-				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
-					Required:   []string{},
-				},
-				Annotations: &ToolAnnotations{
-					ReadOnlyHint:    boolPtr(true),
-					DestructiveHint: boolPtr(false),
-					IdempotentHint:  boolPtr(true),
-					OpenWorldHint:   boolPtr(false),
-				},
-			},
-			{
-				Name:        "dynamic_list",
-				Title:       "List Active Dynamic Connections",
-				Description: "Show currently loaded dynamic aliases and which one (if any) is the active connection for subsequent query_database calls.",
-				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
-					Required:   []string{},
-				},
-				Annotations: &ToolAnnotations{
-					ReadOnlyHint:    boolPtr(true),
-					DestructiveHint: boolPtr(false),
-					IdempotentHint:  boolPtr(true),
-					OpenWorldHint:   boolPtr(false),
-				},
-			},
-			{
-				Name:        "confirm_operation",
-				Title:       "Confirm Dangerous Operation",
-				Description: "Explicitly confirm a potentially destructive operation (INSERT/UPDATE/DELETE/DROP/etc.) on a writable dynamic alias. This is a required security step. You must call this tool with a clear description of what you intend to do before the actual modification query will be allowed.",
-				InputSchema: InputSchema{
-					Type: "object",
-					Properties: map[string]Property{
-						"description": {
-							Type:        "string",
-							Description: "Clear description of the operation you want to perform (e.g. 'DELETE all rows from temp_ai where created < 2025-01-01')",
-						},
+					Annotations: &ToolAnnotations{
+						ReadOnlyHint:    boolPtr(true),
+						DestructiveHint: boolPtr(false),
+						IdempotentHint:  boolPtr(true),
+						OpenWorldHint:   boolPtr(false),
 					},
-					Required: []string{"description"},
 				},
-				Annotations: &ToolAnnotations{
-					ReadOnlyHint:    boolPtr(false),
-					DestructiveHint: boolPtr(true),
-					IdempotentHint:  boolPtr(false),
-					OpenWorldHint:   boolPtr(false),
+				Tool{
+					Name:        "dynamic_connect",
+					Title:       "Connect to Dynamic Alias",
+					Description: "Switch the active database connection to one of the preconfigured dynamic aliases (e.g. 'CRM', 'IDENTITY', 'GDP'). The security posture (read-only vs full access) is determined by the alias configuration or global safe defaults. After connecting, use get_database_info to verify the active alias and its effective permissions.",
+					InputSchema: InputSchema{
+						Type: "object",
+						Properties: map[string]Property{
+							"alias": {
+								Type:        "string",
+								Description: "The alias name of the preconfigured connection (case-insensitive, e.g. 'CRM' or 'crm')",
+							},
+						},
+						Required: []string{"alias"},
+					},
+					Annotations: &ToolAnnotations{
+						ReadOnlyHint:    boolPtr(false),
+						DestructiveHint: boolPtr(false), // depends on the *alias* posture, not global
+						IdempotentHint:  boolPtr(false),
+						OpenWorldHint:   boolPtr(false),
+					},
 				},
-			},
+				Tool{
+					Name:        "dynamic_disconnect",
+					Title:       "Disconnect Dynamic Connection",
+					Description: "Close the currently active dynamic connection and return to disconnected state. Does not affect other aliases.",
+					InputSchema: InputSchema{
+						Type:       "object",
+						Properties: map[string]Property{},
+						Required:   []string{},
+					},
+					Annotations: &ToolAnnotations{
+						ReadOnlyHint:    boolPtr(true),
+						DestructiveHint: boolPtr(false),
+						IdempotentHint:  boolPtr(true),
+						OpenWorldHint:   boolPtr(false),
+					},
+				},
+				Tool{
+					Name:        "dynamic_list",
+					Title:       "List Active Dynamic Connections",
+					Description: "Show currently loaded dynamic aliases and which one (if any) is the active connection for subsequent query_database calls.",
+					InputSchema: InputSchema{
+						Type:       "object",
+						Properties: map[string]Property{},
+						Required:   []string{},
+					},
+					Annotations: &ToolAnnotations{
+						ReadOnlyHint:    boolPtr(true),
+						DestructiveHint: boolPtr(false),
+						IdempotentHint:  boolPtr(true),
+						OpenWorldHint:   boolPtr(false),
+					},
+				},
+				Tool{
+					Name:        "confirm_operation",
+					Title:       "Confirm Dangerous Operation",
+					Description: "Explicitly confirm a potentially destructive operation (INSERT/UPDATE/DELETE/DROP/etc.) on a writable dynamic alias. This is a required security step. You must call this tool with a clear description of what you intend to do before the actual modification query will be allowed.",
+					InputSchema: InputSchema{
+						Type: "object",
+						Properties: map[string]Property{
+							"description": {
+								Type:        "string",
+								Description: "Clear description of the operation you want to perform (e.g. 'DELETE all rows from temp_ai where created < 2025-01-01')",
+							},
+						},
+						Required: []string{"description"},
+					},
+					Annotations: &ToolAnnotations{
+						ReadOnlyHint:    boolPtr(false),
+						DestructiveHint: boolPtr(true),
+						IdempotentHint:  boolPtr(false),
+						OpenWorldHint:   boolPtr(false),
+					},
+				},
+			)
 		}
 
 		return &MCPResponse{
@@ -2833,8 +2940,20 @@ func main() {
 	// Host-passed environment variables always take precedence.
 	loadDotEnvIfPresent(secLogger)
 
-	// Load dynamic aliases with their individual security postures (critical for safe multi-DB usage)
-	dynamicAliases := loadDynamicAliases(secLogger)
+	// Determine mode once. We use this both to decide whether to load dynamic aliases
+	// and to expose the correct tool surface to the AI.
+	dynamicMode := isDynamicMode()
+
+	// Only load dynamic aliases when operating in dynamic mode.
+	// This prevents stray MSSQL_DYNAMIC_* variables (inherited from Claude Desktop's
+	// parent environment, previous shell sessions, or leftover .env files in other folders)
+	// from polluting classic single-connection server instances.
+	var dynamicAliases map[string]DynamicAlias
+	if dynamicMode {
+		dynamicAliases = loadDynamicAliases(secLogger)
+	} else {
+		dynamicAliases = make(map[string]DynamicAlias)
+	}
 
 	// Check for developer mode
 	devMode := strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true"
@@ -2870,6 +2989,7 @@ func main() {
 		secLogger:      secLogger,
 		devMode:        devMode,
 		config:         cfg,
+		isDynamic:      dynamicMode,
 		dynamicAliases: dynamicAliases,
 	}
 	// Initialize rate limiter: 60 tool calls per minute
@@ -2952,6 +3072,8 @@ func main() {
 		}
 		if isDynamicMode() {
 			secLogger.Printf("  DYNAMIC_ALIASES_DETECTED=true (see dynamic_available tool at runtime)")
+		} else {
+			secLogger.Printf("  DYNAMIC_MODE=false (classic single-connection mode)")
 		}
 
 		// Log security settings (using cached config)
@@ -2963,7 +3085,7 @@ func main() {
 
 		if customConnStr == "" && serverHost == "" {
 			if isDynamicMode() {
-				secLogger.Printf("Dynamic multi-connection mode enabled - no default connection configured in .env (use dynamic_connect after startup)")
+				secLogger.Printf("Dynamic multi-connection mode enabled - no default connection configured (use dynamic_connect after startup)")
 			} else {
 				secLogger.Printf("No MSSQL_SERVER or MSSQL_CONNECTION_STRING environment variable - database features disabled")
 			}
