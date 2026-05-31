@@ -20,9 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history is required for only-new-issues to work reliably.
-          # Without it, golangci-lint often reports false "new" issues or
-          # fails to compute the diff correctly on pushes.
+          # Full git history improves reliability for golangci-lint and other tools.
           fetch-depth: 0
 
       - name: Setup Go
@@ -35,8 +33,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1.0
-          # Config lives at .golangci.yml in the repo root.
-          only-new-issues: true
+          # .golangci.yml in the repo root controls the linter configuration.
 
   test:
     name: Test (race + coverage)
@@ -44,6 +41,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history for consistency and tooling reliability.
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -85,6 +85,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history for consistency and tooling reliability.
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
