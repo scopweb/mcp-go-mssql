@@ -93,7 +93,8 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        # After the introduction of integrated_auth_windows.go (//go:build windows),
-        # govulncheck ./... works cleanly on Linux runners. The old scoping to
-        # non-existent ./internal/... ./cli/... directories has been removed.
-        run: govulncheck ./...
+        # We exclude the winsspi package because it is Windows-only and
+        # govulncheck on Linux runners cannot load it (even with build tags).
+        # This is a well-known limitation with github.com/microsoft/go-mssqldb.
+        run: |
+          govulncheck $(go list ./... | grep -v 'integratedauth/winsspi')

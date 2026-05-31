@@ -31,8 +31,11 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run govulncheck
-        # Works cleanly thanks to integrated_auth_windows.go (//go:build windows).
-        run: govulncheck ./...
+        # We exclude the winsspi package because it is Windows-only and
+        # govulncheck on Linux runners cannot load it (even with build tags).
+        # This is a well-known limitation with github.com/microsoft/go-mssqldb.
+        run: |
+          govulncheck $(go list ./... | grep -v 'integratedauth/winsspi')
 
       - name: Run gosec
         run: |
