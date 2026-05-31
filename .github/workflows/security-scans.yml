@@ -4,11 +4,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   push:
-    branches: [ master ]
+    branches: [master]
+
+# Lightweight security-only workflow.
+# The full CI (lint + tests + govulncheck) lives in ci.yml.
+# This one is kept for quick security signal on PRs that touch sensitive areas.
 
 jobs:
   security:
-    name: Run govulncheck and gosec
+    name: Security (govulncheck + gosec)
     runs-on: ubuntu-latest
 
     steps:
@@ -19,6 +23,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
 
       - name: Install security tools
         run: |
@@ -26,15 +31,19 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run govulncheck
-        run: |
-          govulncheck ./...
+        # Works cleanly thanks to integrated_auth_windows.go (//go:build windows).
+        run: govulncheck ./...
 
       - name: Run gosec
         run: |
-          # Exclude test/debug/tool utility directories and test files from security scanning
-          # These contain test harnesses and debug tools, not production code
-          gosec -tests=false -exclude-dir=test -exclude-dir=debug -exclude-dir=tools -exclude-dir=claude-code -exclude-dir=pkg ./...
+          # Exclude non-production directories (test harnesses, examples, docs, scripts).
+          # These intentionally contain patterns that would otherwise trigger findings.
+          gosec -tests=false \
+            -exclude-dir=test \
+            -exclude-dir=scripts \
+            -exclude-dir=website \
+            -exclude-dir=examples \
+            ./...
 
       - name: Run tests
-        run: |
-          go test ./...
+        run: go test ./...
