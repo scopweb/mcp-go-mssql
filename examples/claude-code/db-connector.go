@@ -11,7 +11,7 @@ import (
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
-	_ "github.com/microsoft/go-mssqldb/integratedauth/winsspi"
+	// Windows Integrated Auth is conditionally included via integrated_auth_windows.go (build tag)
 )
 
 // DatabaseConfig holds connection configuration
