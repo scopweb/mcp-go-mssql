@@ -2284,7 +2284,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				if len(a.WhitelistTables) > 0 {
 					wl = fmt.Sprintf(" | Whitelist: %s", strings.Join(a.WhitelistTables, ","))
 				}
-				sb.WriteString(fmt.Sprintf("- %s → %s/%s (%s%s)\n", alias, a.Server, a.Database, ro, wl))
+				fmt.Fprintf(&sb, "- %s → %s/%s (%s%s)\n", alias, a.Server, a.Database, ro, wl)
 			}
 		}
 
@@ -2424,13 +2424,13 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				if alias == s.activeAlias {
 					active = "  ← ACTIVE"
 				}
-				sb.WriteString(fmt.Sprintf("- %s (%s/%s)%s\n", alias, a.Server, a.Database, active))
+				fmt.Fprintf(&sb, "- %s (%s/%s)%s\n", alias, a.Server, a.Database, active)
 			}
 		}
 
-		sb.WriteString(fmt.Sprintf("\nTotal: %d aliases\n", len(s.dynamicAliases)))
+		fmt.Fprintf(&sb, "\nTotal: %d aliases\n", len(s.dynamicAliases))
 		if s.activeAlias != "" {
-			sb.WriteString(fmt.Sprintf("Active connection: %s\n", s.activeAlias))
+			fmt.Fprintf(&sb, "Active connection: %s\n", s.activeAlias)
 		} else {
 			sb.WriteString("No active dynamic connection (use dynamic_connect <alias>)\n")
 		}
