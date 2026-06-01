@@ -821,3 +821,126 @@ func TestProcedureNameValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestDynamicModeDetection covers the critical precedence rules added to prevent
+// classic .mcp.json configurations from being hijacked by stray MSSQL_DYNAMIC_*
+// variables (from parent process, previous shells, or .env files next to other exes).
+func TestDynamicModeDetection(t *testing.T) {
+	tests := []struct {
+		name        string
+		setEnv      map[string]string
+		wantDynamic bool
+		description string
+	}{
+		{
+			name: "explicit false always wins (even with dynamic vars present)",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_MODE":       "false",
+				"MSSQL_DYNAMIC_APP_SERVER": "sql01.local",
+				"MSSQL_DYNAMIC_APP_DATABASE": "TestDB",
+				"MSSQL_SERVER":             "",
+			},
+			wantDynamic: false,
+			description: "User explicitly wants classic mode for isolation",
+		},
+		{
+			name: "explicit true forces dynamic",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_MODE": "true",
+			},
+			wantDynamic: true,
+		},
+		{
+			name: "classic config present (MSSQL_SERVER) forces classic even with dynamic vars",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_MODE":       "", // not set
+				"MSSQL_SERVER":             "10.0.0.5",
+				"MSSQL_DATABASE":           "JJP_TRANSFER",
+				"MSSQL_DYNAMIC_FOO_SERVER": "other",
+			},
+			wantDynamic: false,
+			description: "Core fix: .mcp.json classic configs must win over environment pollution",
+		},
+		{
+			name: "no classic config + dynamic vars present → dynamic (auto-detect)",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_MODE":        "",
+				"MSSQL_SERVER":              "",
+				"MSSQL_DYNAMIC_PROD_SERVER": "prod.local",
+				"MSSQL_DYNAMIC_PROD_DATABASE": "ProdDB",
+			},
+			wantDynamic: true,
+		},
+		{
+			name: "explicit false with various spellings",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_MODE":     "NO",
+				"MSSQL_DYNAMIC_X_SERVER": "x",
+			},
+			wantDynamic: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use t.Setenv so state is automatically restored after the subtest
+			for k, v := range tc.setEnv {
+				t.Setenv(k, v)
+			}
+
+			got := isDynamicMode()
+			if got != tc.wantDynamic {
+				t.Errorf("isDynamicMode() = %v, want %v\nCase: %s\nEnv snapshot: %+v",
+					got, tc.wantDynamic, tc.description, tc.setEnv)
+			}
+		})
+	}
+}
+
+// TestClassicServerDoesNotExposeDynamicTools verifies that when running in classic
+// mode (the common .mcp.json direct config case), the tools/list response does not
+// include any dynamic_* or confirm_operation tools.
+func TestClassicServerDoesNotExposeDynamicTools(t *testing.T) {
+	setupTestEnv()
+
+	// Force classic mode via the new precedence rule
+	t.Setenv("MSSQL_DYNAMIC_MODE", "")
+	t.Setenv("MSSQL_SERVER", "localhost")
+	t.Setenv("MSSQL_DATABASE", "TestDB")
+	t.Setenv("MSSQL_DYNAMIC_ANYTHING_SERVER", "should-be-ignored")
+
+	server := newTestMCPServer()
+	// Simulate what main() does
+	server.isDynamic = isDynamicMode()
+
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      "test-tools-classic",
+		Method:  "tools/list",
+	}
+
+	resp := server.handleRequest(req)
+	if resp.Error != nil {
+		t.Fatalf("tools/list failed: %v", resp.Error)
+	}
+
+	resultBytes, _ := json.Marshal(resp.Result)
+	var toolsResult ToolsListResult
+	_ = json.Unmarshal(resultBytes, &toolsResult)
+
+	dynamicToolCount := 0
+	for _, tool := range toolsResult.Tools {
+		if strings.HasPrefix(tool.Name, "dynamic_") || tool.Name == "confirm_operation" {
+			dynamicToolCount++
+			t.Logf("Unexpected dynamic tool exposed: %s", tool.Name)
+		}
+	}
+
+	if dynamicToolCount > 0 {
+		t.Errorf("Classic server exposed %d dynamic tools (expected 0)", dynamicToolCount)
+	}
+
+	if len(toolsResult.Tools) != 6 {
+		t.Errorf("Expected exactly 6 core tools in classic mode, got %d", len(toolsResult.Tools))
+	}
+}
