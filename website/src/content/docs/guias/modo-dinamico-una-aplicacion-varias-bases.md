@@ -19,6 +19,15 @@ En estos casos, quieres:
 
 El **Modo Dinámico** es la herramienta correcta para esto.
 
+> **Nota sobre aislamiento con servidores clásicos**: Si además mantienes servidores MCP clásicos (configurados con `MSSQL_SERVER` directo en `.mcp.json`), el servidor ahora los protege automáticamente. Para aislamiento fuerte (especialmente si tienes `.env` en otras carpetas), añade estas dos líneas en las instancias clásicas:
+>
+> ```json
+> "MSSQL_IGNORE_LOCAL_ENV": "true",
+> "MSSQL_DYNAMIC_MODE": "false"
+> ```
+>
+> Receta completa + troubleshooting: [Variables de entorno → Receta Servidor Clásico Aislado](../configuracion/variables-entorno).
+
 ---
 
 ## Principio Fundamental de Seguridad
