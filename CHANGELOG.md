@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 🐛 **Critical usability fix for classic (non-dynamic) servers in Claude Desktop / multiple MCP instances**:
+  - `isDynamicMode()` now has clear, documented precedence that strongly protects classic single-connection configurations.
+  - When `MSSQL_SERVER`, `MSSQL_CONNECTION_STRING`, or `MSSQL_DATABASE` is present (typical when configuring via `.mcp.json` "env" block), the server **forces classic mode** even if stray `MSSQL_DYNAMIC_*` variables exist in the inherited environment or in a `.env` file next to the executable.
+  - This directly fixes the reported issue where users configuring pure classic servers (e.g. `mssql2` with direct credentials) would still see `dynamic_available` / `dynamic_connect` tools and have the AI attempt dynamic connections.
+  - Explicit `MSSQL_DYNAMIC_MODE=false` (plus aliases "0", "no", "off") continues to work as a hard override.
+  - Added `MSSQL_IGNORE_LOCAL_ENV=true` as a nuclear isolation option: completely disables `.env` loading next to the exe when passed in the host environment (e.g. from `.mcp.json`). Extremely useful when running several isolated `mcp-go-mssql` binaries from different folders.
+  - Dynamic tools (`dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list`, `confirm_operation`) are now **conditionally registered** — classic servers only expose the 6 core tools.
+  - Dynamic aliases are no longer parsed at all for classic-mode servers (cleaner memory + behavior).
+  - Added runtime guards in all dynamic handlers as defense-in-depth.
+  - Updated `TestMCPToolsList` and added dedicated tests for the new mode detection logic.
+  - **Impact**: Users can now safely run multiple independent MCP servers (some classic for specific DBs, some dynamic for "one app + multiple DBs") without environment leakage or AI confusion. This was a long-standing friction point for real production usage with Claude Desktop.
+
 ### Removed
 - **AUTOPILOT concept completely removed**: The `AUTOPILOT` / `MSSQL_AUTOPILOT` idea (never fully implemented) has been fully excised from the codebase and all documentation. The name had become misleading over time and generated conflicting guidance. All references (code stub, examples, and recommendations) have been cleaned up.
 

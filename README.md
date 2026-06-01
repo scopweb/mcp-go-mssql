@@ -113,6 +113,21 @@ Key principles:
 - Default to `READ_ONLY=true` on all real/important databases.
 - Use a dedicated, heavily whitelisted alias if the AI needs any write capability.
 
+### Running Multiple Isolated Classic Servers
+
+If you run **several separate MCP servers** at the same time (for example: one dynamic server for multiple related databases + several classic servers for specific critical databases), you can now isolate them properly.
+
+The server now strongly protects classic configurations:
+- Providing `MSSQL_SERVER` (or a connection string) in the `.mcp.json` env block will keep the server in **classic mode**, even if dynamic variables exist in the environment or in `.env` files.
+- For maximum isolation, add these two variables to every classic instance:
+
+```json
+"MSSQL_IGNORE_LOCAL_ENV": "true",
+"MSSQL_DYNAMIC_MODE": "false"
+```
+
+Full recommended recipe and troubleshooting for this exact scenario: see the [Environment Variables documentation](https://mcp-go-mssql.scopweb.com/configuracion/variables-entorno).
+
 ## Configuration
 
 ### Claude Desktop Configuration Examples
