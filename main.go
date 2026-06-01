@@ -363,6 +363,7 @@ func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
+		// #nosec G104 -- close error ignored when ping fails; db state is already broken
 		db.Close()
 		return fmt.Errorf("failed to connect to alias '%s': %w", aliasName, err)
 	}
@@ -805,6 +806,7 @@ func loadDotEnvIfPresent(secLogger *SecurityLogger) {
 	exeDir := filepath.Dir(exePath)
 	envPath := filepath.Join(exeDir, ".env")
 
+	// #nosec G304 -- envPath is derived from os.Executable(), not user input
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return // no .env next to exe is normal/OK
