@@ -1321,15 +1321,15 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				// Dynamic mode - show the active alias and its specific posture
 				if alias, ok := s.dynamicAliases[activeAlias]; ok {
 					effective := s.getEffectiveConfig()
-					info.WriteString(fmt.Sprintf("Active Dynamic Alias: %s\n", activeAlias))
-					info.WriteString(fmt.Sprintf("  Server/Database: %s / %s\n", alias.Server, alias.Database))
+					fmt.Fprintf(&info, "Active Dynamic Alias: %s\n", activeAlias)
+					fmt.Fprintf(&info, "  Server/Database: %s / %s\n", alias.Server, alias.Database)
 					ro := "READ-ONLY"
 					if !effective.readOnly {
 						ro = "WRITABLE (whitelist restricted)"
 					}
-					info.WriteString(fmt.Sprintf("  Security Posture: %s\n", ro))
+					fmt.Fprintf(&info, "  Security Posture: %s\n", ro)
 					if len(effective.whitelistTables) > 0 {
-						info.WriteString(fmt.Sprintf("  Allowed modification tables: %s\n", strings.Join(effective.whitelistTables, ", ")))
+						fmt.Fprintf(&info, "  Allowed modification tables: %s\n", strings.Join(effective.whitelistTables, ", "))
 					}
 				}
 			} else if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
