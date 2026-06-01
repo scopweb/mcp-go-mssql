@@ -19,6 +19,15 @@ In these cases, you want to:
 
 **Dynamic Mode** is the right tool for this.
 
+> **Isolation note**: If you also run classic MCP servers alongside dynamic ones (configured with direct `MSSQL_SERVER` in `.mcp.json`), add these two lines to the classic instances for strong isolation:
+>
+> ```json
+> "MSSQL_IGNORE_LOCAL_ENV": "true",
+> "MSSQL_DYNAMIC_MODE": "false"
+> ```
+>
+> Full recipe + troubleshooting: [Environment Variables → Isolated Classic Server Recipe](../configuracion/variables-entorno).
+
 ---
 
 ## Core Security Principle

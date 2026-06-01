@@ -25,6 +25,64 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_AUTH` | `sql` | Authentication mode: `sql`, `integrated`, `azure` |
 | `MSSQL_ENCRYPT` | _(auto)_ | TLS encryption control. Only effective with `DEVELOPER_MODE=true`. `false` = disable encryption (**required for SQL Server 2008/2012**). If not set: `false` in dev, always `true` in production |
 | `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables) |
+| `MSSQL_DYNAMIC_MODE` | _(auto-detect)_ | `true` = force dynamic mode (multiple aliases). `false` = force classic mode (single connection). When unset, auto-detects based on `MSSQL_DYNAMIC_*` variables. **Critical for isolation when running multiple MCP servers.** |
+| `MSSQL_IGNORE_LOCAL_ENV` | `false` | `true` = completely ignore any `.env` file next to the executable. Essential for classic servers configured purely via `.mcp.json` when leftover `.env` files may exist. |
+
+## Dynamic vs Classic Mode Precedence (Important)
+
+The server decides between **classic mode** (single database) and **dynamic mode** (multiple aliases) with this priority:
+
+| Priority | Condition | Result |
+|----------|-----------|--------|
+| 1 | `MSSQL_DYNAMIC_MODE=false` (or `0`, `no`, `off`) | **Always classic** (ignores everything else) |
+| 2 | `MSSQL_DYNAMIC_MODE=true` | **Always dynamic** |
+| 3 | `MSSQL_SERVER`, `MSSQL_CONNECTION_STRING` or `MSSQL_DATABASE` is present | **Classic** (protects normal `.mcp.json` configs) |
+| 4 | Only `MSSQL_DYNAMIC_*` variables exist | Dynamic (auto-detect) |
+
+**This fixes the most common complaint:**  
+If you configure a server as classic in Claude Desktop (using `MSSQL_SERVER` + credentials in the `"env"` block), it should now **stay in classic mode** even if there are `.env` files nearby or inherited dynamic variables.
+
+### Recommended Recipe: Fully Isolated Classic Server
+
+When running multiple MCP servers at the same time (some dynamic, some classic), add these two lines to all your **classic** instances:
+
+```json
+{
+  "mcpServers": {
+    "mssql2": {
+      "command": "C:\\MCPs\\MCP-EXE\\mssql2\\sinenv\\mcp-go-mssql-secure.exe",
+      "args": [],
+      "env": {
+        "MSSQL_SERVER": "10.203.3.10",
+        "MSSQL_DATABASE": "JJP_TRANSFER",
+        "MSSQL_USER": "userTRANSFER",
+        "MSSQL_PASSWORD": "your_password",
+        "DEVELOPER_MODE": "true",
+        "MSSQL_READ_ONLY": "false",
+
+        "MSSQL_IGNORE_LOCAL_ENV": "true",
+        "MSSQL_DYNAMIC_MODE": "false"
+      }
+    }
+  }
+}
+```
+
+**Why these two lines?**
+- `MSSQL_IGNORE_LOCAL_ENV=true` → Ignores any `.env` file in the same folder as the exe.
+- `MSSQL_DYNAMIC_MODE=false` → Forces classic mode even if the parent process has dynamic variables.
+
+### Common Issues
+
+**"I still see `dynamic_available` / `dynamic_connect` tools on a server that should be classic"**
+
+Most common causes:
+- You didn't fully restart Claude Desktop after editing `.mcp.json`.
+- You're still running an old binary (need version from commit `0bf02d5` or newer).
+- Missing the two isolation variables above.
+- Dynamic variables coming from your PowerShell profile or user environment.
+
+Add the two variables shown in the recipe above. If it still happens, temporarily enable `DEVELOPER_MODE=true` and check the startup logs — it should clearly say `DYNAMIC_MODE=false (classic single-connection mode)`.
 
 ## .env template
 
