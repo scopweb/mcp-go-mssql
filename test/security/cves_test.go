@@ -1,3 +1,20 @@
+// Package security contains two kinds of checks:
+//
+//  1. TestKnownCVEs — a real, useful guard that fails the build if a go.mod
+//     dependency drops below a known-safe version.
+//
+//  2. TestSQLInjectionVulnerability / TestPathTraversalVulnerability /
+//     TestCommandInjectionVulnerability — these exercise ONLY the small
+//     standalone heuristics (isSafeSQL, isSafePath, isSafeInput) defined in
+//     this file. They are illustrative pattern-matching unit tests and DO NOT
+//     test the production enforcement in the root package.
+//
+// The actual server-side security boundary (read-only enforcement, whitelist
+// table permissions, stacked-statement rejection, stored-procedure parameter
+// validation and connection-string field validation) is covered by the
+// regression tests that live in package main, notably main_security_bypass_test.go
+// and main_permissions_test.go. Do not read a green run of the heuristic tests
+// below as evidence that the server itself is injection-proof.
 package security
 
 import (
@@ -10,11 +27,11 @@ import (
 
 // CVERecord represents a known CVE vulnerability
 type CVERecord struct {
-	CVEId            string
-	PackageName      string
-	MinSafeVersion   string // minimum safe semver version (e.g. "v0.31.0")
-	Severity         string
-	Description      string
+	CVEId          string
+	PackageName    string
+	MinSafeVersion string // minimum safe semver version (e.g. "v0.31.0")
+	Severity       string
+	Description    string
 }
 
 // TestKnownCVEs verifies that go.mod dependency versions are above known-vulnerable ranges.

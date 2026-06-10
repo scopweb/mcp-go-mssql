@@ -217,6 +217,13 @@ var tableExtractionPatterns = []*regexp.Regexp{
 // Pre-compiled pattern for procedure name validation
 var validProcedureNamePattern = regexp.MustCompile(`^[\w.\[\]]+$`)
 
+// Pre-compiled pattern for stored-procedure parameter names. T-SQL parameter
+// names are regular identifiers, optionally prefixed with '@'. Restricting to
+// this shape prevents SQL injection through the parameter-name side of the
+// EXEC statement built in execute_procedure (values are always parameterized,
+// but names were previously interpolated verbatim).
+var validParamNamePattern = regexp.MustCompile(`^@?[A-Za-z_][A-Za-z0-9_]*$`)
+
 func (sl *SecurityLogger) sanitizeForLogging(input string) string {
 	result := input
 	for _, pattern := range sensitivePatterns {
@@ -250,18 +257,18 @@ type DynamicAlias struct {
 
 // MSSQL Server
 type MCPMSSQLServer struct {
-	db          *sql.DB   // current active connection (for backward compat + single-connection mode)
-	dbMu        sync.RWMutex
-	secLogger   *SecurityLogger
-	devMode     bool
-	config      serverConfig
-	isDynamic   bool // frozen at startup from isDynamicMode(); controls tool surface + connection behavior
+	db        *sql.DB // current active connection (for backward compat + single-connection mode)
+	dbMu      sync.RWMutex
+	secLogger *SecurityLogger
+	devMode   bool
+	config    serverConfig
+	isDynamic bool // frozen at startup from isDynamicMode(); controls tool surface + connection behavior
 
 	// Dynamic connections support (for "one app, multiple related DBs" use case)
-	dynamicAliases  map[string]DynamicAlias
-	connections     map[string]*sql.DB // alias -> open connection
-	dynamicMu       sync.RWMutex
-	activeAlias     string // currently selected dynamic alias (if any)
+	dynamicAliases map[string]DynamicAlias
+	connections    map[string]*sql.DB // alias -> open connection
+	dynamicMu      sync.RWMutex
+	activeAlias    string // currently selected dynamic alias (if any)
 
 	// Confirmation system for writable dynamic aliases (secure by default)
 	pendingConfirmation *PendingConfirmation
@@ -279,7 +286,7 @@ type MCPMSSQLServer struct {
 // PendingConfirmation represents a confirmation that the AI must explicitly call
 // before performing a potentially destructive operation on a writable dynamic alias.
 type PendingConfirmation struct {
-	Operation   string    // e.g. "DELETE", "UPDATE", "DROP"
+	Operation   string // e.g. "DELETE", "UPDATE", "DROP"
 	Tables      []string
 	Description string
 	ExpiresAt   time.Time
@@ -383,6 +390,19 @@ func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
 	return nil
 }
 
+// validateDSNField rejects values that could break out of their field in an
+// ADO-style ("key=value;...") connection string. A password or server name
+// containing ';' (or control characters) would otherwise let an operator
+// accidentally — or an attacker who can influence these env vars — inject
+// extra connection parameters such as "encrypt=false". The auto-built DSN uses
+// ';' as the field separator, so these characters must not appear in values.
+func validateDSNField(name, value string) error {
+	if strings.ContainsAny(value, ";\r\n\x00") {
+		return fmt.Errorf("invalid character in %s: ';', newline and null bytes are not allowed (use MSSQL_CONNECTION_STRING with a URL-form DSN for exotic values)", name)
+	}
+	return nil
+}
+
 func buildSecureConnectionString() (string, error) {
 	// Check for custom connection string first
 	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
@@ -426,6 +446,17 @@ func buildSecureConnectionString() (string, error) {
 
 	if server == "" {
 		return "", fmt.Errorf("missing required environment variable: MSSQL_SERVER")
+	}
+
+	// Reject field-breaking characters in any value that will be interpolated
+	// into the ADO-style connection string below.
+	for name, val := range map[string]string{
+		"MSSQL_SERVER": server, "MSSQL_DATABASE": database,
+		"MSSQL_USER": user, "MSSQL_PASSWORD": password, "MSSQL_PORT": port,
+	} {
+		if err := validateDSNField(name, val); err != nil {
+			return "", err
+		}
 	}
 
 	// For Windows Auth, database is optional (allows exploring all databases)
@@ -537,11 +568,123 @@ func stripLeadingComments(query string) string {
 	return q
 }
 
+// hasMultipleStatements reports whether the query contains more than one SQL
+// statement (i.e. a statement separator followed by additional executable
+// content). It is aware of single-quoted string literals, bracketed
+// identifiers, line comments (--) and block comments (/* */) so that a
+// semicolon inside any of those does NOT count as a separator, and a trailing
+// semicolon with only whitespace/comments after it is allowed.
+//
+// This closes the stacked-query bypass where a query like
+// "SELECT 1; DELETE FROM prod" would be classified as a harmless SELECT by the
+// prefix-based operation detector while SQL Server happily executes the whole
+// batch.
+func hasMultipleStatements(query string) bool {
+	const (
+		stNormal = iota
+		stString
+		stBracket
+		stLineComment
+		stBlockComment
+	)
+	state := stNormal
+	runes := []rune(query)
+	n := len(runes)
+	for i := 0; i < n; i++ {
+		c := runes[i]
+		switch state {
+		case stNormal:
+			switch {
+			case c == '\'':
+				state = stString
+			case c == '[':
+				state = stBracket
+			case c == '-' && i+1 < n && runes[i+1] == '-':
+				state = stLineComment
+				i++
+			case c == '/' && i+1 < n && runes[i+1] == '*':
+				state = stBlockComment
+				i++
+			case c == ';':
+				// A separator counts only if non-whitespace, non-comment
+				// content follows it.
+				if hasExecutableRemainder(runes[i+1:]) {
+					return true
+				}
+			}
+		case stString:
+			if c == '\'' {
+				// Handle escaped '' inside a string literal.
+				if i+1 < n && runes[i+1] == '\'' {
+					i++
+				} else {
+					state = stNormal
+				}
+			}
+		case stBracket:
+			if c == ']' {
+				if i+1 < n && runes[i+1] == ']' {
+					i++
+				} else {
+					state = stNormal
+				}
+			}
+		case stLineComment:
+			if c == '\n' {
+				state = stNormal
+			}
+		case stBlockComment:
+			if c == '*' && i+1 < n && runes[i+1] == '/' {
+				state = stNormal
+				i++
+			}
+		}
+	}
+	return false
+}
+
+// hasExecutableRemainder reports whether the given tail contains any
+// executable SQL after stripping leading whitespace and comments. Used to
+// allow a harmless trailing semicolon while still catching real stacked
+// statements.
+func hasExecutableRemainder(tail []rune) bool {
+	s := strings.TrimSpace(string(tail))
+	for s != "" {
+		switch {
+		case strings.HasPrefix(s, "--"):
+			if idx := strings.IndexByte(s, '\n'); idx != -1 {
+				s = strings.TrimSpace(s[idx+1:])
+			} else {
+				return false
+			}
+		case strings.HasPrefix(s, "/*"):
+			if idx := strings.Index(s, "*/"); idx != -1 {
+				s = strings.TrimSpace(s[idx+2:])
+			} else {
+				return false
+			}
+		case strings.HasPrefix(s, ";"):
+			s = strings.TrimSpace(s[1:])
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	// Use effective config (per-alias if a dynamic connection is active)
 	effective := s.getEffectiveConfig()
 	if !effective.readOnly {
 		return nil // Read-only mode disabled for current context, allow all queries
+	}
+
+	// Reject multi-statement batches outright in any restricted (read-only or
+	// whitelist) context. Stacked statements are the primary way to smuggle a
+	// modification past the prefix-based operation detector, e.g.
+	// "SELECT 1; DELETE FROM prod". A single trailing semicolon is still fine.
+	if hasMultipleStatements(query) {
+		return fmt.Errorf("read-only mode: multiple SQL statements are not allowed in a single request")
 	}
 
 	// If whitelist is configured, allow modifications to pass through to validateTablePermissions()
@@ -850,14 +993,14 @@ func hasDynamicAliases() bool {
 // (exposing dynamic_available / dynamic_connect / etc. and loading per-alias configs).
 //
 // Precedence (highest to lowest):
-//   1. Explicit MSSQL_DYNAMIC_MODE=false  → always classic (even if DYNAMIC_* vars exist anywhere)
-//   2. Explicit MSSQL_DYNAMIC_MODE=true   → always dynamic
-//   3. No explicit setting:
-//        - If any classic connection config is present (MSSQL_SERVER, MSSQL_CONNECTION_STRING,
-//          or MSSQL_DATABASE) → classic mode. This protects users who configure classic servers
-//          via .mcp.json "env" blocks or who have polluted parent environments.
-//        - Otherwise, if any MSSQL_DYNAMIC_* vars exist → dynamic mode (auto-detect).
-//        - Otherwise → classic (no DB configured).
+//  1. Explicit MSSQL_DYNAMIC_MODE=false  → always classic (even if DYNAMIC_* vars exist anywhere)
+//  2. Explicit MSSQL_DYNAMIC_MODE=true   → always dynamic
+//  3. No explicit setting:
+//     - If any classic connection config is present (MSSQL_SERVER, MSSQL_CONNECTION_STRING,
+//     or MSSQL_DATABASE) → classic mode. This protects users who configure classic servers
+//     via .mcp.json "env" blocks or who have polluted parent environments.
+//     - Otherwise, if any MSSQL_DYNAMIC_* vars exist → dynamic mode (auto-detect).
+//     - Otherwise → classic (no DB configured).
 //
 // This design allows safe co-existence of multiple mcp-go-mssql instances (some classic,
 // some dynamic) under Claude Desktop, even when the host process environment contains
@@ -925,8 +1068,8 @@ func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
 		// the alias will be read-only. This is intentional and by design.
 		a := DynamicAlias{
 			Alias:           alias,
-			ReadOnly:        true,  // SAFE DEFAULT: read-only unless explicitly set to false
-			WhitelistTables: nil,   // No writes allowed by default
+			ReadOnly:        true, // SAFE DEFAULT: read-only unless explicitly set to false
+			WhitelistTables: nil,  // No writes allowed by default
 		}
 
 		// Load connection fields
@@ -985,6 +1128,7 @@ func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
 
 	return aliases
 }
+
 // buildAliasConnectionString constructs the SQL Server connection string for a
 // dynamic alias. The function mirrors the override + per-alias tuning + devMode
 // fallback strategy used by buildSecureConnectionString (classic mode), so the
@@ -1050,6 +1194,19 @@ func buildAliasConnectionString(alias *DynamicAlias, devMode bool, aliasName str
 	port := alias.Port
 	if port == "" {
 		port = "1433"
+	}
+
+	// Reject field-breaking characters in interpolated values (see
+	// validateDSNField). Operators with exotic credentials should use the
+	// per-alias _CONNECTION_STRING override (URL form) instead.
+	for name, val := range map[string]string{
+		aliasName + "_SERVER": alias.Server, aliasName + "_DATABASE": alias.Database,
+		aliasName + "_USER": alias.User, aliasName + "_PASSWORD": alias.Password,
+		aliasName + "_PORT": port, aliasName + "_ENCRYPT": encrypt,
+	} {
+		if err := validateDSNField(name, val); err != nil {
+			return "", err
+		}
 	}
 
 	return fmt.Sprintf("server=%s;port=%s;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
@@ -1177,6 +1334,16 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// If whitelist is empty, deny all modifications
 	if len(whitelist) == 0 {
 		return fmt.Errorf("permission denied: no tables are whitelisted for %s operations", operation)
+	}
+
+	// FAIL CLOSED: if this is a modification operation but the regex-based
+	// extractor could not identify any target table, we must deny rather than
+	// allow. Otherwise a modify query whose table the regex fails to parse
+	// would slip through the per-table whitelist loop below (which simply does
+	// not iterate) and be permitted.
+	if len(tablesInQuery) == 0 {
+		s.secLogger.Printf("SECURITY VIOLATION: %s operation with no extractable table name - denying (fail-closed)", operation)
+		return fmt.Errorf("permission denied: could not determine the target table(s) for this %s operation; rewrite it using a simple, explicit table reference", operation)
 	}
 
 	// Check if ALL tables in the query are whitelisted
@@ -1931,7 +2098,25 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			paramStrings := make([]string, 0, len(procParams))
 			i := 1
 			for paramName, paramValue := range procParams {
-				paramStrings = append(paramStrings, fmt.Sprintf("@%s = @p%d", paramName, i))
+				// Parameter NAMES are interpolated into the EXEC text (only the
+				// values are bound as @pN placeholders), so an unvalidated name
+				// is a SQL injection vector. Reject anything that is not a plain
+				// T-SQL identifier (optionally '@'-prefixed).
+				normalizedName := strings.TrimPrefix(paramName, "@")
+				if !validParamNamePattern.MatchString(paramName) {
+					s.secLogger.Printf("Rejected unsafe stored-procedure parameter name: %q", paramName)
+					return &MCPResponse{
+						JSONRPC: "2.0",
+						ID:      id,
+						Result: CallToolResult{
+							Content: []ContentItem{
+								{Type: "text", Text: fmt.Sprintf("Error: invalid parameter name '%s' (only letters, digits and underscore are allowed, optionally prefixed with '@')", paramName)},
+							},
+							IsError: true,
+						},
+					}
+				}
+				paramStrings = append(paramStrings, fmt.Sprintf("@%s = @p%d", normalizedName, i))
 				args = append(args, paramValue)
 				i++
 			}
@@ -2614,14 +2799,27 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		}
 
-		// Accept the confirmation if the description is reasonably similar
-		// (we do a simple contains check to be practical with LLMs)
+		// Accept the confirmation only when the description actually references
+		// the pending operation AND at least one of its target tables. The old
+		// blanket "any description longer than 10 chars" rule made the
+		// confirmation meaningless (the agent could confirm anything). Requiring
+		// both the operation keyword and a concrete table name forces the caller
+		// to demonstrate intent about *this specific* operation.
 		pendingDesc := strings.ToLower(s.pendingConfirmation.Description)
 		userDesc := strings.ToLower(description)
 
-		if strings.Contains(userDesc, strings.ToLower(s.pendingConfirmation.Operation)) ||
-			strings.Contains(pendingDesc, userDesc) ||
-			len(userDesc) > 10 { // Accept reasonably long descriptions as intent to confirm
+		mentionsOperation := strings.Contains(userDesc, strings.ToLower(s.pendingConfirmation.Operation))
+		mentionsTable := false
+		for _, t := range s.pendingConfirmation.Tables {
+			if t != "" && strings.Contains(userDesc, strings.ToLower(t)) {
+				mentionsTable = true
+				break
+			}
+		}
+		// A near-verbatim echo of the generated description is also acceptable.
+		echoesPending := pendingDesc != "" && strings.Contains(userDesc, pendingDesc)
+
+		if (mentionsOperation && mentionsTable) || echoesPending {
 
 			s.pendingConfirmation = nil // consume it
 			return &MCPResponse{
