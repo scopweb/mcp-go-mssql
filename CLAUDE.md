@@ -135,6 +135,16 @@ Recommended secure pattern for "One Application + Multiple Related Databases":
 - Use `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` if you allow any writes.
 - Create one dedicated "AI work" database/alias with very strict whitelist for any write operations the AI needs.
 
+**Per-alias env vars** (all optional; secure defaults applied when omitted):
+- `MSSQL_DYNAMIC_<ALIAS>_SERVER` — hostname/IP
+- `MSSQL_DYNAMIC_<ALIAS>_PORT` — port (default `1433`)
+- `MSSQL_DYNAMIC_<ALIAS>_DATABASE` — database name
+- `MSSQL_DYNAMIC_<ALIAS>_USER` / `_PASSWORD` — credentials
+- `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` — `true` / `false` / `disable` (overrides the per-alias default derived from global `DEVELOPER_MODE`)
+- `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` — full DSN override (URL or ADO form); takes precedence over the per-alias fields above. **Required for SQL Server 2000/2008/2012** instances that only negotiate TLS 1.0, since modern Go runtimes reject that protocol. The proven URL-form workaround is `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true`.
+- `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY` — `true` (default, safe) / `false`
+- `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` — comma-separated allowlist for modifications in read-only mode
+
 Full recommended configuration and best practices: see the guide  
 `website/src/content/docs/guias/modo-dinamico-una-aplicacion-varias-bases.md` (and English version).
 
@@ -193,6 +203,13 @@ MSSQL_DYNAMIC_APP_AIWORK_USER=ai_limited_writer
 MSSQL_DYNAMIC_APP_AIWORK_PASSWORD=...
 MSSQL_DYNAMIC_APP_AIWORK_READ_ONLY=false
 MSSQL_DYNAMIC_APP_AIWORK_WHITELIST_TABLES=ai_temp_tasks,ai_results,ai_audit
+```
+
+# Legacy SQL Server 2000/2008/2012 in dynamic mode
+# These servers only negotiate TLS 1.0, which modern Go refuses. Use the
+# _CONNECTION_STRING override in URL form (encrypt=disable) for each affected alias.
+MSSQL_DYNAMIC_LEGACY_READ_ONLY=true
+MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://USER:PASS@legacy-sql2000.local:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
 ```
 
 ### TLS Certificate Handling

@@ -28,6 +28,24 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_DYNAMIC_MODE` | _(auto-detect)_ | `true` = force dynamic mode (multiple aliases). `false` = force classic mode (single connection). When unset, auto-detects based on `MSSQL_DYNAMIC_*` variables. **Critical for isolation when running multiple MCP servers.** |
 | `MSSQL_IGNORE_LOCAL_ENV` | `false` | `true` = completely ignore any `.env` file next to the executable. Essential for classic servers configured purely via `.mcp.json` when leftover `.env` files may exist. |
 
+## Per-alias variables (Dynamic mode)
+
+When `MSSQL_DYNAMIC_MODE=true`, you configure each alias with a set of variables that share the `MSSQL_DYNAMIC_<ALIAS>_` prefix. All are optional — secure defaults are applied when omitted.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MSSQL_DYNAMIC_<ALIAS>_SERVER` | _(required)_ | Hostname or IP of the alias's SQL Server |
+| `MSSQL_DYNAMIC_<ALIAS>_PORT` | `1433` | Port of the alias (ignored when `_CONNECTION_STRING` is set) |
+| `MSSQL_DYNAMIC_<ALIAS>_DATABASE` | _(required unless using override)_ | Database name of the alias |
+| `MSSQL_DYNAMIC_<ALIAS>_USER` | _(required unless using override)_ | SQL Server user of the alias |
+| `MSSQL_DYNAMIC_<ALIAS>_PASSWORD` | _(required unless using override)_ | Password of the alias |
+| `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` | _(auto)_ | `true` / `false` / `disable`. Overrides the TLS encryption derived from `DEVELOPER_MODE` for this alias only. Useful for legacy servers that only negotiate TLS 1.0 (SQL Server 2000/2008/2012). |
+| `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` | _(empty)_ | Full connection string (URL or ADO DSN) that overrides the per-alias fields above. **Recommended for SQL Server 2000/2008/2012**: `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true`. When the connection fails with `protocol version 301`, the server automatically appends this hint to the error message. |
+| `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY` | `true` | `true` = read-only, `false` = allow writes (still requires `_WHITELIST_TABLES` for the AI to touch specific tables) |
+| `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` | _(empty)_ | Comma-separated list of tables allowed for modification when `READ_ONLY=true`, or when `READ_ONLY=false` without its own whitelist |
+
+> **Precedence within an alias**: `_CONNECTION_STRING` always wins over the rest of the per-alias fields. When it is not set, `_ENCRYPT` / `_PORT` are honored if present; otherwise the per-mode default (`DEVELOPER_MODE`) is applied.
+
 ## Dynamic vs Classic Mode Precedence (Important)
 
 The server decides between **classic mode** (single database) and **dynamic mode** (multiple aliases) with this priority:

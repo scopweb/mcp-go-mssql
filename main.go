@@ -236,13 +236,16 @@ type serverConfig struct {
 // DynamicAlias represents one preconfigured dynamic connection with its own security posture.
 // This is the foundation for secure "one application, multiple related databases" scenarios.
 type DynamicAlias struct {
-	Alias           string
-	Server          string
-	Database        string
-	User            string
-	Password        string // stored in memory only after load; never logged
-	ReadOnly        bool
-	WhitelistTables []string
+	Alias            string
+	Server           string
+	Database         string
+	User             string
+	Password         string // stored in memory only after load; never logged
+	Encrypt          string // per-alias override ("true"|"false"|"disable") — optional, never logged
+	Port             string // per-alias override — optional, defaults to "1433", never logged
+	ConnectionString string // full DSN override (URL or ADO form) — optional, takes precedence; never logged
+	ReadOnly         bool
+	WhitelistTables  []string
 }
 
 // MSSQL Server
@@ -333,16 +336,11 @@ func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
 
 	// Build connection string for this alias (respecting its own security posture is handled via getEffectiveConfig)
 	// We reuse the secure connection string logic but construct it manually for the alias.
-	encrypt := "true"
-	trustCert := "false"
-	if s.devMode {
-		encrypt = "false"
-		trustCert = "true"
+	// Priority: alias.ConnectionString > per-alias Encrypt/Port > devMode defaults.
+	connStr, err := buildAliasConnectionString(&alias, s.devMode, aliasName)
+	if err != nil {
+		return fmt.Errorf("failed to build connection string for alias '%s': %w", aliasName, err)
 	}
-
-	connStr := fmt.Sprintf("server=%s;port=1433;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
-		alias.Server, alias.Database, alias.User, alias.Password, encrypt, trustCert,
-	)
 
 	// Close previous active connection if we had one
 	if s.activeAlias != "" {
@@ -945,6 +943,22 @@ func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
 			a.Password = v
 		}
 
+		// Per-alias connection tuning. ConnectionString wins over Encrypt/Port
+		// (the connector in connectToDynamicAlias honors that priority). These
+		// fields are needed for legacy SQL Server 2000/2008/2012 instances whose
+		// TLS 1.0 handshake is rejected by modern Go runtimes (see
+		// .github/ISSUES/01-sql-server-2008-support.md for the classic-mode
+		// equivalent of MSSQL_CONNECTION_STRING).
+		if v := envVars[prefix+alias+"_ENCRYPT"]; v != "" {
+			a.Encrypt = strings.ToLower(strings.TrimSpace(v))
+		}
+		if v := envVars[prefix+alias+"_PORT"]; v != "" {
+			a.Port = strings.TrimSpace(v)
+		}
+		if v := envVars[prefix+alias+"_CONNECTION_STRING"]; v != "" {
+			a.ConnectionString = v
+		}
+
 		// Per-alias security posture - ONLY override if explicitly provided
 		// This enforces "secure by default"
 		if ro := envVars[prefix+alias+"_READ_ONLY"]; ro != "" {
@@ -970,6 +984,93 @@ func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
 	}
 
 	return aliases
+}
+// buildAliasConnectionString constructs the SQL Server connection string for a
+// dynamic alias. The function mirrors the override + per-alias tuning + devMode
+// fallback strategy used by buildSecureConnectionString (classic mode), so the
+// per-alias path and the global path behave identically.
+//
+// Priority:
+//  1. alias.ConnectionString (full override, URL or ADO DSN) — wins outright.
+//     This is the recommended workaround for legacy SQL Server 2000/2008/2012
+//     instances that only negotiate TLS 1.0 (see .github/ISSUES/01-sql-server-2008-support.md).
+//  2. alias.Encrypt + alias.Port — per-alias tuning on top of an auto-built DSN.
+//  3. devMode — last-resort defaults (encrypt=false/trustCert=true in dev,
+//     encrypt=true/trustCert=false in production).
+//
+// Default timeouts (connection timeout=30; command timeout=30) are appended
+// when the user-supplied override does not include them.
+//
+// In production mode, the function emits slog.Warn for insecure settings
+// (encrypt=false, missing encrypt, trustservercertificate=true), exactly like
+// buildSecureConnectionString does for the global MSSQL_CONNECTION_STRING.
+func buildAliasConnectionString(alias *DynamicAlias, devMode bool, aliasName string) (string, error) {
+	if alias == nil {
+		return "", fmt.Errorf("nil alias")
+	}
+
+	// Priority 1: full override per alias (URL or ADO DSN).
+	if alias.ConnectionString != "" {
+		cs := alias.ConnectionString
+		csLower := strings.ToLower(cs)
+		isProduction := !devMode
+
+		if isProduction {
+			if strings.Contains(csLower, "encrypt=false") {
+				slog.Warn(fmt.Sprintf("dynamic alias '%s' connection string has encrypt=false in production mode", aliasName))
+			}
+			if !strings.Contains(csLower, "encrypt=") {
+				slog.Warn(fmt.Sprintf("dynamic alias '%s' connection string missing encrypt parameter in production mode", aliasName))
+			}
+			if strings.Contains(csLower, "trustservercertificate=true") {
+				slog.Warn(fmt.Sprintf("dynamic alias '%s' connection string has trustservercertificate=true in production mode", aliasName))
+			}
+		}
+
+		if !strings.Contains(csLower, "connection timeout") {
+			cs += ";connection timeout=30"
+		}
+		if !strings.Contains(csLower, "command timeout") {
+			cs += ";command timeout=30"
+		}
+		return cs, nil
+	}
+
+	// Priority 2 + 3: per-alias Encrypt/Port, then devMode defaults.
+	encrypt := "true"
+	trustCert := "false"
+	if devMode {
+		encrypt = "false"
+		trustCert = "true"
+	}
+	if alias.Encrypt != "" {
+		encrypt = alias.Encrypt
+	}
+
+	port := alias.Port
+	if port == "" {
+		port = "1433"
+	}
+
+	return fmt.Sprintf("server=%s;port=%s;database=%s;user id=%s;password=%s;encrypt=%s;trustservercertificate=%s;connection timeout=30;command timeout=30",
+		alias.Server, port, alias.Database, alias.User, alias.Password, encrypt, trustCert,
+	), nil
+}
+
+// isLegacyTLSPivotError reports whether err looks like the Go runtime
+// rejecting a server that only negotiates TLS 1.0 (protocol version 301).
+// This is the fingerprint error you get when connecting to a SQL Server
+// 2000/2008/2012 instance that has no TLS 1.2 support, with a modern Go
+// runtime that refuses to negotiate below TLS 1.2. The wording covers both
+// Go's exact phrasing ("protocol version 301") and a broader
+// "unsupported protocol" fallback in case the Go error format changes.
+func isLegacyTLSPivotError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "protocol version 301") ||
+		strings.Contains(msg, "unsupported protocol")
 }
 
 // extractAllTablesFromQuery finds all table/view names referenced in the query
@@ -2286,7 +2387,12 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				if len(a.WhitelistTables) > 0 {
 					wl = fmt.Sprintf(" | Whitelist: %s", strings.Join(a.WhitelistTables, ","))
 				}
-				fmt.Fprintf(&sb, "- %s → %s/%s (%s%s)\n", alias, a.Server, a.Database, ro, wl)
+				// Marker only — never print the connection string (it may contain credentials).
+				override := ""
+				if a.ConnectionString != "" {
+					override = " | ConnectionString: (custom override set)"
+				}
+				fmt.Fprintf(&sb, "- %s → %s/%s (%s%s%s)\n", alias, a.Server, a.Database, ro, wl, override)
 			}
 		}
 
@@ -2328,11 +2434,22 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 		if err := s.connectToDynamicAlias(alias); err != nil {
+			errMsg := fmt.Sprintf("Error connecting to alias '%s': %v", alias, err)
+			// Surface an actionable hint when the error is the well-known TLS 1.0
+			// handshake rejection that legacy SQL Server 2000/2008/2012 instances
+			// trigger with modern Go runtimes. The wording covers both
+			// "protocol version 301" (Go's exact phrasing) and a broader
+			// "unsupported protocol" fallback for forward compatibility.
+			if isLegacyTLSPivotError(err) {
+				errMsg += "\n\nHint: this server likely speaks only TLS 1.0 (SQL Server 2000/2008/2012). " +
+					"Set MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING to a URL-form DSN: " +
+					"sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true"
+			}
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error connecting to alias '%s': %v", alias, err)}},
+					Content: []ContentItem{{Type: "text", Text: errMsg}},
 					IsError: true,
 				},
 			}

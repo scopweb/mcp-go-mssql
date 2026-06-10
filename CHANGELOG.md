@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-alias connection-string override for dynamic mode** (closes the gap with classic mode for legacy SQL Server 2000/2008/2012 instances):
+  - New env vars: `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT`, `MSSQL_DYNAMIC_<ALIAS>_PORT`, and `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING`.
+  - `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` is the dynamic-mode equivalent of the global `MSSQL_CONNECTION_STRING` (introduced in [issue #1 for SQL Server 2008](.github/ISSUES/01-sql-server-2008-support.md)). URL form `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true` is the proven workaround for servers that only negotiate TLS 1.0 (SQL Server 2000, 2008, 2012).
+  - `_ENCRYPT` and `_PORT` are honored as per-alias tweaks on top of an auto-built DSN when `_CONNECTION_STRING` is not set.
+  - `buildAliasConnectionString` extracted as a pure helper for testability; priority is `ConnectionString` > `Encrypt/Port` > `devMode` defaults, mirroring the global `buildSecureConnectionString` strategy.
+  - `dynamic_available` now shows a non-sensitive "ConnectionString: (custom override set)" marker for aliases that use the override (the string itself is never printed — it may contain credentials).
+  - `dynamic_connect` error path now detects the well-known "protocol version 301" / "unsupported protocol" failure and appends an actionable hint pointing to `_CONNECTION_STRING`. The wording covers both Go's exact phrasing and a broader fallback for forward compatibility.
+  - Tests: `TestLoadDynamicAliases_PerAliasEncryptPortConnectionString`, `TestBuildAliasConnectionString`, `TestIsLegacyTLSPivotError`.
+  - Docs: `CLAUDE.md` env-vars list, EN+ES dynamic-mode guides, EN+ES environment-variables reference, dynamic-connections FAQ, this changelog.
+
 ### Fixed
 
 - 🐛 **Critical usability fix for classic (non-dynamic) servers in Claude Desktop / multiple MCP instances**:

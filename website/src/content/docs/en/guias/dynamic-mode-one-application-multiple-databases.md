@@ -86,6 +86,20 @@ MSSQL_DYNAMIC_APP_WORK_READ_ONLY=false
 MSSQL_DYNAMIC_APP_WORK_WHITELIST_TABLES=ai_temp_tasks,ai_temp_results,ai_work_orders
 ```
 
+### Legacy SQL Server 2000/2008/2012 (TLS 1.0 only)
+
+These versions only negotiate TLS 1.0, which the modern Go runtime refuses outright. If one of your related databases is on a legacy server, set `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` to a URL-form DSN. The URL form (`sqlserver://...`) is the proven workaround for the `protocol version 301` error — it mirrors how the global `MSSQL_CONNECTION_STRING` env var works in classic mode.
+
+```env
+# Legacy read-only alias (e.g. SQL Server 2000)
+MSSQL_DYNAMIC_LEGACY_READ_ONLY=true
+MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://app_ai_read:...@legacy-sql2000.local:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
+```
+
+You can keep the per-alias `_SERVER` / `_DATABASE` / `_USER` / `_PASSWORD` fields too, but they are ignored as long as `_CONNECTION_STRING` is set. The recommended minimal form (only `_READ_ONLY` + `_CONNECTION_STRING`) is the cleanest, since the URL contains all the connection details.
+
+If `dynamic_connect` ever fails for an alias with `protocol version 301`, the error message now includes an actionable hint pointing to this env var.
+
 ### 2. Recommended SQL Server Users
 
 Create specific users with minimal permissions:
