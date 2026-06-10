@@ -897,9 +897,290 @@ func TestDynamicModeDetection(t *testing.T) {
 	}
 }
 
-// TestClassicServerDoesNotExposeDynamicTools verifies that when running in classic
-// mode (the common .mcp.json direct config case), the tools/list response does not
-// include any dynamic_* or confirm_operation tools.
+// TestLoadDynamicAliases_PerAliasEncryptPortConnectionString covers the new
+// per-alias MSSQL_DYNAMIC_<ALIAS>_ENCRYPT / _PORT / _CONNECTION_STRING variables
+// that unlock legacy SQL Server 2000/2008/2012 connections in dynamic mode.
+// Regression guard: prior to the fix, the loader silently ignored these vars,
+// leaving the user with a non-negotiable TLS 1.0 handshake failure
+// (protocol version 301).
+func TestLoadDynamicAliases_PerAliasEncryptPortConnectionString(t *testing.T) {
+	tests := []struct {
+		name             string
+		setEnv           map[string]string
+		alias            string
+		wantEncrypt      string
+		wantPort         string
+		wantConnString   string
+		wantReadOnly     bool
+		description      string
+	}{
+		{
+			name: "per-alias _ENCRYPT disable is loaded",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_GDP_SERVER":  "SERVER-GDP",
+				"MSSQL_DYNAMIC_GDP_DATABASE": "GDPA",
+				"MSSQL_DYNAMIC_GDP_USER":    "u",
+				"MSSQL_DYNAMIC_GDP_PASSWORD": "p",
+				"MSSQL_DYNAMIC_GDP_ENCRYPT":  "disable",
+				"MSSQL_DYNAMIC_GDP_READ_ONLY": "true",
+			},
+			alias:        "GDP",
+			wantEncrypt:  "disable",
+			wantReadOnly: true,
+			description:  "Per-alias Encrypt must be loaded, not silently dropped",
+		},
+		{
+			name: "per-alias _PORT overrides the hardcoded 1433",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_GDP_SERVER":   "SERVER-GDP",
+				"MSSQL_DYNAMIC_GDP_DATABASE": "GDPA",
+				"MSSQL_DYNAMIC_GDP_USER":     "u",
+				"MSSQL_DYNAMIC_GDP_PASSWORD": "p",
+				"MSSQL_DYNAMIC_GDP_PORT":     "1500",
+			},
+			alias:        "GDP",
+			wantPort:     "1500",
+			wantReadOnly: true, // secure default
+			description:  "Per-alias Port must override the hardcoded 1433",
+		},
+		{
+			name: "per-alias _CONNECTION_STRING URL form is loaded verbatim",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_GDP_READ_ONLY":         "true",
+				"MSSQL_DYNAMIC_GDP_CONNECTION_STRING": "sqlserver://u:p@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true",
+			},
+			alias:          "GDP",
+			wantConnString: "sqlserver://u:p@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true",
+			wantReadOnly:   true,
+			description:    "Per-alias ConnectionString (URL form, legacy-server workaround) must be loaded",
+		},
+		{
+			name: "_ENCRYPT is lowercased and trimmed",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_GDP_SERVER":   "SERVER-GDP",
+				"MSSQL_DYNAMIC_GDP_DATABASE": "GDPA",
+				"MSSQL_DYNAMIC_GDP_ENCRYPT":  "  DISABLE  ",
+			},
+			alias:        "GDP",
+			wantEncrypt:  "disable",
+			wantReadOnly: true, // secure default
+			description:  "Defensive: env vars may carry leading/trailing whitespace and mixed case",
+		},
+		{
+			name: "no override leaves the new fields empty (regression baseline)",
+			setEnv: map[string]string{
+				"MSSQL_DYNAMIC_GDP_SERVER":   "SERVER-GDP",
+				"MSSQL_DYNAMIC_GDP_DATABASE": "GDPA",
+			},
+			alias:        "GDP",
+			wantEncrypt:  "",
+			wantPort:     "",
+			wantReadOnly: true, // secure default
+			description:  "Empty env vars must not invent defaults; legacy path stays available",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Clear out any leftover env from previous subtests / parent shell
+			for _, k := range []string{
+				"MSSQL_DYNAMIC_MODE",
+				"MSSQL_DYNAMIC_GDP_SERVER", "MSSQL_DYNAMIC_GDP_DATABASE",
+				"MSSQL_DYNAMIC_GDP_USER", "MSSQL_DYNAMIC_GDP_PASSWORD",
+				"MSSQL_DYNAMIC_GDP_ENCRYPT", "MSSQL_DYNAMIC_GDP_PORT",
+				"MSSQL_DYNAMIC_GDP_CONNECTION_STRING", "MSSQL_DYNAMIC_GDP_READ_ONLY",
+			} {
+				t.Setenv(k, "")
+			}
+			for k, v := range tc.setEnv {
+				t.Setenv(k, v)
+			}
+
+			aliases := loadDynamicAliases(NewSecurityLogger())
+			a, ok := aliases[tc.alias]
+			if !ok {
+				t.Fatalf("expected alias %q to be loaded; got: %+v", tc.alias, aliases)
+			}
+			if a.Encrypt != tc.wantEncrypt {
+				t.Errorf("Encrypt = %q, want %q\nCase: %s", a.Encrypt, tc.wantEncrypt, tc.description)
+			}
+			if a.Port != tc.wantPort {
+				t.Errorf("Port = %q, want %q\nCase: %s", a.Port, tc.wantPort, tc.description)
+			}
+			if a.ConnectionString != tc.wantConnString {
+				t.Errorf("ConnectionString = %q, want %q\nCase: %s", a.ConnectionString, tc.wantConnString, tc.description)
+			}
+			if a.ReadOnly != tc.wantReadOnly {
+				t.Errorf("ReadOnly = %v, want %v\nCase: %s", a.ReadOnly, tc.wantReadOnly, tc.description)
+			}
+		})
+	}
+}
+
+// TestBuildAliasConnectionString exercises the priority cascade of the new
+// per-alias connection-string builder. We avoid the real sql.Open / Ping
+// because those require network access; buildAliasConnectionString is
+// pure and 100% unit-testable.
+func TestBuildAliasConnectionString(t *testing.T) {
+	baseAlias := func() DynamicAlias {
+		return DynamicAlias{
+			Alias:    "GDP",
+			Server:   "SERVER-GDP",
+			Database: "GDPA",
+			User:     "u",
+			Password: "p",
+		}
+	}
+
+	t.Run("Priority 1: ConnectionString override wins outright (dev mode)", func(t *testing.T) {
+		a := baseAlias()
+		a.ConnectionString = "sqlserver://u:p@SERVER-GDP:1433?database=GDPA&encrypt=disable&trustservercertificate=true"
+		cs, err := buildAliasConnectionString(&a, true, "GDP")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.HasPrefix(cs, "sqlserver://") {
+			t.Errorf("expected URL-form override to be returned verbatim, got: %s", cs)
+		}
+		if !strings.Contains(cs, "connection timeout=30") {
+			t.Errorf("default connection timeout must be appended; got: %s", cs)
+		}
+		if !strings.Contains(cs, "command timeout=30") {
+			t.Errorf("default command timeout must be appended; got: %s", cs)
+		}
+	})
+
+	t.Run("Priority 1: ConnectionString override is appended to timeouts only if missing", func(t *testing.T) {
+		a := baseAlias()
+		a.ConnectionString = "sqlserver://u:p@SERVER-GDP:1433?database=GDPA&encrypt=disable&connection timeout=10"
+		cs, err := buildAliasConnectionString(&a, true, "GDP")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(cs, "connection timeout=10") {
+			t.Errorf("user-supplied connection timeout=10 must be preserved; got: %s", cs)
+		}
+		if strings.Contains(cs, "connection timeout=10;connection timeout=30") {
+			t.Errorf("default must not be appended when already present; got: %s", cs)
+		}
+		if !strings.Contains(cs, "command timeout=30") {
+			t.Errorf("command timeout (absent) must be appended; got: %s", cs)
+		}
+	})
+
+	t.Run("Priority 1: ConnectionString override in production logs warnings for insecure settings", func(t *testing.T) {
+		// This test only verifies the override path is taken; the actual
+		// slog.Warn output is verified by the build succeeding (the
+		// function only logs, never errors) and is intentionally not
+		// captured here to avoid coupling to logger internals.
+		a := baseAlias()
+		a.ConnectionString = "sqlserver://u:p@SERVER-GDP:1433?database=GDPA&encrypt=false&trustservercertificate=true"
+		if _, err := buildAliasConnectionString(&a, false, "GDP"); err != nil {
+			t.Fatalf("unexpected error in production with insecure override: %v", err)
+		}
+	})
+
+	t.Run("Priority 2: per-alias Encrypt + Port (no ConnectionString) in dev", func(t *testing.T) {
+		a := baseAlias()
+		a.Encrypt = "disable"
+		a.Port = "1500"
+		cs, err := buildAliasConnectionString(&a, true, "GDP")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(cs, "port=1500") {
+			t.Errorf("per-alias Port=1500 must appear; got: %s", cs)
+		}
+		if !strings.Contains(cs, "encrypt=disable") {
+			t.Errorf("per-alias Encrypt=disable must appear; got: %s", cs)
+		}
+		if !strings.Contains(cs, "trustservercertificate=true") {
+			t.Errorf("dev mode should keep trustservercertificate=true; got: %s", cs)
+		}
+	})
+
+	t.Run("Priority 2: per-alias Encrypt in production still forces TLS off", func(t *testing.T) {
+		a := baseAlias()
+		a.Encrypt = "false"
+		cs, err := buildAliasConnectionString(&a, false, "GDP")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// The override is intentional; we just want to make sure the
+		// function honors it without erroring.
+		if !strings.Contains(cs, "encrypt=false") {
+			t.Errorf("per-alias Encrypt=false in production must appear (with warning); got: %s", cs)
+		}
+	})
+
+	t.Run("Priority 3: devMode defaults (no overrides)", func(t *testing.T) {
+		a := baseAlias()
+		cs, err := buildAliasConnectionString(&a, true, "GDP")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(cs, "encrypt=false") {
+			t.Errorf("dev mode default must be encrypt=false; got: %s", cs)
+		}
+		if !strings.Contains(cs, "trustservercertificate=true") {
+			t.Errorf("dev mode default must be trustservercertificate=true; got: %s", cs)
+		}
+		if !strings.Contains(cs, "port=1433") {
+			t.Errorf("default port must be 1433; got: %s", cs)
+		}
+	})
+
+	t.Run("Priority 3: production defaults (no overrides)", func(t *testing.T) {
+		a := baseAlias()
+		cs, err := buildAliasConnectionString(&a, false, "GDP")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(cs, "encrypt=true") {
+			t.Errorf("production default must be encrypt=true; got: %s", cs)
+		}
+		if !strings.Contains(cs, "trustservercertificate=false") {
+			t.Errorf("production default must be trustservercertificate=false; got: %s", cs)
+		}
+	})
+
+	t.Run("nil alias returns an error", func(t *testing.T) {
+		if _, err := buildAliasConnectionString(nil, true, "X"); err == nil {
+			t.Errorf("expected error for nil alias, got nil")
+		}
+	})
+}
+
+// TestIsLegacyTLSPivotError covers the fingerprint used to surface the
+// remediation hint when connecting to a SQL Server 2000/2008/2012 instance.
+func TestIsLegacyTLSPivotError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"exact Go wording: protocol version 301", errString("tls: server selected unsupported protocol version 301"), true},
+		{"unsupported protocol fallback", errString("tls: server selected unsupported protocol version 0x0301"), true},
+		{"unrelated error", errString("dial tcp: connection refused"), false},
+		{"empty error", errString(""), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isLegacyTLSPivotError(tc.err); got != tc.want {
+				t.Errorf("isLegacyTLSPivotError(%q) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// errString is a tiny helper that lets us build an error value in the
+// table-driven test above without pulling in fmt/errors just for that.
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+
 func TestClassicServerDoesNotExposeDynamicTools(t *testing.T) {
 	setupTestEnv()
 

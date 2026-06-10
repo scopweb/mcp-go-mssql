@@ -177,6 +177,19 @@ env = { MSSQL_EXTRA_LOG = "true" }   # Variables adicionales
 
 Estas variables se **combinan** con las que ya carga el servidor desde su `.env`.
 
+#### Problema 4: `dynamic_connect` falla con "protocol version 301" (SQL Server 2000/2008/2012)
+
+**Causa**: el servidor solo negocia TLS 1.0, y el runtime de Go moderno lo rechaza. Es el mismo problema ya resuelto en modo clásico con `MSSQL_CONNECTION_STRING`, pero aplicado a un alias dinámico concreto.
+
+**Solución**: define `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` con un DSN en formato URL para ese alias. Ejemplo:
+
+```env
+MSSQL_DYNAMIC_LEGACY_READ_ONLY=true
+MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://app_ai_read:...@legacy-sql2000.local:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
+```
+
+El servidor detectará el error `protocol version 301` y añadirá automáticamente esta pista al mensaje de error, así que no tienes que recordar el workaround de memoria.
+
 ### **📋 Resumen de Pasos Rápidos**
 
 1. Añade (o verifica) la sección en `~/.grok/config.toml`
