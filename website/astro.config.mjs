@@ -4,6 +4,7 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
+	site: 'https://mcp-go-mssql.scopweb.com',
 	integrations: [
 		starlight({
 			title: {
@@ -108,6 +109,14 @@ export default defineConfig({
 						{ label: 'Testing', slug: 'guias/testing' },
 						{ label: 'Actualización de Go', translations: { en: 'Go Upgrade' }, slug: 'guias/actualizacion-go' },
 						{ label: 'Integración MCP', translations: { en: 'MCP Integration' }, slug: 'guias/integracion-mcp' },
+						{
+							label: 'Conexiones Dinámicas',
+							translations: { en: 'Dynamic Connections' },
+							items: [
+								{ label: 'Modo Dinámico (Una App)', translations: { en: 'Dynamic Mode (One App)' }, slug: 'guias/modo-dinamico-una-aplicacion-varias-bases' },
+								{ label: 'FAQ Conexiones Dinámicas', translations: { en: 'Dynamic Connections FAQ' }, slug: 'guias/faq-conexiones-dinamicas' },
+							],
+						},
 					],
 				},
 				{

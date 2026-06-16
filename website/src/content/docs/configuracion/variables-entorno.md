@@ -1,6 +1,6 @@
 ---
 title: Variables de entorno
-description: Referencia completa de variables de entorno de MCP-Go-MSSQL
+description: Referencia completa de todas las variables de entorno soportadas por MCP-Go-MSSQL, incluyendo modo dinámico, seguridad y configuración de TLS.
 ---
 
 Todas las credenciales y opciones de configuración se gestionan mediante variables de entorno. Nunca hardcodees credenciales en el código fuente.

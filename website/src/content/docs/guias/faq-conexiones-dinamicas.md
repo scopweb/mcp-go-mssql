@@ -1,3 +1,8 @@
+---
+title: FAQ - Conexiones dinámicas en Grok Build
+description: Guía práctica para configurar conexiones dinámicas de MCP-Go-MSSQL en Grok Build (TUI), incluyendo carga de .env y gestión de múltiples alias.
+---
+
 # ❓ FAQ #8: Configurar MCP MSSQL con conexiones dinámicas en Grok Build
 
 > **📌 Recomendado**: Si tu caso es "una sola aplicación que necesita acceder a varias bases de datos relacionadas", lee primero esta guía más específica y segura:  
@@ -82,7 +87,7 @@ enabled = true
 
 Ejemplo de alias en el `.env`:
 
-```env
+```ini
 MSSQL_DYNAMIC_MODE=true
 DEVELOPER_MODE=true
 

@@ -5,7 +5,7 @@ template: splash
 hero:
   image:
     file: ../../assets/scopweb.png
-  tagline: Tu base de datos SQL Server, directamente en Claude. Consulta, analiza y opera con la tranquilidad de un sistema blindado.
+  tagline: Microsoft SQL Server en Claude. Con seguridad de nivel empresarial.
   actions:
     - text: Empezar ahora
       link: /inicio/bienvenida/
@@ -20,16 +20,16 @@ hero:
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <CardGrid stagger>
-  <Card title="Blindado por defecto" icon="shield">
-    TLS obligatorio, prepared statements exclusivos, modo solo lectura y whitelist de tablas. Tu base de datos de producción no corre ningún riesgo.
+  <Card title="Seguridad por defecto" icon="shield">
+    TLS obligatorio, prepared statements exclusivos, modo solo lectura con whitelist y protección contra inyección SQL. Tu base de datos de producción queda protegida.
   </Card>
-  <Card title="9 herramientas listas" icon="puzzle">
-    Consultas, tablas, índices, foreign keys, procedimientos almacenados y más. Todo lo que necesitas para explorar y operar tu base de datos desde Claude.
+  <Card title="9 herramientas MCP" icon="puzzle">
+    Consultas, exploración de esquema, procedimientos almacenados, claves foráneas y más. Todo lo necesario para operar tu base de datos desde la IA.
   </Card>
-  <Card title="Hecho para IA" icon="star">
-    Modo AI-Safe: la IA lee todo pero solo escribe en tablas que tú autorices. Ideal para dejar a Claude trabajar en producción sin preocupaciones.
+  <Card title="Control granular para IA" icon="star">
+    La IA puede leer toda la información, pero solo modifica las tablas que tú autorices mediante whitelist. Diseñado para entornos productivos.
   </Card>
-  <Card title="Claude Desktop + Claude Code" icon="laptop">
-    Servidor MCP para Claude Desktop y CLI para Claude Code. Dos caminos, las mismas garantías de seguridad.
+  <Card title="Conexiones dinámicas" icon="setting">
+    Un solo servidor MCP puede acceder de forma segura a múltiples bases de datos relacionadas de una misma aplicación, con políticas de seguridad independientes por alias.
   </Card>
 </CardGrid>

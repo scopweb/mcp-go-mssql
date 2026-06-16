@@ -1,3 +1,8 @@
+---
+title: Dynamic Mode for One Application with Multiple Related Databases
+description: How to securely configure a single MCP-Go-MSSQL instance to access multiple related databases of one application while maintaining strong per-database access controls.
+---
+
 # Guide: Dynamic Mode for One Application with Multiple Related Databases
 
 **Goal of this guide**: Configure the MCP MSSQL server in dynamic mode in a **secure and practical** way when you have **one logical application** that needs to access several related databases.
@@ -43,7 +48,7 @@ This is the most common and dangerous mistake.
 
 ### 1. `.env` Structure
 
-```env
+```ini
 # ============================================
 # DYNAMIC MODE - Single Application Scope
 # ============================================
@@ -204,7 +209,7 @@ Even if you set `READ_ONLY=false`, the database user should only have permission
 
 ## Complete Recommended Example for an Application
 
-```env
+```ini
 MSSQL_DYNAMIC_MODE=true
 DEVELOPER_MODE=false
 

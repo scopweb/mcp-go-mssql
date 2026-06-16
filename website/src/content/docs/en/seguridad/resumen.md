@@ -1,6 +1,6 @@
 ---
 title: Security Overview
-description: Overview of MCP-Go-MSSQL security features
+description: "Overview of MCP-Go-MSSQL security features: mandatory TLS encryption, read-only mode, table whitelisting, and SQL injection protection."
 ---
 
 MCP-Go-MSSQL implements multiple security layers to protect databases in production environments.

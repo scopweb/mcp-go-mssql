@@ -1,6 +1,6 @@
 ---
 title: Resumen de seguridad
-description: Visión general de las características de seguridad de MCP-Go-MSSQL
+description: "Visión general de las protecciones de seguridad de MCP-Go-MSSQL: cifrado TLS obligatorio, modo solo lectura, whitelist de tablas y prevención de inyección SQL."
 ---
 
 MCP-Go-MSSQL implementa múltiples capas de seguridad para proteger bases de datos en entornos de producción.
