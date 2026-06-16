@@ -1,3 +1,8 @@
+---
+title: Modo Dinámico para Una Aplicación con Varias Bases de Datos
+description: Cómo configurar de forma segura un solo servidor MCP-Go-MSSQL para acceder a múltiples bases de datos relacionadas de una misma aplicación, manteniendo control de permisos.
+---
+
 # Guía: Modo Dinámico para Una Aplicación con Varias Bases de Datos Relacionadas
 
 **Objetivo de esta guía**: Configurar el servidor MCP MSSQL en modo dinámico de forma **segura y práctica** cuando tienes **una sola aplicación lógica** que necesita acceder a varias bases de datos relacionadas.
@@ -43,7 +48,7 @@ Este es el error más común y peligroso.
 
 ### 1. Estructura de tu `.env`
 
-```env
+```ini
 # ============================================
 # MODO DINÁMICO - Una sola aplicación
 # ============================================
@@ -204,7 +209,7 @@ Aunque pongas `READ_ONLY=false`, el usuario de base de datos debe tener permisos
 
 ## Ejemplo Completo Recomendado para una Aplicación
 
-```env
+```ini
 MSSQL_DYNAMIC_MODE=true
 DEVELOPER_MODE=false
 

@@ -1,6 +1,6 @@
 ---
-title: Producción
-description: Guía de despliegue en producción de MCP-Go-MSSQL
+title: Despliegue en producción
+description: Recomendaciones y pasos para desplegar MCP-Go-MSSQL de forma segura en entornos de producción.
 ---
 
 ## Compilar el binario

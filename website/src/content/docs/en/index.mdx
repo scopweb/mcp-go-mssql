@@ -5,7 +5,7 @@ template: splash
 hero:
   image:
     file: ../../../assets/scopweb.png
-  tagline: Your SQL Server database, right inside Claude. Query, analyze, and operate with the peace of mind of a hardened system.
+  tagline: Microsoft SQL Server inside Claude. Enterprise-grade security.
   actions:
     - text: Get Started
       link: /en/inicio/bienvenida/
@@ -21,15 +21,15 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <CardGrid stagger>
   <Card title="Secure by default" icon="shield">
-    Mandatory TLS, exclusive prepared statements, read-only mode, and table whitelist. Your production database is never at risk.
+    Mandatory TLS, exclusive prepared statements, read-only mode with table whitelisting, and SQL injection protection. Your production database stays protected.
   </Card>
-  <Card title="9 tools ready to go" icon="puzzle">
-    Queries, tables, indexes, foreign keys, stored procedures, and more. Everything you need to explore and operate your database from Claude.
+  <Card title="9 MCP tools" icon="puzzle">
+    Queries, schema exploration, stored procedures, foreign keys, and more. Everything needed to operate your database from AI.
   </Card>
-  <Card title="Built for AI" icon="star">
-    AI-Safe mode: the AI reads everything but only writes to tables you authorize. Perfect for letting Claude work on production worry-free.
+  <Card title="Granular AI control" icon="star">
+    The AI can read all data, but can only modify tables you explicitly authorize through the whitelist. Built for production environments.
   </Card>
-  <Card title="Claude Desktop + Claude Code" icon="laptop">
-    MCP server for Claude Desktop and CLI for Claude Code. Two paths, the same security guarantees.
+  <Card title="Dynamic connections" icon="setting">
+    A single MCP server can securely access multiple related databases of one application, each with independent security policies per alias.
   </Card>
 </CardGrid>
