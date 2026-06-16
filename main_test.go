@@ -745,8 +745,8 @@ func TestExplainQueryValidation(t *testing.T) {
 	server := newTestMCPServer()
 
 	testCases := []struct {
-		name     string
-		query    string
+		name       string
+		query      string
 		wantSELECT bool
 	}{
 		{"Valid SELECT", "SELECT * FROM users", true},
@@ -835,10 +835,10 @@ func TestDynamicModeDetection(t *testing.T) {
 		{
 			name: "explicit false always wins (even with dynamic vars present)",
 			setEnv: map[string]string{
-				"MSSQL_DYNAMIC_MODE":       "false",
-				"MSSQL_DYNAMIC_APP_SERVER": "sql01.local",
+				"MSSQL_DYNAMIC_MODE":         "false",
+				"MSSQL_DYNAMIC_APP_SERVER":   "sql01.local",
 				"MSSQL_DYNAMIC_APP_DATABASE": "TestDB",
-				"MSSQL_SERVER":             "",
+				"MSSQL_SERVER":               "",
 			},
 			wantDynamic: false,
 			description: "User explicitly wants classic mode for isolation",
@@ -864,9 +864,9 @@ func TestDynamicModeDetection(t *testing.T) {
 		{
 			name: "no classic config + dynamic vars present → dynamic (auto-detect)",
 			setEnv: map[string]string{
-				"MSSQL_DYNAMIC_MODE":        "",
-				"MSSQL_SERVER":              "",
-				"MSSQL_DYNAMIC_PROD_SERVER": "prod.local",
+				"MSSQL_DYNAMIC_MODE":          "",
+				"MSSQL_SERVER":                "",
+				"MSSQL_DYNAMIC_PROD_SERVER":   "prod.local",
 				"MSSQL_DYNAMIC_PROD_DATABASE": "ProdDB",
 			},
 			wantDynamic: true,
@@ -905,23 +905,23 @@ func TestDynamicModeDetection(t *testing.T) {
 // (protocol version 301).
 func TestLoadDynamicAliases_PerAliasEncryptPortConnectionString(t *testing.T) {
 	tests := []struct {
-		name             string
-		setEnv           map[string]string
-		alias            string
-		wantEncrypt      string
-		wantPort         string
-		wantConnString   string
-		wantReadOnly     bool
-		description      string
+		name           string
+		setEnv         map[string]string
+		alias          string
+		wantEncrypt    string
+		wantPort       string
+		wantConnString string
+		wantReadOnly   bool
+		description    string
 	}{
 		{
 			name: "per-alias _ENCRYPT disable is loaded",
 			setEnv: map[string]string{
-				"MSSQL_DYNAMIC_GDP_SERVER":  "SERVER-GDP",
-				"MSSQL_DYNAMIC_GDP_DATABASE": "GDPA",
-				"MSSQL_DYNAMIC_GDP_USER":    "u",
-				"MSSQL_DYNAMIC_GDP_PASSWORD": "p",
-				"MSSQL_DYNAMIC_GDP_ENCRYPT":  "disable",
+				"MSSQL_DYNAMIC_GDP_SERVER":    "SERVER-GDP",
+				"MSSQL_DYNAMIC_GDP_DATABASE":  "GDPA",
+				"MSSQL_DYNAMIC_GDP_USER":      "u",
+				"MSSQL_DYNAMIC_GDP_PASSWORD":  "p",
+				"MSSQL_DYNAMIC_GDP_ENCRYPT":   "disable",
 				"MSSQL_DYNAMIC_GDP_READ_ONLY": "true",
 			},
 			alias:        "GDP",
@@ -1179,7 +1179,6 @@ func TestIsLegacyTLSPivotError(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
 
 func TestClassicServerDoesNotExposeDynamicTools(t *testing.T) {
 	setupTestEnv()
