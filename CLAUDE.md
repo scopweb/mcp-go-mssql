@@ -311,7 +311,7 @@ MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://USER:PASS@legacy-sql2000.loca
 
 ## Dependencies
 
-- `github.com/denisenkom/go-mssqldb`: Microsoft SQL Server driver with TLS support
+- `github.com/microsoft/go-mssqldb`: Microsoft SQL Server driver with TLS support
 - Go standard library: crypto/tls, context, regexp for security features
 
 ## IMPORTANT SECURITY NOTES
