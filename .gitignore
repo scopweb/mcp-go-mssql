@@ -66,7 +66,8 @@ debug.log
 # =============================================================================
 
 # Claude Code / AI agent directories
-.claude/
+# (intentionally NOT ignoring .claude/ wholesale — see selective rules below
+# to keep the project-owned mcp-mssql-tools skill tracked)
 .agent/
 .agents/
 
@@ -146,10 +147,21 @@ config.json
 claude_desktop_config.json
 
 # IDE / AI agent local state (extra safety)
-.claude/
+# Ignore individual entries inside .claude/ rather than the whole directory,
+# so we can selectively re-include specific project-owned subpaths below.
+.claude/settings.json
+.claude/settings.local.json
+.claude/commands/
+.claude/skills/github-profesional
+.claude/skills/go-secure
+.claude/skills/mcp-spec-reviewer
+.claude/skills/scopweb-theme
 .agents/
 .cursor/
 .aider/
+
+# Allow this project-owned skill to be tracked
+!.claude/skills/mcp-mssql-tools/
 
 # OS generated
 .DS_Store
