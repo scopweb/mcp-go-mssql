@@ -1,0 +1,16 @@
+# Normalize line endings: store as LF in the repo and check out as LF.
+# Prevents the whole tree showing as modified when an editor rewrites files as CRLF.
+* text=auto eol=lf
+
+# Explicit binaries (never normalize / never diff as text)
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.pdf  binary
+*.exe  binary
+*.dll  binary
+*.woff  binary
+*.woff2 binary
