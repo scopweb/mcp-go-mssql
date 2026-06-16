@@ -3,8 +3,8 @@ module mcp-go-mssql
 go 1.26.0
 
 require (
-	github.com/microsoft/go-mssqldb v1.9.8
-	golang.org/x/mod v0.34.0
+	github.com/microsoft/go-mssqldb v1.10.0
+	golang.org/x/mod v0.36.0
 )
 
 require (
@@ -12,6 +12,6 @@ require (
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 )
