@@ -323,7 +323,7 @@ func BenchmarkSecurityChecksIO(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_, _ = os.ReadFile("../../go.mod")  // #nosec G104 - benchmark intentionally ignores errors
-		_, _ = os.ReadFile("../../go.sum")  // #nosec G104 - benchmark intentionally ignores errors
+		_, _ = os.ReadFile("../../go.mod") // #nosec G104 - benchmark intentionally ignores errors
+		_, _ = os.ReadFile("../../go.sum") // #nosec G104 - benchmark intentionally ignores errors
 	}
 }

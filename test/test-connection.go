@@ -18,12 +18,12 @@ func main() {
 	user := os.Getenv("MSSQL_USER")
 	password := os.Getenv("MSSQL_PASSWORD")
 	port := os.Getenv("MSSQL_PORT")
-	
+
 	// Check required environment variables
 	if server == "" || database == "" || user == "" || password == "" {
 		log.Fatal("Missing required environment variables: MSSQL_SERVER, MSSQL_DATABASE, MSSQL_USER, MSSQL_PASSWORD")
 	}
-	
+
 	if port == "" {
 		port = "1433"
 	}
@@ -33,7 +33,7 @@ func main() {
 	if os.Getenv("DEVELOPER_MODE") == "true" {
 		trustCert = "true"
 	}
-	
+
 	connStr := fmt.Sprintf("server=%s;database=%s;user id=%s;password=%s;port=%s;encrypt=true;trustservercertificate=%s;connection timeout=30;command timeout=30",
 		server, database, user, password, port, trustCert)
 
