@@ -1068,15 +1068,17 @@ func TestBuildAliasConnectionString(t *testing.T) {
 		}
 	})
 
-	t.Run("Priority 1: ConnectionString override in production logs warnings for insecure settings", func(t *testing.T) {
-		// This test only verifies the override path is taken; the actual
-		// slog.Warn output is verified by the build succeeding (the
-		// function only logs, never errors) and is intentionally not
-		// captured here to avoid coupling to logger internals.
+	t.Run("Priority 1: ConnectionString override with insecure TLS in production fails closed (M2)", func(t *testing.T) {
 		a := baseAlias()
 		a.ConnectionString = "sqlserver://u:p@SERVER-GDP:1433?database=GDPA&encrypt=false&trustservercertificate=true"
+		if _, err := buildAliasConnectionString(&a, false, "GDP"); err == nil {
+			t.Fatalf("expected insecure TLS override in production to fail closed, got nil error")
+		}
+		// With the explicit opt-in, the same override is permitted (and logs an
+		// auditable warning) — this keeps the legacy TLS 1.0 case working.
+		t.Setenv("MSSQL_ALLOW_INSECURE_TLS", "true")
 		if _, err := buildAliasConnectionString(&a, false, "GDP"); err != nil {
-			t.Fatalf("unexpected error in production with insecure override: %v", err)
+			t.Fatalf("MSSQL_ALLOW_INSECURE_TLS=true should permit the override; got: %v", err)
 		}
 	})
 
@@ -1099,17 +1101,20 @@ func TestBuildAliasConnectionString(t *testing.T) {
 		}
 	})
 
-	t.Run("Priority 2: per-alias Encrypt in production still forces TLS off", func(t *testing.T) {
+	t.Run("Priority 2: per-alias Encrypt=false in production fails closed unless opted in (M2)", func(t *testing.T) {
 		a := baseAlias()
 		a.Encrypt = "false"
+		if _, err := buildAliasConnectionString(&a, false, "GDP"); err == nil {
+			t.Fatalf("expected per-alias encrypt=false in production to fail closed, got nil error")
+		}
+		// The escape hatch makes the intent explicit and auditable.
+		t.Setenv("MSSQL_ALLOW_INSECURE_TLS", "true")
 		cs, err := buildAliasConnectionString(&a, false, "GDP")
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("MSSQL_ALLOW_INSECURE_TLS=true should permit encrypt=false; got: %v", err)
 		}
-		// The override is intentional; we just want to make sure the
-		// function honors it without erroring.
 		if !strings.Contains(cs, "encrypt=false") {
-			t.Errorf("per-alias Encrypt=false in production must appear (with warning); got: %s", cs)
+			t.Errorf("per-alias Encrypt=false must still appear when opted in; got: %s", cs)
 		}
 	})
 

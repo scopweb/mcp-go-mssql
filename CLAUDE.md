@@ -119,11 +119,26 @@ The server reads database connection from these environment variables. See `.env
   - `"false"`: Disable encryption — **required for SQL Server 2008/2012** which don't support TLS 1.2
   - `"true"`: Force encryption even in dev mode
   - If not set: defaults to `"false"` in dev mode, always `"true"` in production mode
+- `MSSQL_ALLOW_INSECURE_TLS`: Explicit escape hatch for insecure TLS **in production** (`DEVELOPER_MODE=false`)
+  - By default, production **fails closed**: if a connection string (global `MSSQL_CONNECTION_STRING`, a per-alias `_CONNECTION_STRING`, or a per-alias `_ENCRYPT` override) would disable encryption (`encrypt=false`/`encrypt=disable`) or certificate validation (`trustservercertificate=true`), the server **refuses to start** instead of degrading TLS silently.
+  - `"true"`: Intentionally allow those insecure settings in production. The connection proceeds and an auditable `WARN` is logged on every affected connection. This is the sanctioned way to keep **legacy SQL Server 2000/2008/2012** (TLS 1.0 only) working — the exception becomes conscious and greppable instead of accidental.
+  - If not set: insecure TLS in production aborts startup.
 - `MSSQL_WHITELIST_TABLES`: Comma-separated list of tables/views allowed for modification in read-only mode
   - Example: `"temp_ai,v_temp_ia"`
   - Only these tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP) when `MSSQL_READ_ONLY=true`
   - All other tables remain read-only
   - Prevents accidental data modification in production databases while allowing AI to work with temporary tables
+  - **Schema-qualified matching**: entries are compared schema-qualified. A bare name defaults to the `dbo` schema, so `temp_ai` matches `temp_ai` and `dbo.temp_ai` but **not** `otro_schema.temp_ai` or a database-qualified `otradb.dbo.temp_ai` (those are treated as different objects and blocked). To whitelist a non-`dbo` object, qualify it explicitly (e.g. `app.temp_ai`).
+
+### Authorization model: where the real boundary lives
+
+**The strongest write control must live in the database, not in this process.** The Go layer validates SQL with regular expressions, and regex cannot cover the whole T-SQL grammar. The whitelist check and the read-only guard are **defense in depth** — valuable, but best-effort by nature. The security boundary you can actually rely on is a **least-privilege SQL login**:
+
+- Grant the login used by the MCP server `SELECT` broadly, and `INSERT`/`UPDATE`/`DELETE` **only** on the specific tables the AI is allowed to modify (ideally dedicated `temp_ai`-style tables).
+- With that in place, even if the regex-based extractor is fooled by an exotic construct (`MERGE` variants, `OUTPUT ... INTO`, `SELECT ... INTO`, updatable views, triggers), the database engine itself rejects the write. This also neutralizes the schema/database confusion at the root.
+- Treat `MSSQL_READ_ONLY` + `MSSQL_WHITELIST_TABLES` as a second layer that reduces mistakes and narrows the surface — not as the sole line of defense.
+
+**On `confirm_operation` (dynamic mode):** the confirmation step is an **accidental-error reducer, not a security barrier.** The same agent that generates a modification also confirms it, so a jailbroken model or a prompt-injection payload can satisfy the confirmation trivially. It genuinely helps against fat-finger mistakes; it does **not** stop a determined or compromised caller. For real human-in-the-loop approval, move authorization out of the agent loop — a least-privilege DB account (no write grants for the alias) is the simplest and most reliable option.
 
 **Dynamic Connections (MSSQL_DYNAMIC_*)** — For accessing multiple related databases with a single MCP server load:
 
@@ -208,6 +223,9 @@ MSSQL_DYNAMIC_APP_AIWORK_WHITELIST_TABLES=ai_temp_tasks,ai_results,ai_audit
 # Legacy SQL Server 2000/2008/2012 in dynamic mode
 # These servers only negotiate TLS 1.0, which modern Go refuses. Use the
 # _CONNECTION_STRING override in URL form (encrypt=disable) for each affected alias.
+# In production (DEVELOPER_MODE=false) the insecure TLS now fails closed, so you
+# must explicitly opt in with MSSQL_ALLOW_INSECURE_TLS=true to allow it.
+MSSQL_ALLOW_INSECURE_TLS=true
 MSSQL_DYNAMIC_LEGACY_READ_ONLY=true
 MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://USER:PASS@legacy-sql2000.local:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
 ```

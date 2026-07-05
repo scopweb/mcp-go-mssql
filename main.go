@@ -145,9 +145,17 @@ func NewSecurityLogger() *SecurityLogger {
 	}
 }
 
-// Printf provides backward-compatible formatted logging.
+// Printf provides backward-compatible formatted logging at Info level.
 func (sl *SecurityLogger) Printf(format string, args ...interface{}) {
 	sl.logger.Info(fmt.Sprintf(format, args...))
+}
+
+// Debugf logs at Debug level. Used for verbose payloads (e.g. the full request
+// body / query text) that may contain PII embedded in SQL literals and should
+// not be emitted at the default Info level. Gated by the dynamic level set via
+// the MCP logging/setLevel request.
+func (sl *SecurityLogger) Debugf(format string, args ...interface{}) {
+	sl.logger.Debug(fmt.Sprintf(format, args...))
 }
 
 func (sl *SecurityLogger) LogConnectionAttempt(success bool) {
@@ -212,6 +220,23 @@ var tableExtractionPatterns = []*regexp.Regexp{
 	// Extra safety for fully qualified names like db.schema.table or [db].[schema].[table]
 	regexp.MustCompile(`(?i)\bFROM\s+[\w\.\[\]]+\.[\w\.\[\]]+\.?\[?([\w]+)\]?`),
 	regexp.MustCompile(`(?i)\bJOIN\s+[\w\.\[\]]+\.[\w\.\[\]]+\.?\[?([\w]+)\]?`),
+}
+
+// qualifiedTableExtractionPatterns mirror tableExtractionPatterns but capture
+// the FULL 1-to-3-part object reference (e.g. "otro_schema.temp_ai",
+// "otradb.dbo.temp_ai") instead of only the final segment. They exist so the
+// whitelist check can compare schema-qualified names (M4) and stop treating
+// "otro_schema.temp_ai" as the whitelisted, unqualified "temp_ai". Each pattern
+// captures group 1 = a run of dotted, optionally bracketed identifiers.
+var qualifiedTableExtractionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bFROM\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})`),
+	regexp.MustCompile(`(?i)\bJOIN\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})`),
+	regexp.MustCompile(`(?i)\bINTO\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})`),
+	regexp.MustCompile(`(?i)\bUPDATE\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})`),
+	regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})`),
+	regexp.MustCompile(`(?i)\bDELETE\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})\s+FROM`),
+	regexp.MustCompile(`(?i)\bTABLE\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})`),
+	regexp.MustCompile(`(?i)\bVIEW\s+((?:\[[^\]]+\]|\w+)(?:\.(?:\[[^\]]+\]|\w+)){0,2})`),
 }
 
 // Pre-compiled pattern for procedure name validation
@@ -403,6 +428,49 @@ func validateDSNField(name, value string) error {
 	return nil
 }
 
+// insecureTLSExplicitlyAllowed reports whether the operator has explicitly
+// opted in to insecure database TLS via MSSQL_ALLOW_INSECURE_TLS=true. This is
+// the intentional, auditable escape hatch for the legacy SQL Server
+// 2000/2008/2012 case (TLS 1.0 only). Without it, insecure TLS in production
+// fails closed instead of degrading silently (M2).
+func insecureTLSExplicitlyAllowed() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("MSSQL_ALLOW_INSECURE_TLS")), "true")
+}
+
+// productionTLSViolation returns a non-empty, human-readable reason when a
+// connection string would degrade transport security in a way that must not be
+// permitted silently in production: encryption disabled, or certificate
+// validation disabled. A missing 'encrypt=' parameter is intentionally NOT
+// treated as a hard violation here (the driver still negotiates encryption in
+// many cases); it is surfaced separately as a warning by the callers.
+func productionTLSViolation(connStrLower string) string {
+	if strings.Contains(connStrLower, "encrypt=false") || strings.Contains(connStrLower, "encrypt=disable") {
+		return "encryption is disabled (encrypt=false)"
+	}
+	if strings.Contains(connStrLower, "trustservercertificate=true") {
+		return "server certificate validation is disabled (trustservercertificate=true)"
+	}
+	return ""
+}
+
+// enforceProductionTLS fails closed when a connection would use insecure TLS in
+// production, unless the operator explicitly opts in via
+// MSSQL_ALLOW_INSECURE_TLS=true (M2). When opted in, it downgrades to an
+// auditable warning so the intentional legacy exception stays visible in the
+// logs. In development mode this must not be called (callers gate on
+// isProduction).
+func enforceProductionTLS(label, connStrLower string) error {
+	violation := productionTLSViolation(connStrLower)
+	if violation == "" {
+		return nil
+	}
+	if insecureTLSExplicitlyAllowed() {
+		slog.Warn(fmt.Sprintf("%s: %s in production — permitted because MSSQL_ALLOW_INSECURE_TLS=true", label, violation))
+		return nil
+	}
+	return fmt.Errorf("%s: %s in production. Refusing to start. Correct the TLS settings, or set MSSQL_ALLOW_INSECURE_TLS=true to intentionally allow it (needed only for legacy SQL Server 2000/2008/2012 that negotiate TLS 1.0)", label, violation)
+}
+
 func buildSecureConnectionString() (string, error) {
 	// Check for custom connection string first
 	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
@@ -410,15 +478,12 @@ func buildSecureConnectionString() (string, error) {
 		isProduction := strings.ToLower(os.Getenv("DEVELOPER_MODE")) != "true"
 
 		if isProduction {
-			// Warn about insecure settings in production
-			if strings.Contains(connStrLower, "encrypt=false") {
-				slog.Warn("custom connection string has encrypt=false in production mode")
+			// Fail closed on insecure TLS in production (M2).
+			if err := enforceProductionTLS("MSSQL_CONNECTION_STRING", connStrLower); err != nil {
+				return "", err
 			}
 			if !strings.Contains(connStrLower, "encrypt=") {
 				slog.Warn("custom connection string missing encrypt parameter in production mode")
-			}
-			if strings.Contains(connStrLower, "trustservercertificate=true") {
-				slog.Warn("custom connection string has trustservercertificate=true in production mode")
 			}
 		}
 
@@ -1160,14 +1225,12 @@ func buildAliasConnectionString(alias *DynamicAlias, devMode bool, aliasName str
 		isProduction := !devMode
 
 		if isProduction {
-			if strings.Contains(csLower, "encrypt=false") {
-				slog.Warn(fmt.Sprintf("dynamic alias '%s' connection string has encrypt=false in production mode", aliasName))
+			// Fail closed on insecure TLS in production (M2).
+			if err := enforceProductionTLS(fmt.Sprintf("dynamic alias '%s' connection string", aliasName), csLower); err != nil {
+				return "", err
 			}
 			if !strings.Contains(csLower, "encrypt=") {
 				slog.Warn(fmt.Sprintf("dynamic alias '%s' connection string missing encrypt parameter in production mode", aliasName))
-			}
-			if strings.Contains(csLower, "trustservercertificate=true") {
-				slog.Warn(fmt.Sprintf("dynamic alias '%s' connection string has trustservercertificate=true in production mode", aliasName))
 			}
 		}
 
@@ -1189,6 +1252,15 @@ func buildAliasConnectionString(alias *DynamicAlias, devMode bool, aliasName str
 	}
 	if alias.Encrypt != "" {
 		encrypt = alias.Encrypt
+	}
+
+	// Fail closed if a per-alias _ENCRYPT override would disable encryption in
+	// production (M2). devMode already relaxes TLS intentionally, so only the
+	// production path is guarded.
+	if !devMode {
+		if err := enforceProductionTLS(fmt.Sprintf("dynamic alias '%s'", aliasName), "encrypt="+strings.ToLower(encrypt)); err != nil {
+			return "", err
+		}
 	}
 
 	port := alias.Port
@@ -1265,6 +1337,89 @@ func (s *MCPMSSQLServer) extractAllTablesFromQuery(query string) []string {
 	return tables
 }
 
+// splitObjectParts splits a SQL object reference on '.' while respecting
+// bracketed identifiers, so "[my.schema].tbl" yields ["my.schema", "tbl"]
+// rather than three parts.
+func splitObjectParts(raw string) []string {
+	var parts []string
+	var cur strings.Builder
+	inBracket := false
+	for _, r := range raw {
+		switch {
+		case r == '[':
+			inBracket = true
+		case r == ']':
+			inBracket = false
+		case r == '.' && !inBracket:
+			parts = append(parts, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	parts = append(parts, cur.String())
+	return parts
+}
+
+// normalizeObjectName normalizes a 1-to-3-part SQL object reference into a
+// canonical, lowercase, schema-qualified key for whitelist comparison (M4):
+//   - 1 part  ("temp_ai")            -> "dbo.temp_ai"      (default schema)
+//   - 2 parts ("app.temp_ai")        -> "app.temp_ai"
+//   - 3+ parts ("db.dbo.temp_ai")    -> "db.dbo.temp_ai"   (last three parts)
+//
+// Because a database-qualified (3-part) name keeps its database segment, it
+// will not match a 1- or 2-part whitelist entry — so cross-database writes fail
+// closed unless whitelisted with the exact same 3-part name.
+func normalizeObjectName(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var cleaned []string
+	for _, p := range splitObjectParts(raw) {
+		p = strings.TrimSpace(p)
+		p = strings.Trim(p, "[]")
+		p = strings.TrimSpace(p)
+		if p != "" {
+			cleaned = append(cleaned, strings.ToLower(p))
+		}
+	}
+	switch len(cleaned) {
+	case 0:
+		return ""
+	case 1:
+		return "dbo." + cleaned[0]
+	case 2:
+		return cleaned[0] + "." + cleaned[1]
+	default:
+		n := len(cleaned)
+		return strings.Join(cleaned[n-3:], ".")
+	}
+}
+
+// extractAllQualifiedTablesFromQuery returns the schema-qualified, normalized
+// names of every table/view referenced in the query (M4). Unlike
+// extractAllTablesFromQuery (which strips the schema/database prefix), this
+// preserves it so the whitelist check can distinguish "dbo.temp_ai" from
+// "otro_schema.temp_ai".
+func (s *MCPMSSQLServer) extractAllQualifiedTablesFromQuery(query string) []string {
+	found := make(map[string]bool)
+	for _, pattern := range qualifiedTableExtractionPatterns {
+		for _, match := range pattern.FindAllStringSubmatch(query, -1) {
+			if len(match) > 1 {
+				if name := normalizeObjectName(match[1]); name != "" {
+					found[name] = true
+				}
+			}
+		}
+	}
+	var out []string
+	for k := range found {
+		out = append(out, k)
+	}
+	return out
+}
+
 // extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
 func (s *MCPMSSQLServer) extractOperation(query string) string {
 	queryUpper := stripLeadingComments(query)
@@ -1314,8 +1469,12 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 		return nil
 	}
 
-	// Extract ALL tables referenced in the query
+	// Extract ALL tables referenced in the query. tablesInQuery holds the bare
+	// (schema-stripped) names, kept for confirmation prompts, logging and the
+	// fail-closed check so their behavior is unchanged. qualifiedTables holds
+	// the schema-qualified names used for the actual whitelist decision (M4).
 	tablesInQuery := s.extractAllTablesFromQuery(query)
+	qualifiedTables := s.extractAllQualifiedTablesFromQuery(query)
 
 	// === CONFIRMATION REQUIREMENT FOR WRITABLE DYNAMIC ALIASES ===
 	// We only enforce explicit confirmation when using dynamic mode with a writable alias.
@@ -1341,22 +1500,30 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// allow. Otherwise a modify query whose table the regex fails to parse
 	// would slip through the per-table whitelist loop below (which simply does
 	// not iterate) and be permitted.
-	if len(tablesInQuery) == 0 {
+	if len(tablesInQuery) == 0 || len(qualifiedTables) == 0 {
 		s.secLogger.Printf("SECURITY VIOLATION: %s operation with no extractable table name - denying (fail-closed)", operation)
 		return fmt.Errorf("permission denied: could not determine the target table(s) for this %s operation; rewrite it using a simple, explicit table reference", operation)
 	}
+	// If the schema-qualified extractor accounted for fewer references than the
+	// bare one, a referenced table may have gone unchecked — deny (fail-closed).
+	if len(qualifiedTables) < len(tablesInQuery) {
+		s.secLogger.Printf("SECURITY VIOLATION: %s operation - qualified extractor (%d) disagrees with bare extractor (%d); denying (fail-closed)", operation, len(qualifiedTables), len(tablesInQuery))
+		return fmt.Errorf("permission denied: could not reliably qualify all target table(s) for this %s operation; rewrite it using simple, explicit table references", operation)
+	}
 
-	// Check if ALL tables in the query are whitelisted
-	for _, table := range tablesInQuery {
-		isWhitelisted := false
-		for _, allowedTable := range whitelist {
-			if table == allowedTable {
-				isWhitelisted = true
-				break
-			}
+	// Normalize the whitelist to the same schema-qualified form once (M4). Bare
+	// entries default to the dbo schema, so "temp_ai" matches "dbo.temp_ai" but
+	// not "otro_schema.temp_ai" or "otradb.dbo.temp_ai".
+	normalizedWhitelist := make(map[string]bool, len(whitelist))
+	for _, allowed := range whitelist {
+		if nw := normalizeObjectName(allowed); nw != "" {
+			normalizedWhitelist[nw] = true
 		}
+	}
 
-		if !isWhitelisted {
+	// Check if ALL (schema-qualified) tables in the query are whitelisted.
+	for _, table := range qualifiedTables {
+		if !normalizedWhitelist[table] {
 			s.secLogger.Printf("SECURITY VIOLATION: Attempted %s operation on non-whitelisted table '%s'",
 				operation, table)
 			return fmt.Errorf("permission denied: table '%s' is not whitelisted for %s operations",
@@ -1366,7 +1533,7 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 
 	// All tables are whitelisted
 	s.secLogger.Printf("Permission granted: %s operation on whitelisted table(s) %v",
-		operation, tablesInQuery)
+		operation, qualifiedTables)
 	return nil
 }
 
@@ -2441,6 +2608,33 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				ID:      id,
 				Result: CallToolResult{
 					Content: []ContentItem{{Type: "text", Text: "Error: Missing or invalid 'query' parameter"}},
+					IsError: true,
+				},
+			}
+		}
+
+		// Apply the same baseline input guards as every other query path, so
+		// explain_query is not an exception to the uniform defense (M5): size
+		// limits and the stacked-statement check. Although SHOWPLAN compiles
+		// without executing the batch, "SELECT 1; DROP TABLE x" starts with
+		// SELECT and would otherwise slip past the prefix-based operation
+		// detector below.
+		if err := s.validateBasicInput(query); err != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: " + err.Error()}},
+					IsError: true,
+				},
+			}
+		}
+		if hasMultipleStatements(query) {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: explain_query does not allow multiple SQL statements in a single request"}},
 					IsError: true,
 				},
 			}
@@ -3544,8 +3738,12 @@ func main() {
 			continue
 		}
 
-		sanitizedReq := secLogger.sanitizeForLogging(line)
-		secLogger.Printf("Processing request: %s", sanitizedReq)
+		// Log only the JSON-RPC method at Info level. The full request body can
+		// contain PII embedded in SQL literals (e.g. WHERE dni = '...') that
+		// sanitizeForLogging does not scrub, so keep the body at Debug (M6),
+		// gated by the dynamic level set via logging/setLevel.
+		secLogger.Printf("Processing request: method=%s", req.Method)
+		secLogger.Debugf("Request body: %s", secLogger.sanitizeForLogging(line))
 
 		response := server.handleRequest(req)
 

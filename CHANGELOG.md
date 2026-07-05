@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- 🛡️ **Security-review follow-up — hardening (areas of improvement M2, M4, M5, M6)** from `revision-seguridad-mcp-go-mssql.md`:
+  - **Fail-closed TLS in production (M2):** in production (`DEVELOPER_MODE=false`), a connection string that disables encryption (`encrypt=false`/`encrypt=disable`) or certificate validation (`trustservercertificate=true`) now **aborts startup** instead of only logging a warning. Applies uniformly to the global `MSSQL_CONNECTION_STRING`, the per-alias `_CONNECTION_STRING`, and the per-alias `_ENCRYPT` override paths. New opt-in `MSSQL_ALLOW_INSECURE_TLS=true` intentionally re-allows it (auditable `WARN` on every affected connection) — the sanctioned way to keep legacy SQL Server 2000/2008/2012 (TLS 1.0 only) working, making the exception conscious and greppable. New helpers `insecureTLSExplicitlyAllowed`, `productionTLSViolation`, `enforceProductionTLS`.
+  - **Schema-qualified whitelist matching (M4):** modification permissions are now compared schema-qualified. Bare whitelist names default to the `dbo` schema, so `temp_ai` matches `dbo.temp_ai` but **no longer** matches `otro_schema.temp_ai` or a database-qualified `otradb.dbo.temp_ai` (previously these were wrongly accepted as the whitelisted `temp_ai`). New `qualifiedTableExtractionPatterns`, `extractAllQualifiedTablesFromQuery`, `normalizeObjectName`, `splitObjectParts` (bracket-aware, so `[schema].[table]` is handled); an added fail-closed tripwire denies when the qualified extractor accounts for fewer tables than the bare one.
+  - **`explain_query` routed through the uniform guards (M5):** it now runs `validateBasicInput` + `hasMultipleStatements` before `SET SHOWPLAN_TEXT`, closing the only tool that skipped the stacked-statement check (e.g. `SELECT 1; DROP TABLE x`).
+  - **Reduced PII exposure in logs (M6):** the full request/query body moved from `Info` to a new `Debug` level (`SecurityLogger.Debugf`, gated by `logging/setLevel`); only the JSON-RPC `method` is logged at `Info`, so SQL literals such as `WHERE dni = '...'` are no longer emitted by default.
+  - Tests: updated `TestBuildAliasConnectionString` TLS cases to the new fail-closed contract; added `TestValidateTablePermissionsSchemaQualified`.
+
 ### Added
 
 - **Per-alias connection-string override for dynamic mode** (closes the gap with classic mode for legacy SQL Server 2000/2008/2012 instances):
@@ -48,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated "Modo solo lectura" / "Read-only mode" guides (ES + EN) with clear examples of allowed administrative procedures and explicit warnings about what remains blocked.
 - Removed all outdated `AUTOPILOT=true` examples and recommendations from dynamic connections guides and FAQ.
 - FAQ de conexiones dinámicas now has a clean `.env` example without any AUTOPILOT references.
+- **Authorization model made explicit (security review M1, M3):** `CLAUDE.md` and `.env.example` now state that the strongest write control must be a **least-privilege SQL login** (the Go regex-based whitelist is defense-in-depth, best-effort by nature), and that `confirm_operation` in dynamic mode is an **accidental-error reducer, not a security barrier** (the same agent generates and confirms the operation). Documented the new `MSSQL_ALLOW_INSECURE_TLS` variable and the schema-qualified whitelist semantics; updated the legacy-dynamic example to include the required `MSSQL_ALLOW_INSECURE_TLS=true` opt-in.
 
 ### Security
 
