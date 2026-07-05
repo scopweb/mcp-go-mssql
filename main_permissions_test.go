@@ -325,3 +325,77 @@ func TestExtractOperation(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateTablePermissionsSchemaQualified covers the schema-qualified
+// whitelist matching (M4): a whitelisted bare name defaults to the dbo schema,
+// so a write to the same table name under a different schema or database must
+// NOT be treated as whitelisted.
+func TestValidateTablePermissionsSchemaQualified(t *testing.T) {
+	server := newTestMCPServer()
+
+	tests := []struct {
+		name          string
+		whitelist     string
+		query         string
+		shouldSucceed bool
+	}{
+		{
+			name:          "bare whitelist matches dbo-qualified write",
+			whitelist:     "temp_ai",
+			query:         "UPDATE dbo.temp_ai SET col = 'v'",
+			shouldSucceed: true,
+		},
+		{
+			name:          "bare whitelist matches unqualified write",
+			whitelist:     "temp_ai",
+			query:         "UPDATE temp_ai SET col = 'v'",
+			shouldSucceed: true,
+		},
+		{
+			name:          "different schema, same table name is blocked",
+			whitelist:     "temp_ai",
+			query:         "UPDATE otro_schema.temp_ai SET col = 'v'",
+			shouldSucceed: false,
+		},
+		{
+			name:          "database-qualified same table name is blocked",
+			whitelist:     "temp_ai",
+			query:         "UPDATE otradb.dbo.temp_ai SET col = 'v'",
+			shouldSucceed: false,
+		},
+		{
+			name:          "schema-qualified whitelist matches same schema",
+			whitelist:     "app.temp_ai",
+			query:         "UPDATE app.temp_ai SET col = 'v'",
+			shouldSucceed: true,
+		},
+		{
+			name:          "schema-qualified whitelist does not match dbo default",
+			whitelist:     "app.temp_ai",
+			query:         "UPDATE temp_ai SET col = 'v'",
+			shouldSucceed: false,
+		},
+		{
+			name:          "bracketed schema-qualified write is blocked",
+			whitelist:     "temp_ai",
+			query:         "DELETE FROM [otro_schema].[temp_ai]",
+			shouldSucceed: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server.config.readOnly = true
+			server.config.whitelistTables = parseWhitelistTables(tt.whitelist)
+
+			err := server.validateTablePermissions(tt.query)
+
+			if tt.shouldSucceed && err != nil {
+				t.Errorf("expected success but got error: %v\nQuery: %s", err, tt.query)
+			}
+			if !tt.shouldSucceed && err == nil {
+				t.Errorf("expected failure but query was permitted\nQuery: %s", tt.query)
+			}
+		})
+	}
+}

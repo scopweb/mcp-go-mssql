@@ -249,7 +249,8 @@ All database connections use environment variables for security. See `.env.examp
 
 **Optional Variables:**
 - `MSSQL_PORT`: SQL Server port (default: 1433)
-- `MSSQL_ENCRYPT`: Override encryption setting (`"true"` or `"false"`)
+- `MSSQL_ENCRYPT`: Override encryption setting (`"true"` or `"false"`) — only effective when `DEVELOPER_MODE=true`
+- `MSSQL_ALLOW_INSECURE_TLS`: **Production escape hatch** (`"true"`). In production (`DEVELOPER_MODE=false`) a connection string that disables encryption (`encrypt=false`/`encrypt=disable`) or certificate validation (`trustservercertificate=true`) **fails closed and aborts startup**. Set this to `"true"` to intentionally allow it (auditable `WARN` on every affected connection) — needed only for legacy SQL Server 2000/2008/2012 that negotiate TLS 1.0.
 - `MSSQL_CONNECTION_STRING`: **Complete custom connection string** (overrides all other MSSQL_* settings)
 - `MSSQL_AUTH`: Authentication mode for connecting to SQL Server. Supported values:
   - `sql` (default) - SQL Server authentication using `MSSQL_USER` and `MSSQL_PASSWORD`. Requires `MSSQL_DATABASE`.
@@ -260,6 +261,8 @@ All database connections use environment variables for security. See `.env.examp
   - Example: `"temp_ai,v_temp_ia"`
   - Enables AI to modify specific tables while protecting production data
   - Validates ALL tables in queries (including JOINs, subqueries, CTEs)
+  - **Schema-qualified matching**: a bare name defaults to the `dbo` schema, so `temp_ai` matches `dbo.temp_ai` but **not** `otro_schema.temp_ai` or `otradb.dbo.temp_ai` (blocked as different objects). Qualify explicitly (e.g. `app.temp_ai`) to whitelist a non-`dbo` object.
+  - This is **defense in depth** — the real write control should be a least-privilege SQL login with `INSERT`/`UPDATE`/`DELETE` granted only on these tables.
   - See the project website for [Whitelist Security](https://mcp-go-mssql.scopweb.com/seguridad/whitelist-tablas/) for details
 - `DEVELOPER_MODE`:
   - `"true"`: Development mode (detailed errors, allows self-signed certificates, disables encryption by default)
@@ -350,6 +353,7 @@ DEVELOPER_MODE=false
 - **Configurable TLS encryption** for database connections:
   - Production: Forces encryption (`encrypt=true`)
   - Development: Allows disabling encryption for local SQL Server instances
+  - **Fail-closed in production**: an insecure connection string (`encrypt=false`/`trustservercertificate=true`) aborts startup unless `MSSQL_ALLOW_INSECURE_TLS=true` is set explicitly
 - **Flexible certificate validation**:
   - Production: Strict certificate validation (`trustservercertificate=false`)
   - Development: Allows self-signed certificates (`trustservercertificate=true`)
