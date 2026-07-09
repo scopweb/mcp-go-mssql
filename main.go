@@ -17,7 +17,8 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/microsoft/go-mssqldb"
+	mssql "github.com/microsoft/go-mssqldb"
+	_ "github.com/golang-sql/sqlexp" // used via messagesink.go
 	// NOTE: Windows Integrated Auth (winsspi) is conditionally imported in
 	// integrated_auth_windows.go using a //go:build windows tag so that
 	// `go build` and govulncheck succeed on Linux CI runners.
@@ -382,11 +383,14 @@ func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
 		}
 	}
 
-	// Open new connection
-	db, err := sql.Open("sqlserver", connStr)
+	// Open new connection. We use mssql.NewConnector + sql.OpenDB so the
+// driver can deliver informational messages (PRINT, SET STATISTICS
+// TIME/IO output) via the sqlexp.ReturnMessage queue.
+	connector, err := mssql.NewConnector(connStr)
 	if err != nil {
-		return fmt.Errorf("failed to open connection for alias '%s': %w", aliasName, err)
+		return fmt.Errorf("failed to build connector for alias '%s': %w", aliasName, err)
 	}
+	db := sql.OpenDB(connector)
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -742,6 +746,19 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	effective := s.getEffectiveConfig()
 	if !effective.readOnly {
 		return nil // Read-only mode disabled for current context, allow all queries
+	}
+
+	// Diagnostic wrapper allowlist: SET STATISTICS (TIME|IO) (ON|OFF) is a
+	// pure observability statement — it neither reads nor writes user
+	// data. It is the ONLY multi-statement form we accept in read-only
+	// mode. The wrapper parser is checked FIRST so a valid wrapper
+	// recurses through validateReadOnlyQuery on its base statement
+	// before the multi-statement rejection fires. Anything that is not
+	// a valid wrapper (including "SET STATISTICS TIME ON; DROP TABLE x;
+	// SELECT 1") still falls through to the multi-statement reject
+	// below.
+	if w, err := parseStatisticsWrapper(query); err == nil {
+		return s.validateReadOnlyQuery(w.BaseStatement)
 	}
 
 	// Reject multi-statement batches outright in any restricted (read-only or
@@ -1540,38 +1557,62 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 // maxQueryRows limits the number of rows returned by any query to prevent token overflow.
 const maxQueryRows = 500
 
-// executeSecureQuery runs a validated, prepared query and returns up to maxQueryRows rows.
-// If the result is truncated, the last element contains a "_truncated" warning key.
-func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, error) {
+// executeSecureQuery runs a validated, prepared query and returns up
+// to maxQueryRows rows plus, when the query is a SET STATISTICS
+// (TIME|IO) (ON|OFF) wrapper, the captured informational messages
+// from SQL Server. The wrapper detection is a no-op for non-wrapper
+// queries; in that case the messages slice is nil.
+//
+// If the result is truncated, the last element contains a
+// "_truncated" warning key.
+//
+// Backwards compatibility: the function returns three values
+// ([]map[string]interface{}, []string, error). Callers that ignore the
+// stats messages can assign them to `_`.
+func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, []string, error) {
 	db := s.getDB()
 	if db == nil {
-		return nil, fmt.Errorf("database not connected")
+		return nil, nil, fmt.Errorf("database not connected")
 	}
 
 	if err := s.validateBasicInput(query); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Validate read-only restrictions
 	if err := s.validateReadOnlyQuery(query); err != nil {
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Validate granular table permissions (whitelist)
 	if err := s.validateTablePermissions(query); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
-		return nil, err
+		return nil, nil, err
+	}
+
+	// Detect a SET STATISTICS wrapper. If found, install a per-call
+	// message sink so we can capture the informational messages SQL
+	// Server emits. The wrapper is sent as a single batch via
+	// db.PrepareContext + stmt.QueryContext; the driver delivers the
+	// messages to the sink via the sqlexp.ReturnMessage queue.
+	var sink *messageSink
+	wrapper, _ := parseStatisticsWrapper(query)
+	if wrapper != nil {
+		sink = newMessageSink()
+		sink.start(ctx)
+		args = append(args, sink.rm)
+		defer sink.stop(250 * time.Millisecond)
 	}
 
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
 		if s.devMode {
 			s.secLogger.Printf("Failed to prepare statement: %v", err)
-			return nil, fmt.Errorf("query preparation failed: %v", err)
+			return nil, nil, fmt.Errorf("query preparation failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to prepare statement: query preparation error")
-		return nil, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
+		return nil, nil, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
 	}
 	defer stmt.Close()
 
@@ -1579,16 +1620,16 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	if err != nil {
 		if s.devMode {
 			s.secLogger.Printf("Failed to execute query: %v", err)
-			return nil, fmt.Errorf("query execution failed: %v", err)
+			return nil, nil, fmt.Errorf("query execution failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to execute query: execution error")
-		return nil, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
+		return nil, nil, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
 	}
 	defer rows.Close()
 
 	columns, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var results []map[string]interface{}
@@ -1606,7 +1647,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		}
 
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		row := make(map[string]interface{})
@@ -1628,7 +1669,15 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		})
 	}
 
-	return results, nil
+	var statsMsgs []string
+	if wrapper != nil && sink != nil {
+		// Give the drain goroutine a moment to flush any messages
+		// that arrived during rows.Next().
+		sink.stop(100 * time.Millisecond)
+		statsMsgs = sink.linesSnapshot()
+	}
+
+	return results, statsMsgs, nil
 }
 
 func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *MCPResponse {
@@ -1860,7 +1909,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		results, err := s.executeSecureQuery(ctx, query)
+		results, statsMsgs, err := s.executeSecureQuery(ctx, query)
 		if err != nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
@@ -1877,8 +1926,46 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			}
 		}
 
-		// Format results as JSON
-		resultBytes, err := json.MarshalIndent(results, "", "  ")
+		// Strip the legacy _truncated sentinel row from the results;
+		// its information is now carried by Truncated bool.
+		rowCount := len(results)
+		truncated := false
+		if rowCount > 0 {
+			if _, ok := results[rowCount-1]["_truncated"]; ok {
+				truncated = true
+				results = results[:rowCount-1]
+				rowCount--
+			}
+		}
+
+		// Build the Stats payload. When statsMsgs is non-nil the query
+		// was a SET STATISTICS wrapper; the parser detection ran inside
+		// executeSecureQuery and installed the per-call message sink.
+		// Otherwise Enabled=false so clients see a stable JSON shape.
+		stats := QueryStats{Enabled: false, Messages: []string{}}
+		if wrapper, _ := parseStatisticsWrapper(query); wrapper != nil {
+			parsed := parseStatsMessages(statsMsgs)
+			stats = QueryStats{
+				Enabled:  true,
+				TimeOn:   wrapper.TimeOn,
+				IOOn:     wrapper.IOOn,
+				Messages: statsMsgs,
+				Parsed:   parsed,
+			}
+			if len(parsed) == 0 {
+				stats.Parsed = nil
+			}
+		}
+
+		result := QueryResult{
+			Rows:      results,
+			RowCount:  rowCount,
+			Truncated: truncated,
+			Stats:     stats,
+		}
+
+		// Format result as JSON
+		resultBytes, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
@@ -1950,7 +2037,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				WHERE database_id > 4
 				ORDER BY name
 			`
-			results, err = s.executeSecureQuery(ctx, query)
+			results, _, err = s.executeSecureQuery(ctx, query)
 
 		case "procedures":
 			label = "Stored procedures found"
@@ -1967,7 +2054,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					WHERE SCHEMA_NAME(p.schema_id) = @p1 AND p.name LIKE @p2
 					ORDER BY schema_name, procedure_name
 				`
-				results, err = s.executeSecureQuery(ctx, query, schemaFilter, "%"+filterVal+"%")
+				results, _, err = s.executeSecureQuery(ctx, query, schemaFilter, "%"+filterVal+"%")
 			} else if schemaFilter != "" {
 				query := `
 					SELECT
@@ -1979,7 +2066,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					WHERE SCHEMA_NAME(p.schema_id) = @p1
 					ORDER BY schema_name, procedure_name
 				`
-				results, err = s.executeSecureQuery(ctx, query, schemaFilter)
+				results, _, err = s.executeSecureQuery(ctx, query, schemaFilter)
 			} else if filterVal != "" {
 				query := `
 					SELECT
@@ -1991,7 +2078,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					WHERE p.name LIKE @p1
 					ORDER BY schema_name, procedure_name
 				`
-				results, err = s.executeSecureQuery(ctx, query, "%"+filterVal+"%")
+				results, _, err = s.executeSecureQuery(ctx, query, "%"+filterVal+"%")
 			} else {
 				query := `
 					SELECT
@@ -2002,7 +2089,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					FROM sys.procedures p
 					ORDER BY schema_name, procedure_name
 				`
-				results, err = s.executeSecureQuery(ctx, query)
+				results, _, err = s.executeSecureQuery(ctx, query)
 			}
 
 		case "search":
@@ -2034,7 +2121,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					WHERE m.definition LIKE @p1
 					ORDER BY o.type_desc, o.name
 				`
-				results, err = s.executeSecureQuery(ctx, query, likePattern)
+				results, _, err = s.executeSecureQuery(ctx, query, likePattern)
 			} else {
 				label = fmt.Sprintf("Objects matching '%s' in name", pattern)
 				query := `
@@ -2049,7 +2136,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					  AND o.type IN ('U','V','P','FN','IF','TF')
 					ORDER BY o.type_desc, o.name
 				`
-				results, err = s.executeSecureQuery(ctx, query, likePattern)
+				results, _, err = s.executeSecureQuery(ctx, query, likePattern)
 			}
 
 		case "views":
@@ -2057,10 +2144,10 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			viewFilter, _ := params.Arguments["filter"].(string)
 			if viewFilter != "" {
 				query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v WHERE v.TABLE_NAME LIKE @p1 ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-				results, err = s.executeSecureQuery(ctx, query, "%"+viewFilter+"%")
+				results, _, err = s.executeSecureQuery(ctx, query, "%"+viewFilter+"%")
 			} else {
 				query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-				results, err = s.executeSecureQuery(ctx, query)
+				results, _, err = s.executeSecureQuery(ctx, query)
 			}
 
 		default: // "tables"
@@ -2077,7 +2164,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					  AND TABLE_NAME LIKE @p1
 					ORDER BY TABLE_SCHEMA, TABLE_NAME
 				`
-				results, err = s.executeSecureQuery(ctx, query, filterPattern)
+				results, _, err = s.executeSecureQuery(ctx, query, filterPattern)
 			} else {
 				query := `
 					SELECT
@@ -2088,7 +2175,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
 					ORDER BY TABLE_SCHEMA, TABLE_NAME
 				`
-				results, err = s.executeSecureQuery(ctx, query)
+				results, _, err = s.executeSecureQuery(ctx, query)
 			}
 		}
 
@@ -2293,7 +2380,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		results, err := s.executeSecureQuery(ctx, queryBuilder.String(), args...)
+		results, _, err := s.executeSecureQuery(ctx, queryBuilder.String(), args...)
 		if err != nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
@@ -2441,19 +2528,19 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		`
 
 		if detail == "all" {
-			colResults, err := s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
+			colResults, _, err := s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
 			if err != nil {
 				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting columns: %v", err)}}, IsError: true,
 				}}
 			}
-			idxResults, err := s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
+			idxResults, _, err := s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
 			if err != nil {
 				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err)}}, IsError: true,
 				}}
 			}
-			fkResults, err := s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
+			fkResults, _, err := s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
 			if err != nil {
 				return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err)}}, IsError: true,
@@ -2472,7 +2559,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
 				ORDER BY o.type_desc, referencing_schema, referencing_object
 			`
-			depsResults, _ := s.executeSecureQuery(ctx, depsAllQuery, tableName, schemaName) // #nosec G104 - dependencies query is optional, errors handled gracefully
+			depsResults, _, _ := s.executeSecureQuery(ctx, depsAllQuery, tableName, schemaName) // #nosec G104 - dependencies query is optional, errors handled gracefully
 			combined := map[string]interface{}{
 				"columns":      colResults,
 				"indexes":      idxResults,
@@ -2506,10 +2593,10 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		switch detail {
 		case "indexes":
 			label = fmt.Sprintf("Indexes for '%s.%s'", schemaName, tableName)
-			results, err = s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
+			results, _, err = s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
 		case "foreign_keys":
 			label = fmt.Sprintf("Foreign keys for '%s.%s'", schemaName, tableName)
-			results, err = s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
+			results, _, err = s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
 		case "dependencies":
 			label = fmt.Sprintf("Objects that depend on '%s.%s'", schemaName, tableName)
 			depsQuery := `
@@ -2525,10 +2612,10 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 				  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
 				ORDER BY o.type_desc, referencing_schema, referencing_object
 			`
-			results, err = s.executeSecureQuery(ctx, depsQuery, tableName, schemaName)
+			results, _, err = s.executeSecureQuery(ctx, depsQuery, tableName, schemaName)
 		default: // "columns"
 			label = fmt.Sprintf("Table structure for '%s'", tableName)
-			results, err = s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
+			results, _, err = s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
 			if err == nil && len(results) == 0 {
 				return &MCPResponse{
 					JSONRPC: "2.0",
@@ -3614,18 +3701,20 @@ func main() {
 			return
 		}
 
-		// Connect to MSSQL
+		// Connect to MSSQL. Use mssql.NewConnector + sql.OpenDB so the driver
+		// delivers informational messages via the sqlexp.ReturnMessage queue.
 		secLogger.Printf("Attempting to connect to MSSQL server...")
-		db, err := sql.Open("sqlserver", connStr)
+		connector, err := mssql.NewConnector(connStr)
 		if err != nil {
 			if devMode {
-				secLogger.Printf("sql.Open failed: %v", err)
+				secLogger.Printf("mssql.NewConnector failed: %v", err)
 			} else {
-				secLogger.Printf("Failed to connect: connection error")
+				secLogger.Printf("Failed to connect: connector build error")
 			}
 			return
 		}
-		secLogger.Printf("sql.Open successful, testing connection...")
+		db := sql.OpenDB(connector)
+		secLogger.Printf("Connector built, testing connection...")
 
 		// Configure optimized connection pool
 		db.SetMaxOpenConns(10)                  // More concurrent connections

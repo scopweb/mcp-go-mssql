@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 🆕 **Read-only mode: optional `SET STATISTICS TIME/IO` diagnostic wrappers**. The `query_database` tool now accepts the pattern `SET STATISTICS (TIME|IO) (ON|OFF); <single read-only query>; [SET STATISTICS (TIME|IO) (ON|OFF);]` as the **only** multi-statement form allowed in read-only mode. The wrapper is purely observability — it neither reads nor writes user data — and the base statement is itself validated against the existing read-only + whitelist rules (so a wrapper around `DELETE FROM prod` is still rejected). Captured SQL Server informational messages are surfaced in the response via the `sqlexp.ReturnMessage` queue (the connection layer was refactored from `sql.Open("sqlserver", dsn)` to `sql.OpenDB(mssql.NewConnector(dsn))` for this). The new `stats` block in the payload contains `enabled`, `time_on`, `io_on`, `messages` (raw text), and `parsed.cpu_time_ms` / `parsed.elapsed_time_ms` / `parsed.logical_reads` / `parsed.physical_reads` plus per-table breakdown. The wrapper allowlist is closed — `PRINT`, `RAISERROR`, and any other multi-statement patterns remain rejected. The `query_database` response shape changes from a bare JSON array to `{rows, row_count, truncated, stats}`; the previous `_truncated` sentinel row is replaced by the `truncated` boolean. No new tool is registered.
+  - New files: `statistics_wrapper.go` (strict parser), `messagesink.go` (per-call `*sqlexp.ReturnMessage` drainer), `query_result.go` (`QueryResult`/`QueryStats` types + `parseStatsMessages`).
+  - New tests: `TestParseStatisticsWrapper_{Positive,Negative,NonRegression}`, `TestValidateReadOnlyQuery_StatisticsWrapper*`, `TestParseStatsMessages_*`, `TestConnectorAPICompiles`, `TestConnectorBuildDoesNotPanic`, `TestMessageSinkInit`.
+
+### Changed
+
+- **Wire-shape change**: `query_database` response is now `{rows, row_count, truncated, stats}` (was a bare JSON array of row maps). Clients that parsed the array directly should read the `rows` field of the JSON object instead. The `stats` object is always present (`enabled:false` when no wrapper was used) so clients have a stable shape.
+- **Connection-layer refactor**: both the classic startup path (`main.go`) and `connectToDynamicAlias` now use `mssql.NewConnector(connStr)` + `sql.OpenDB(connector)` instead of `sql.Open("sqlserver", connStr)`. This is required for the SET STATISTICS wrapper feature (the new wrapper relies on the `sqlexp.ReturnMessage` queue that the driver only exposes through the connector path). URL-form DSNs (used for legacy SQL Server 2008/2012 TLS-1.0 workarounds) continue to work — confirmed by `TestConnectorBuildDoesNotPanic`.
+
 ### Security
 
 - 🛡️ **Security-review follow-up — hardening (areas of improvement M2, M4, M5, M6)** from `revision-seguridad-mcp-go-mssql.md`:
