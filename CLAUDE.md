@@ -283,6 +283,26 @@ MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://USER:PASS@legacy-sql2000.loca
 }
 ```
 
+### Diagnostic wrappers in read-only mode
+
+When `MSSQL_READ_ONLY=true`, the **only** multi-statement pattern the
+`query_database` tool accepts is `SET STATISTICS (TIME|IO) (ON|OFF); <single read-only statement>; [SET STATISTICS (TIME|IO) (ON|OFF);]`. This is a strict regular-language match (`statistics_wrapper.go`):
+
+- The wrapper can have at most one leading and one trailing
+  `SET STATISTICS TIME/IO ON/OFF` token of each kind.
+- The base statement must itself be a single statement (no internal
+  `;` separators).
+- The base statement is recursively validated against the existing
+  read-only + whitelist checks, so a wrapper around a `DELETE` is
+  still rejected.
+- Empty statements between the wrapper tokens (`SET ... ON; ; SET ... OFF;`)
+  are rejected.
+- Any other multi-statement form (`SELECT 1; DELETE FROM prod`,
+  `PRINT 'x'; SELECT 1`, `EXEC sp_x; SELECT 1`) is still rejected
+  by the `hasMultipleStatements` check.
+
+Captured informational messages (e.g. `SQL Server Execution Times: CPU time = X ms, elapsed time = Y ms.`) are delivered via `sqlexp.ReturnMessage` and surfaced in the response under a structured `stats` object (`enabled`, `time_on`, `io_on`, `messages`, `parsed.cpu_time_ms`, `parsed.elapsed_time_ms`, `parsed.logical_reads`, `parsed.physical_reads`, plus per-table breakdown). The connection layer was refactored from `sql.Open("sqlserver", dsn)` to `sql.OpenDB(mssql.NewConnector(dsn))` for this. The CLI (`claude-code/db-connector.go`) is unaffected — wrappers are an MCP-tool concern only.
+
 ### Critical Security Parameters:
 - `DEVELOPER_MODE`:
   - `"false"` for production: Strict TLS certificate validation, generic error messages

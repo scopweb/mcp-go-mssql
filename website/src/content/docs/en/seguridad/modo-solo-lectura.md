@@ -68,6 +68,10 @@ These procedures are explicitly allowed because they do not modify data or serve
 
 For most schema discovery use cases we recommend the dedicated `explore` and `inspect` tools instead of raw queries.
 
+## What about multi-statement queries?
+
+By default, **any query with more than one statement** is still rejected in read-only mode with the error `multiple SQL statements are not allowed in a single request`. The only exception allowed is the `SET STATISTICS TIME/IO ON/OFF` wrapper around a single base statement, intended to capture execution timings and logical/physical reads without leaving read-only mode. See the [SET STATISTICS in read-only mode](../herramientas-mcp/statistics.md) guide for details, the response shape, and the cases that are rejected.
+
 ## Query validation
 
 Validation uses regular expressions with word boundaries (`\bINSERT\b`, `\bUPDATE\b`, etc.) to avoid false positives. For example:

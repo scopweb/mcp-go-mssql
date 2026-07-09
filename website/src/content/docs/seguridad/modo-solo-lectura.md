@@ -68,6 +68,10 @@ Estos procedimientos están explícitamente permitidos porque no modifican datos
 
 Se recomienda preferentemente el uso de las herramientas dedicadas `explore` e `inspect` para la mayoría de los casos de descubrimiento de esquema.
 
+## ¿Qué pasa con las consultas multi-statement?
+
+Por defecto, **cualquier consulta con más de una sentencia** sigue siendo rechazada en modo solo lectura con el error `multiple SQL statements are not allowed in a single request`. La única excepción permitida es el envoltorio `SET STATISTICS TIME/IO ON/OFF` alrededor de una única sentencia base, pensado para capturar tiempos de ejecución y lecturas lógicas/físicas sin salir del modo solo lectura. Ver la guía [SET STATISTICS en modo solo lectura](../herramientas-mcp/statistics.md) para los detalles, el formato de respuesta y los casos rechazados.
+
 ## Validación de consultas
 
 La validación usa expresiones regulares con word boundaries (`\bINSERT\b`, `\bUPDATE\b`, etc.) para evitar falsos positivos. Por ejemplo:
