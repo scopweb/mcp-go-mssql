@@ -84,24 +84,26 @@ const (
 // The function requires at least one SET STATISTICS token; a plain SELECT or
 // any other query that has no wrapper returns ErrNotAWrapper.
 //
-// The function short-circuits on a non-'S' first rune so the common case of
-// "any normal query" returns in O(1) without entering the segment loop.
+// Fast path: a wrapper must contain the literal "SET STATISTICS" substring
+// somewhere in the input. We check this up front (case-insensitive) so the
+// common case of "any normal query" returns in O(1) without entering the
+// segment loop. The check is on the substring, not on the first rune, so
+// "base-first" forms (e.g. "WITH ... SELECT ...; SET STATISTICS TIME ON;")
+// are not accidentally rejected — only queries that contain no SET
+// STATISTICS token at all short-circuit out.
 func parseStatisticsWrapper(query string) (*statisticsWrapper, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return nil, ErrNotAWrapper
 	}
-	// Fast path: a wrapper always starts (after optional leading whitespace
-	// and comments) with the letters "SET". Anything else is not a wrapper.
-	first := firstNonWhitespaceNonCommentRune(trimmed)
-	if first < 0 {
-		return nil, ErrNotAWrapper
-	}
-	if first >= len(trimmed) {
-		return nil, ErrNotAWrapper
-	}
-	c := trimmed[first]
-	if c != 'S' && c != 's' {
+	// Fast path: substring check for the wrapper keyword. We do a
+	// literal substring search (case-insensitive) rather than checking
+	// the first non-whitespace rune, because a wrapper can appear at
+	// any position — leading, trailing, or interleaved with the base.
+	// Plain queries like "SELECT 1", "DELETE FROM x", or
+	// "WITH cte AS ..." that never mention SET STATISTICS still
+	// short-circuit here in O(query length).
+	if !containsSetStatistics(trimmed) {
 		return nil, ErrNotAWrapper
 	}
 
@@ -263,38 +265,29 @@ func applyWrapperEdge(edge *wrapperEdge, kind, val string) bool {
 	return true
 }
 
-// firstNonWhitespaceNonCommentRune returns the byte index of the first rune
-// in s that is not ASCII whitespace and not inside a line or block comment.
-// Returns -1 if s is empty or contains only whitespace/comments.
-//
-// This is a deliberately tiny helper used only for the fast-path
-// short-circuit in parseStatisticsWrapper. It is not a full SQL tokenizer.
-func firstNonWhitespaceNonCommentRune(s string) int {
-	i := 0
-	for i < len(s) {
-		c := s[i]
-		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
-			i++
-			continue
-		}
-		if c == '-' && i+1 < len(s) && s[i+1] == '-' {
-			if j := strings.IndexByte(s[i:], '\n'); j >= 0 {
-				i += j + 1
-				continue
-			}
-			return -1
-		}
-		if c == '/' && i+1 < len(s) && s[i+1] == '*' {
-			if j := strings.Index(s[i:], "*/"); j >= 0 {
-				i += j + 2
-				continue
-			}
-			return -1
-		}
-		return i
-	}
-	return -1
+// containsSetStatistics reports whether s contains the case-insensitive
+// SET STATISTICS keyword pair with any amount of ASCII whitespace
+// between the two tokens. It is used by the fast-path in
+// parseStatisticsWrapper to short-circuit plain queries that never
+// mention SET STATISTICS. The check is intentionally lenient: any
+// whitespace-separated occurrence of the two tokens counts, because
+// the segment loop applies the strict regex `setStatsRe` on each
+// candidate segment afterwards. This fast-path only avoids the
+// segment walk for inputs that clearly cannot be wrappers.
+func containsSetStatistics(s string) bool {
+	lower := strings.ToLower(s)
+	// Look for "set" followed by at least one ASCII whitespace run
+	// followed by "statistics". Use a small regex rather than
+	// strings.Contains so we tolerate tabs and multiple spaces.
+	return setStatsKeywordRe.MatchString(lower)
 }
+
+// setStatsKeywordRe is a relaxed pre-filter for the SET STATISTICS
+// keyword. It accepts any amount of ASCII whitespace between "set"
+// and "statistics" and is matched case-insensitively (the caller is
+// expected to pass a lower-cased string). The strict per-segment
+// match (with kind + value) is done by setStatsRe later.
+var setStatsKeywordRe = regexp.MustCompile(`\bset\s+statistics\b`)
 
 // sqlSegment is one piece of a SQL batch, produced by splitOnStatementSeparators.
 // text is the segment content with comments stripped (comments replaced
