@@ -68,6 +68,15 @@ func TestParseStatsMessages_IO_MultipleTables(t *testing.T) {
 	if got["logical_reads_customers"] != 8 {
 		t.Errorf("logical_reads_customers = %d, want 8", got["logical_reads_customers"])
 	}
+	// Aggregate fields must be SUMS across every Table '...' line,
+	// not the last-seen value. With orders=4 and customers=8, the
+	// aggregate logical_reads must be 12 (and physical_reads 0+1=1).
+	if got["logical_reads"] != 12 {
+		t.Errorf("logical_reads aggregate = %d, want 12 (4+8)", got["logical_reads"])
+	}
+	if got["physical_reads"] != 1 {
+		t.Errorf("physical_reads aggregate = %d, want 1 (0+1)", got["physical_reads"])
+	}
 }
 
 func TestParseStatsMessages_Worktable(t *testing.T) {

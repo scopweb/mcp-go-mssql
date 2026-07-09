@@ -93,6 +93,30 @@ func TestParseStatisticsWrapper_Positive(t *testing.T) {
 			timeOn: true,
 		},
 		{
+			// Regression for bug #2 in
+			// revision-bugs-estadisticas-mcp-go-mssql.md: the fast-path
+			// used to short-circuit on a non-'S' first rune, which
+			// wrongly rejected this base-first wrapper whose base
+			// starts with WITH (and therefore 'W'). The wrapper must
+			// still be detected and unwrapped correctly.
+			name:   "base-first wrapper with CTE (base starts with W)",
+			query:  "WITH x AS (SELECT 1 AS a) SELECT * FROM x; SET STATISTICS TIME ON",
+			base:   "WITH x AS (SELECT 1 AS a) SELECT * FROM x",
+			timeOn: true,
+		},
+		{
+			name:   "base-first wrapper with DELETE (base starts with D)",
+			query:  "DELETE FROM temp_ai WHERE id = 1; SET STATISTICS TIME OFF",
+			base:   "DELETE FROM temp_ai WHERE id = 1",
+			timeOff: true,
+		},
+		{
+			name:   "base-first wrapper with INSERT (base starts with I)",
+			query:  "INSERT INTO temp_ai VALUES (1); SET STATISTICS IO OFF",
+			base:   "INSERT INTO temp_ai VALUES (1)",
+			ioOff: true,
+		},
+		{
 			name:   "semicolon inside string literal in base",
 			query:  "SET STATISTICS TIME ON; SELECT ';' AS sep",
 			base:   "SELECT ';' AS sep",

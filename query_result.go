@@ -109,11 +109,11 @@ func parseStatsMessages(lines []string) map[string]int {
 			out["logical_reads_"+table] = logical
 			out["physical_reads_"+table] = physical
 			// Aggregate totals across all tables in the IO report.
-			// (The map values get overwritten; for true aggregates the
-			// caller can sum the per-table fields. We expose the
-			// last-seen values as a convenience.)
-			out["logical_reads"] = logical
-			out["physical_reads"] = physical
+			// The aggregate fields accumulate (Go's zero-value for
+			// missing keys is 0), so the final value is the true sum
+			// across every Table '...' line, not the last-seen value.
+			out["logical_reads"] += logical
+			out["physical_reads"] += physical
 		}
 	}
 	return out
