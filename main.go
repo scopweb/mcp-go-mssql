@@ -1579,25 +1579,46 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		return nil, nil, err
 	}
 
-	// Validate read-only restrictions
+	// Detect a SET STATISTICS wrapper. The wrapper is the only
+	// multi-statement form allowed in read-only mode and is a pure
+	// observability statement — it neither reads nor writes user
+	// data. We unwrap it once here and use the base statement for
+	// every security check (validateReadOnlyQuery already recurses
+	// into the base itself, but validateTablePermissions does NOT
+	// unwrap — if we passed it the raw wrapped query, extractOperation
+	// would not see the DELETE/UPDATE/INSERT prefix and would
+	// misclassify the operation as SELECT, letting the modification
+	// through the whitelist gate).
+	wrapper, _ := parseStatisticsWrapper(query)
+	permCheckQuery := query
+	if wrapper != nil {
+		permCheckQuery = wrapper.BaseStatement
+	}
+
+	// Validate read-only restrictions (the recursion inside
+	// validateReadOnlyQuery re-unwraps the wrapper for its own check;
+	// passing the base here is also fine because the wrapper branch
+	// would return ErrNotAWrapper for a plain base statement and the
+	// existing SELECT/prefix checks would run as normal).
 	if err := s.validateReadOnlyQuery(query); err != nil {
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
 		return nil, nil, err
 	}
 
-	// Validate granular table permissions (whitelist)
-	if err := s.validateTablePermissions(query); err != nil {
+	// Validate granular table permissions on the BASE statement
+	// (unwrapped) so the whitelist gate correctly classifies the
+	// operation and the referenced tables.
+	if err := s.validateTablePermissions(permCheckQuery); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
 		return nil, nil, err
 	}
 
-	// Detect a SET STATISTICS wrapper. If found, install a per-call
-	// message sink so we can capture the informational messages SQL
-	// Server emits. The wrapper is sent as a single batch via
-	// db.PrepareContext + stmt.QueryContext; the driver delivers the
-	// messages to the sink via the sqlexp.ReturnMessage queue.
+	// If a wrapper was detected, install a per-call message sink so we
+	// can capture the informational messages SQL Server emits. The
+	// wrapper is sent as a single batch via db.PrepareContext +
+	// stmt.QueryContext; the driver delivers the messages to the sink
+	// via the sqlexp.ReturnMessage queue.
 	var sink *messageSink
-	wrapper, _ := parseStatisticsWrapper(query)
 	if wrapper != nil {
 		sink = newMessageSink()
 		sink.start(ctx)
