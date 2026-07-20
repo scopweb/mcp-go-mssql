@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"testing"
 
-	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/golang-sql/sqlexp"
+	mssql "github.com/microsoft/go-mssqldb"
 )
 
 // TestConnectorAPICompiles is a compile-time assertion that the

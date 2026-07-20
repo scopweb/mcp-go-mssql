@@ -11,12 +11,12 @@ import (
 // validateReadOnlyQuery directly.
 func TestValidateReadOnlyQuery_StatisticsWrapper(t *testing.T) {
 	cases := []struct {
-		name           string
-		query          string
-		readOnly       bool
-		whitelist      string
-		wantErr        bool
-		wantErrSubstr  string
+		name          string
+		query         string
+		readOnly      bool
+		whitelist     string
+		wantErr       bool
+		wantErrSubstr string
 	}{
 		{
 			name:     "TIME ON wrapping a SELECT passes in strict read-only mode",
@@ -64,11 +64,11 @@ func TestValidateReadOnlyQuery_StatisticsWrapper(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "wrapper around a whitelisted modification passes in whitelist mode",
-			query:    "SET STATISTICS TIME ON; DELETE FROM prod_users",
-			readOnly: true,
+			name:      "wrapper around a whitelisted modification passes in whitelist mode",
+			query:     "SET STATISTICS TIME ON; DELETE FROM prod_users",
+			readOnly:  true,
 			whitelist: "prod_users",
-			wantErr:  false,
+			wantErr:   false,
 		},
 		{
 			name:     "wrapper around full-access DELETE passes when read-only is off",

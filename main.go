@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	mssql "github.com/microsoft/go-mssqldb"
 	_ "github.com/golang-sql/sqlexp" // used via messagesink.go
+	mssql "github.com/microsoft/go-mssqldb"
 	// NOTE: Windows Integrated Auth (winsspi) is conditionally imported in
 	// integrated_auth_windows.go using a //go:build windows tag so that
 	// `go build` and govulncheck succeed on Linux CI runners.
@@ -315,6 +315,7 @@ type PendingConfirmation struct {
 	Operation   string // e.g. "DELETE", "UPDATE", "DROP"
 	Tables      []string
 	Description string
+	Alias       string // dynamic alias this confirmation was issued for; confirmations are not portable across aliases
 	ExpiresAt   time.Time
 }
 
@@ -375,22 +376,24 @@ func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
 		return fmt.Errorf("failed to build connection string for alias '%s': %w", aliasName, err)
 	}
 
-	// Close previous active connection if we had one
-	if s.activeAlias != "" {
-		if oldConn, exists := s.connections[s.activeAlias]; exists && oldConn != nil {
-			_ = oldConn.Close()
-			delete(s.connections, s.activeAlias)
-		}
-	}
-
-	// Open new connection. We use mssql.NewConnector + sql.OpenDB so the
-// driver can deliver informational messages (PRINT, SET STATISTICS
-// TIME/IO output) via the sqlexp.ReturnMessage queue.
+	// Open and validate the NEW connection first. Only after the ping
+	// succeeds do we close the previous active connection — otherwise a
+	// failed connect attempt would silently drop the working session.
+	// We use mssql.NewConnector + sql.OpenDB so the driver can deliver
+	// informational messages (PRINT, SET STATISTICS TIME/IO output) via
+	// the sqlexp.ReturnMessage queue.
 	connector, err := mssql.NewConnector(connStr)
 	if err != nil {
 		return fmt.Errorf("failed to build connector for alias '%s': %w", aliasName, err)
 	}
 	db := sql.OpenDB(connector)
+
+	// Apply the same pool limits as the classic startup path so a dynamic
+	// connection cannot exhaust server-side resources.
+	db.SetMaxOpenConns(10)                  // More concurrent connections
+	db.SetMaxIdleConns(5)                   // More idle connections for reuse
+	db.SetConnMaxLifetime(30 * time.Minute) // Shorter lifetime for fresher connections
+	db.SetConnMaxIdleTime(5 * time.Minute)  // Quick cleanup of unused connections
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -400,6 +403,14 @@ func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
 		// #nosec G104 -- close error ignored when ping fails; db state is already broken
 		db.Close()
 		return fmt.Errorf("failed to connect to alias '%s': %w", aliasName, err)
+	}
+
+	// New connection works: close the previous active one (if any) and swap.
+	if s.activeAlias != "" {
+		if oldConn, exists := s.connections[s.activeAlias]; exists && oldConn != nil {
+			_ = oldConn.Close()
+			delete(s.connections, s.activeAlias)
+		}
 	}
 
 	// Store the connection
@@ -415,8 +426,40 @@ func (s *MCPMSSQLServer) connectToDynamicAlias(aliasName string) error {
 
 	s.activeAlias = aliasName
 
+	// Any pending confirmation belongs to the previous alias (or to no
+	// alias); confirmations are bound to a single alias and must not
+	// survive a connection switch.
+	s.confirmMu.Lock()
+	s.pendingConfirmation = nil
+	s.confirmMu.Unlock()
+
 	s.secLogger.Printf("Dynamic connection switched to alias '%s' (readOnly=%v)", aliasName, alias.ReadOnly)
 	return nil
+}
+
+// closeAllConnections closes every open database handle (all dynamic aliases
+// plus the classic/active connection) exactly once. Called at process
+// shutdown so SQL Server sessions are released promptly instead of lingering
+// until the server-side idle timeout.
+func (s *MCPMSSQLServer) closeAllConnections() {
+	s.dynamicMu.Lock()
+	for alias, conn := range s.connections {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		delete(s.connections, alias)
+	}
+	s.activeAlias = ""
+	s.dynamicMu.Unlock()
+
+	// s.db may point to the same handle as a dynamic connection already
+	// closed above; sql.DB.Close is safe to call more than once.
+	s.dbMu.Lock()
+	if s.db != nil {
+		_ = s.db.Close()
+		s.db = nil
+	}
+	s.dbMu.Unlock()
 }
 
 // validateDSNField rejects values that could break out of their field in an
@@ -448,10 +491,19 @@ func insecureTLSExplicitlyAllowed() bool {
 // treated as a hard violation here (the driver still negotiates encryption in
 // many cases); it is surfaced separately as a warning by the callers.
 func productionTLSViolation(connStrLower string) string {
-	if strings.Contains(connStrLower, "encrypt=false") || strings.Contains(connStrLower, "encrypt=disable") {
+	// Collapse all whitespace before the substring checks so ADO-style
+	// variants like "encrypt = false" or "trustservercertificate = true"
+	// cannot evade detection. The compacted form is used ONLY for
+	// detection; the original connection string is never modified.
+	compact := strings.Join(strings.Fields(connStrLower), "")
+
+	if strings.Contains(compact, "encrypt=false") || strings.Contains(compact, "encrypt=disable") ||
+		strings.Contains(compact, "encrypt=no") || strings.Contains(compact, "encrypt=0") {
 		return "encryption is disabled (encrypt=false)"
 	}
-	if strings.Contains(connStrLower, "trustservercertificate=true") {
+	if strings.Contains(compact, "trustservercertificate=true") ||
+		strings.Contains(compact, "trustservercertificate=yes") ||
+		strings.Contains(compact, "trustservercertificate=1") {
 		return "server certificate validation is disabled (trustservercertificate=true)"
 	}
 	return ""
@@ -744,8 +796,8 @@ func hasExecutableRemainder(tail []rune) bool {
 func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	// Use effective config (per-alias if a dynamic connection is active)
 	effective := s.getEffectiveConfig()
-	if !effective.readOnly {
-		return nil // Read-only mode disabled for current context, allow all queries
+	if !effective.readOnly && len(effective.whitelistTables) == 0 {
+		return nil // No restrictions configured for the current context, allow all queries
 	}
 
 	// Diagnostic wrapper allowlist: SET STATISTICS (TIME|IO) (ON|OFF) is a
@@ -944,16 +996,17 @@ func (s *MCPMSSQLServer) getEffectiveConfig() serverConfig {
 
 // requireConfirmationForModification is called when a writable alias attempts a modification.
 // It returns an error that tells the AI it must call confirm_operation first.
-func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, tables []string) error {
+func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, tables []string, alias string) error {
 	s.confirmMu.Lock()
 	defer s.confirmMu.Unlock()
 
-	desc := fmt.Sprintf("%s on tables: %s", operation, strings.Join(tables, ", "))
+	desc := fmt.Sprintf("%s on tables: %s (alias %s)", operation, strings.Join(tables, ", "), alias)
 
 	s.pendingConfirmation = &PendingConfirmation{
 		Operation:   operation,
 		Tables:      tables,
 		Description: desc,
+		Alias:       alias,
 		ExpiresAt:   time.Now().Add(90 * time.Second), // 90 seconds to confirm
 	}
 
@@ -961,7 +1014,7 @@ func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, ta
 }
 
 // isOperationConfirmed checks if there is a valid pending confirmation that matches the current operation.
-func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string) bool {
+func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string, alias string) bool {
 	s.confirmMu.Lock()
 	defer s.confirmMu.Unlock()
 
@@ -971,6 +1024,14 @@ func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string)
 
 	if time.Now().After(s.pendingConfirmation.ExpiresAt) {
 		s.pendingConfirmation = nil
+		return false
+	}
+
+	// A confirmation is only valid on the alias it was issued for. Without
+	// this binding, confirming a modification on writable alias A and then
+	// switching to writable alias B would let the confirmation be consumed
+	// against B's databases (cross-alias confirmation portability).
+	if !strings.EqualFold(s.pendingConfirmation.Alias, alias) {
 		return false
 	}
 
@@ -1464,8 +1525,8 @@ func (s *MCPMSSQLServer) extractOperation(query string) string {
 func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// Use effective config (respects active dynamic alias posture)
 	effective := s.getEffectiveConfig()
-	if !effective.readOnly {
-		return nil // Whitelist mode disabled for current context, allow all operations
+	if !effective.readOnly && len(effective.whitelistTables) == 0 {
+		return nil // No restrictions configured for the current context, allow all operations
 	}
 
 	whitelist := effective.whitelistTables
@@ -1497,11 +1558,12 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// We only enforce explicit confirmation when using dynamic mode with a writable alias.
 	// This protects the high-risk "multiple databases" scenario without breaking classic single-connection usage.
 	s.dynamicMu.RLock()
-	hasActiveWritableAlias := s.activeAlias != "" && !effective.readOnly
+	activeAlias := s.activeAlias
+	hasActiveWritableAlias := activeAlias != "" && !effective.readOnly
 	s.dynamicMu.RUnlock()
 
-	if hasActiveWritableAlias && !s.isOperationConfirmed(operation, tablesInQuery) {
-		return s.requireConfirmationForModification(operation, tablesInQuery)
+	if hasActiveWritableAlias && !s.isOperationConfirmed(operation, tablesInQuery, activeAlias) {
+		return s.requireConfirmationForModification(operation, tablesInQuery, activeAlias)
 	}
 
 	s.secLogger.Printf("Permission check - Operation: %s, Tables found: %v, Whitelist: %v",
@@ -1832,7 +1894,11 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 					fmt.Fprintf(&info, "  Server/Database: %s / %s\n", alias.Server, alias.Database)
 					ro := "READ-ONLY"
 					if !effective.readOnly {
-						ro = "WRITABLE (whitelist restricted)"
+						if len(effective.whitelistTables) > 0 {
+							ro = "WRITABLE (whitelist-restricted)"
+						} else {
+							ro = "WRITABLE (FULL ACCESS - no whitelist)"
+						}
 					}
 					fmt.Fprintf(&info, "  Security Posture: %s\n", ro)
 					if len(effective.whitelistTables) > 0 {
@@ -2398,6 +2464,48 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			queryBuilder.WriteString(strings.Join(paramStrings, ", "))
 		}
 
+		// Enforce the active dynamic alias's security posture for procedure
+		// execution. A globally whitelisted procedure may perform writes, so
+		// on a dynamic connection it must obey the same rules as a
+		// modification query: blocked outright on read-only aliases, and
+		// confirmation-gated on writable ones. Classic single-connection
+		// mode is unchanged (procedure whitelist is the only gate there).
+		procEffective := s.getEffectiveConfig()
+		s.dynamicMu.RLock()
+		procAlias := s.activeAlias
+		s.dynamicMu.RUnlock()
+		if s.isDynamic && procAlias != "" {
+			if procEffective.readOnly {
+				s.secLogger.Printf("SECURITY VIOLATION: execute_procedure '%s' blocked on read-only dynamic alias '%s'", procName, procAlias)
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{
+								Type: "text",
+								Text: fmt.Sprintf("Error: execute_procedure is not allowed while connected to read-only dynamic alias '%s'. The procedure whitelist is global and procedures may perform writes. Use dynamic_connect to switch to a writable alias, or ask the operator to adjust MSSQL_DYNAMIC_%s_READ_ONLY.", procAlias, procAlias),
+							},
+						},
+						IsError: true,
+					},
+				}
+			}
+			if !s.isOperationConfirmed("EXEC", []string{procNameLower}, procAlias) {
+				confErr := s.requireConfirmationForModification("EXEC", []string{procNameLower}, procAlias)
+				return &MCPResponse{
+					JSONRPC: "2.0",
+					ID:      id,
+					Result: CallToolResult{
+						Content: []ContentItem{
+							{Type: "text", Text: confErr.Error()},
+						},
+						IsError: true,
+					},
+				}
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
@@ -2868,7 +2976,11 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			for alias, a := range s.dynamicAliases {
 				ro := "READ-ONLY"
 				if !a.ReadOnly {
-					ro = "FULL ACCESS (with whitelist restrictions if configured)"
+					if len(a.WhitelistTables) > 0 {
+						ro = "WRITABLE (whitelist-restricted)"
+					} else {
+						ro = "WRITABLE (FULL ACCESS - no whitelist)"
+					}
 				}
 				wl := ""
 				if len(a.WhitelistTables) > 0 {
@@ -2921,7 +3033,15 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		}
 
 		if err := s.connectToDynamicAlias(alias); err != nil {
-			errMsg := fmt.Sprintf("Error connecting to alias '%s': %v", alias, err)
+			// In production the raw driver error goes only to the security log;
+			// the client gets a generic message (consistent with the classic path).
+			var errMsg string
+			if s.devMode {
+				errMsg = fmt.Sprintf("Error connecting to alias '%s': %v", alias, err)
+			} else {
+				s.secLogger.Printf("dynamic_connect failed for alias '%s': %v", alias, err)
+				errMsg = fmt.Sprintf("Error connecting to alias '%s': connection failed. Verify the alias configuration, credentials and server reachability.", alias)
+			}
 			// Surface an actionable hint when the error is the well-known TLS 1.0
 			// handshake rejection that legacy SQL Server 2000/2008/2012 instances
 			// trigger with modern Go runtimes. The wording covers both
@@ -2946,7 +3066,11 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		effective := s.getEffectiveConfig()
 		roStatus := "READ-ONLY (safe)"
 		if !effective.readOnly {
-			roStatus = "WRITABLE (restricted by whitelist)"
+			if len(effective.whitelistTables) > 0 {
+				roStatus = "WRITABLE (whitelist-restricted, confirmation required)"
+			} else {
+				roStatus = "WRITABLE (FULL ACCESS - no whitelist configured, confirmation required)"
+			}
 		}
 
 		msg := fmt.Sprintf("Successfully connected to dynamic alias '%s'.\n\nEffective security posture for this connection:\n- Read-only mode: %s\n- Whitelisted tables for modification: %v\n\nAll subsequent queries will be validated against this alias's security rules.", alias, roStatus, effective.whitelistTables)
@@ -2996,6 +3120,11 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 		s.dbMu.Unlock()
 
 		s.activeAlias = ""
+
+		// Drop any pending confirmation together with the alias it belonged to.
+		s.confirmMu.Lock()
+		s.pendingConfirmation = nil
+		s.confirmMu.Unlock()
 
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -3874,6 +4003,9 @@ func main() {
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		secLogger.Printf("Scanner error: %v", err)
 	}
+
+	// Release all database connections (classic + dynamic aliases) before exiting.
+	server.closeAllConnections()
 
 	// Clean shutdown: cancel connection goroutine and wait for it
 	connCancel()

@@ -82,8 +82,8 @@ var ioStatsRe = regexp.MustCompile(`(?i)Table\s+'([^']+)'\.\s*Scan count\s+(\d+)
 //
 //   - "Table 'name'. Scan count S, logical reads L, physical reads P, ..."
 //     → {scan_count_<name>: S, logical_reads_<name>: L,
-//        physical_reads_<name>: P, logical_reads: L (aggregate),
-//        physical_reads: P (aggregate)} per line.
+//     physical_reads_<name>: P, logical_reads: L (aggregate),
+//     physical_reads: P (aggregate)} per line.
 //
 // Returns an empty (non-nil) map when no fields were recognized. The
 // caller may want to set Parsed to nil in the JSON response when the

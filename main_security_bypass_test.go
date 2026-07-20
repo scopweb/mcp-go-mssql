@@ -221,5 +221,114 @@ func TestStackedQueryAllowedInFullAccess(t *testing.T) {
 	}
 }
 
+// TestWhitelistEnforcedWhenReadOnlyFalse covers the fix for the writable-alias
+// whitelist bypass: a configured table whitelist must be enforced even when
+// read-only mode is disabled (MSSQL_DYNAMIC_<ALIAS>_READ_ONLY=false with
+// _WHITELIST_TABLES, or the classic equivalent). Previously the whitelist was
+// silently ignored in that combination, granting full write access.
+func TestWhitelistEnforcedWhenReadOnlyFalse(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = false
+	server.config.whitelistTables = parseWhitelistTables("temp_ai")
+
+	// Modification on a non-whitelisted table must be denied.
+	if err := server.validateTablePermissions("DELETE FROM users WHERE id = 1"); err == nil {
+		t.Error("expected DELETE on non-whitelisted table to be denied when a whitelist is configured (readOnly=false)")
+	}
+
+	// Modification on a whitelisted table must pass the permission check
+	// (classic context: no active alias, so no confirmation is required).
+	if err := server.validateTablePermissions("DELETE FROM temp_ai WHERE id = 1"); err != nil {
+		t.Errorf("expected DELETE on whitelisted table to be allowed, got: %v", err)
+	}
+
+	// validateReadOnlyQuery must defer modification checks to the whitelist
+	// branch instead of returning early.
+	if err := server.validateReadOnlyQuery("DELETE FROM temp_ai WHERE id = 1"); err != nil {
+		t.Errorf("validateReadOnlyQuery should defer to the whitelist check, got: %v", err)
+	}
+
+	// Dangerous system procedures must still be blocked in whitelist mode.
+	if err := server.validateReadOnlyQuery("EXEC xp_cmdshell 'dir'"); err == nil {
+		t.Error("expected xp_cmdshell to be blocked in whitelist mode even with readOnly=false")
+	}
+
+	// Stacked statements must still be rejected in a whitelist-restricted context.
+	if err := server.validateReadOnlyQuery("SELECT 1; DELETE FROM temp_ai"); err == nil {
+		t.Error("expected stacked query to be blocked in whitelist mode even with readOnly=false")
+	}
+}
+
+// TestConfirmationBoundToAlias covers the fix for cross-alias confirmation
+// portability: a confirmation issued for writable alias A must not be
+// consumable after switching to writable alias B.
+func TestConfirmationBoundToAlias(t *testing.T) {
+	newServer := func() *MCPMSSQLServer {
+		s := newTestMCPServer()
+		s.isDynamic = true
+		s.pendingConfirmation = &PendingConfirmation{
+			Operation:   "DELETE",
+			Tables:      []string{"temp_ai"},
+			Description: "DELETE on tables: temp_ai (alias APP_A)",
+			Alias:       "APP_A",
+			ExpiresAt:   time.Now().Add(time.Minute),
+		}
+		return s
+	}
+
+	// A different alias must not consume the confirmation (and it stays pending).
+	s := newServer()
+	if s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "APP_B") {
+		t.Error("confirmation issued for alias APP_A must not be consumable on alias APP_B")
+	}
+
+	// The originating alias consumes it (one-time use).
+	if !s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "APP_A") {
+		t.Error("confirmation should be consumable on the alias it was issued for")
+	}
+
+	// Alias comparison is case-insensitive (aliases are normalized to upper).
+	s = newServer()
+	if !s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "app_a") {
+		t.Error("alias binding should be case-insensitive")
+	}
+}
+
+// TestProductionTLSViolationWhitespaceVariants ensures the production TLS
+// fail-closed check cannot be evaded by whitespace around '=' or by boolean
+// synonyms in the connection string.
+func TestProductionTLSViolationWhitespaceVariants(t *testing.T) {
+	violating := []string{
+		"server=x;encrypt=false",
+		"server=x;encrypt = false",
+		"server=x; encrypt=disable ",
+		"server=x;encrypt\t=\tdisable",
+		"server=x;encrypt=no",
+		"server=x;encrypt=0",
+		"sqlserver://u:p@h:1433?database=d&encrypt=disable&trustservercertificate=true",
+		"server=x;trustservercertificate=true",
+		"server=x;trustservercertificate = true",
+		"server=x;trustservercertificate=yes",
+		"server=x;trustservercertificate=1",
+	}
+	for _, cs := range violating {
+		if productionTLSViolation(strings.ToLower(cs)) == "" {
+			t.Errorf("expected TLS violation to be detected for %q", cs)
+		}
+	}
+
+	safe := []string{
+		"server=x;encrypt=true;trustservercertificate=false",
+		"server=x;encrypt=strict;trustservercertificate=false",
+		"server=x;database=my reporting db;encrypt=true",
+		"sqlserver://u:p@h:1433?database=d&encrypt=true",
+	}
+	for _, cs := range safe {
+		if v := productionTLSViolation(strings.ToLower(cs)); v != "" {
+			t.Errorf("unexpected TLS violation for %q: %s", cs, v)
+		}
+	}
+}
+
 // Ensure the test file's intent strings stay readable in failures.
 var _ = strings.TrimSpace
