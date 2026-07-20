@@ -1,6 +1,6 @@
 module mcp-go-mssql
 
-go 1.26.0
+go 1.26.5
 
 require (
 	github.com/golang-sql/sqlexp v0.1.0
