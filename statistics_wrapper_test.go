@@ -105,15 +105,15 @@ func TestParseStatisticsWrapper_Positive(t *testing.T) {
 			timeOn: true,
 		},
 		{
-			name:   "base-first wrapper with DELETE (base starts with D)",
-			query:  "DELETE FROM temp_ai WHERE id = 1; SET STATISTICS TIME OFF",
-			base:   "DELETE FROM temp_ai WHERE id = 1",
+			name:    "base-first wrapper with DELETE (base starts with D)",
+			query:   "DELETE FROM temp_ai WHERE id = 1; SET STATISTICS TIME OFF",
+			base:    "DELETE FROM temp_ai WHERE id = 1",
 			timeOff: true,
 		},
 		{
-			name:   "base-first wrapper with INSERT (base starts with I)",
-			query:  "INSERT INTO temp_ai VALUES (1); SET STATISTICS IO OFF",
-			base:   "INSERT INTO temp_ai VALUES (1)",
+			name:  "base-first wrapper with INSERT (base starts with I)",
+			query: "INSERT INTO temp_ai VALUES (1); SET STATISTICS IO OFF",
+			base:  "INSERT INTO temp_ai VALUES (1)",
 			ioOff: true,
 		},
 		{
