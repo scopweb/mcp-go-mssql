@@ -17,7 +17,7 @@ Pensado para entornos donde la seguridad importa: modo solo lectura con whitelis
 
 ## Instalación
 
-Descarga el binario de [Releases](https://github.com/scopweb/mcp-go-mssql/releases) o compila:
+Descarga el binario de la [última release](https://github.com/scopweb/mcp-go-mssql/releases/latest) o compila:
 
 ```bash
 go build -ldflags "-w -s" -o mcp-go-mssql.exe
