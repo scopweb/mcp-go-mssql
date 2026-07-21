@@ -49,7 +49,7 @@ Se añadió una nota en la memoria de usuario de Claude con el schema completo d
 
 ```
 Conectores mssql (...): NO hacer tool_search, usar directamente:
-query_database(query), list_tables(), describe_table(table_name, schema?), ...
+query_database(query), explore(type, filter, pattern), inspect(table_name, detail), ...
 ```
 
 Con esto Claude salta el `tool_search` y llama directamente al conector.

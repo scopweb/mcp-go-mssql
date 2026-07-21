@@ -109,6 +109,19 @@ BEGIN
 END;
 ```
 
+## Schema-qualified matching
+
+Whitelist entries are compared **schema-qualified**. A bare name is assumed to be in `dbo`:
+
+- `temp_ai` matches `temp_ai` and `dbo.temp_ai`
+- `temp_ai` does **not** match `otro_schema.temp_ai` or `otradb.dbo.temp_ai` — those are treated as different objects and blocked
+
+To whitelist a non-`dbo` object, qualify it explicitly:
+
+```bash
+MSSQL_WHITELIST_TABLES=temp_ai,app.temp_ai
+```
+
 ## Limitations
 
 The regex-based parser may not detect tables in:
@@ -116,4 +129,4 @@ The regex-based parser may not detect tables in:
 - Dynamic SQL within stored procedures
 - CTEs with multiple levels of nesting
 
-**Mitigation:** For maximum security, combine with database-level permissions (GRANT/DENY).
+**Mitigation:** The strongest write control must live in the database, not in this process. Use a **least-privilege** SQL login with broad `SELECT` and `INSERT`/`UPDATE`/`DELETE` only on the dedicated tables the AI may modify: even if the regex-based extractor is fooled by an exotic construct, the database engine itself rejects the write. The Go whitelist is **defense in depth** — it reduces mistakes and narrows the attack surface, but it must not be the sole line of defense.

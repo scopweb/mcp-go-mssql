@@ -13,7 +13,6 @@ Discover database objects. The starting point for any database interaction.
 | `schema` | string | No | Schema filter for procedures |
 | `pattern` | string | When `type=search` | Search term |
 | `search_in` | string | No | `name` (default) or `definition` (searches inside source code) |
-| `database` | string | No | Target a cross-database from `MSSQL_ALLOWED_DATABASES` |
 
 **Annotations:** read-only, non-destructive, idempotent
 
@@ -34,9 +33,6 @@ explore(type="search", pattern="Pedido")
 
 # Search inside procedure/view source code
 explore(type="search", pattern="INSERT INTO temp_ai", search_in="definition")
-
-# List tables in a cross-database
-explore(type="tables", database="ExampleDb")
 
 # List all views with metadata (check_option, is_updatable, definition preview)
 explore(type="views")
@@ -86,7 +82,7 @@ inspect(table_name="staging.ImportData", detail="columns")
 
 Check connection status and server configuration. No parameters.
 
-**Returns:** server name, database name, version, read-only status, whitelist tables, allowed databases, connection pool stats.
+**Returns:** server name, database name, version, read-only status, whitelist tables, connection pool stats.
 
 **When to use:**
 - Start of conversation — confirm you're connected
@@ -121,9 +117,6 @@ query_database(query="SELECT COUNT(*) AS total FROM Pedidos WHERE Fecha >= '2024
 # JOIN across tables
 query_database(query="SELECT p.Id, c.Nombre FROM Pedidos p JOIN Clientes c ON p.ClienteId = c.Id")
 
-# Cross-database query (if allowed)
-query_database(query="SELECT * FROM ExampleDb.dbo.exampleloads WHERE Id = 1")
-
 # INSERT into whitelisted table
 query_database(query="INSERT INTO temp_ai (clave, valor) VALUES ('result_1', 'processed')")
 
@@ -133,9 +126,13 @@ query_database(query="CREATE TABLE temp_ai (id INT IDENTITY PRIMARY KEY, clave N
 
 **Security constraints:**
 - Read-only mode blocks INSERT/UPDATE/DELETE/CREATE/DROP except on whitelisted tables
-- Cross-database tables are always read-only
-- Server validates table names exist before execution
+- Multi-statement batches are rejected in read-only/whitelist contexts (only `SET STATISTICS TIME/IO` diagnostic wrappers are allowed)
 - All queries executed as prepared statements
+
+**When a modification is blocked by read-only mode:**
+1. DO NOT try to bypass it — no `execute_procedure`, alternative tools, `SET` tricks, or re-framed statements. Read-only is a deliberate security boundary.
+2. DO NOT suggest elevating permissions (changing `MSSQL_READ_ONLY`, widening whitelists) unless the user explicitly asks.
+3. Instead, present the complete, ready-to-run SQL in a ```sql code block and briefly state the connection is read-only, so the user can execute it manually (SSMS, sqlcmd, Azure Data Studio, etc.).
 
 ---
 
@@ -199,21 +196,21 @@ explain_query(query="SELECT p.*, c.Nombre FROM Pedidos p JOIN Clientes c ON p.Cl
 
 ## 7. `confirm_operation`
 
-Confirm a pending destructive operation (DROP, ALTER, CREATE TABLE on existing objects).
+Confirm a pending modification (INSERT/UPDATE/DELETE/DDL) on a **writable dynamic alias**. Only available in dynamic mode; not exposed on classic connections.
 
 **Parameters:**
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `token` | string | Yes | Token received from a destructive operation warning |
+| `description` | string | Yes | The exact description returned in the CONFIRMATION REQUIRED error |
 
 **When to use:**
-- When `query_database` returns a destructive confirmation error
-- Token expires after 5 minutes
+- When `query_database` returns a "CONFIRMATION REQUIRED" error on a writable dynamic alias
+- The confirmation expires after 90 seconds and is bound to the alias it was issued for (cleared on alias switch/disconnect)
 
 **Example:**
 ```
-confirm_operation(token="abc123...")
+confirm_operation(description="DELETE on tables: temp_ai (alias AIWORK)")
 ```
 
 ---
@@ -234,14 +231,6 @@ query_database(query="SELECT TOP 5 * FROM Orders") → sample data
 explain_query(query="SELECT ...")  → check plan
 inspect(table_name="X", detail="indexes") → check available indexes
 query_database(query="optimized query") → run with improvements
-```
-
-### Pattern: Cross-database comparison
-```
-get_database_info → check allowed databases
-explore(database="DB_A") → tables in DB_A
-explore(database="DB_B") → tables in DB_B
-query_database(query="SELECT ... FROM DB_A.dbo.T UNION ALL SELECT ... FROM DB_B.dbo.T")
 ```
 
 ### Pattern: Safe write to temp table
@@ -270,9 +259,9 @@ dynamic_available()
 ```
 
 **Notes:**
-- Reads `.env` directly, not from environment variables
+- Reads the environment at startup (including the `.env` file next to the executable, unless `MSSQL_IGNORE_LOCAL_ENV=true`)
 - Shows: alias, server, database — NO passwords or users
-- Only available when `MSSQL_DYNAMIC_MODE=true` and `MSSQL_SERVER` is not set
+- Only available in dynamic mode (see mode selection in SKILL.md)
 
 ---
 
@@ -296,9 +285,10 @@ dynamic_connect(alias="exampleapp")
 ```
 
 **Notes:**
-- Credentials come from `.env` (MSSQL_DYNAMIC_<ALIAS>_*)
-- Connection inherits security config: READ_ONLY, WHITELIST_TABLES, AUTOPILOT
+- Credentials come from env (`MSSQL_DYNAMIC_<ALIAS>_*`)
+- Connection inherits security config: READ_ONLY, WHITELIST_TABLES
 - If already connected, replaces the existing connection
+- A failed connect keeps the previous working connection alive
 
 ---
 
@@ -328,46 +318,20 @@ Active dynamic connections:
 
 ## 14. `dynamic_disconnect`
 
-Close an active dynamic database connection.
+Close the currently active dynamic connection and return to disconnected state.
 
-**Parameters:**
+**Parameters:** none
 
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `alias` | string | Yes | Connection alias to close |
-
-**Annotations:** non-destructive, idempotent (closing non-existent is no-op)
+**Annotations:** non-destructive, idempotent (disconnecting with no active connection is a no-op)
 
 **Examples:**
 
 ```
-# Close a connection
-dynamic_disconnect(alias="exampleapp")
+dynamic_disconnect()
 ```
 
 ---
 
-## 15. `query_database` with `connection` param
+## 15. Targeting a dynamic connection
 
-When a dynamic connection is active, target it with the `connection` parameter.
-
-**Additional Parameter:**
-
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `connection` | string | No | Dynamic connection alias to use instead of default |
-
-**Examples:**
-
-```
-# Query using the default connection (from env vars)
-query_database(query="SELECT TOP 10 * FROM customers")
-
-# Query using a dynamic connection
-query_database(query="SELECT TOP 10 * FROM orders", connection="exampleapp")
-```
-
-**Notes:**
-- If `connection` is omitted, uses the default connection from environment variables
-- Security validations (whitelist, read-only) apply per the dynamic connection's config
-- Cross-database queries blocked for dynamic connections (same as primary)
+There is no `connection` parameter on `query_database`. Use `dynamic_connect(alias="...")` to switch the active connection; all subsequent `query_database` calls run against that alias and inherit its security posture (per-alias READ_ONLY + WHITELIST_TABLES).

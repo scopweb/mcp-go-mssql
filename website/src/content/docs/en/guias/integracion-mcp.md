@@ -9,19 +9,18 @@ MCP (Model Context Protocol) is the protocol that allows Claude Desktop to commu
 
 ## Available tools
 
-The server exposes 9 MCP tools:
+The server exposes 6 base MCP tools (11 in dynamic mode, which adds 5 more):
 
 | Tool | Description |
 |------|-------------|
 | `query_database` | Execute SQL queries |
-| `list_tables` | List all database tables |
-| `describe_table` | Show table structure |
-| `get_database_info` | General database information |
-| `list_databases` | List available databases |
-| `get_indexes` | Show table indexes |
-| `get_foreign_keys` | Show table foreign keys |
-| `list_stored_procedures` | List stored procedures |
-| `execute_procedure` | Execute a stored procedure |
+| `get_database_info` | General connection and database information |
+| `explore` | Explore objects: tables, views, databases, procedures and search |
+| `inspect` | Inspect a table: columns, indexes, foreign keys and dependencies |
+| `execute_procedure` | Execute a whitelisted stored procedure |
+| `explain_query` | Estimated execution plan of a SELECT query without running it |
+
+In dynamic mode, the following are also exposed: `dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list` and `confirm_operation`.
 
 ## Communication flow
 

@@ -26,19 +26,19 @@ Usa la herramienta CLI para probar operaciones:
 
 ```bash
 # Test de conexión
-go run claude-code/db-connector.go test
+go run examples/claude-code/db-connector.go test
 
 # Información de la base de datos
-go run claude-code/db-connector.go info
+go run examples/claude-code/db-connector.go info
 
 # Listar tablas
-go run claude-code/db-connector.go tables
+go run examples/claude-code/db-connector.go tables
 
 # Describir una tabla
-go run claude-code/db-connector.go describe users
+go run examples/claude-code/db-connector.go describe users
 
 # Ejecutar una query
-go run claude-code/db-connector.go query "SELECT @@VERSION"
+go run examples/claude-code/db-connector.go query "SELECT @@VERSION"
 ```
 
 ## Tests manuales
@@ -48,7 +48,7 @@ go run claude-code/db-connector.go query "SELECT @@VERSION"
 Con `MSSQL_READ_ONLY=true`, confirma que las queries de escritura se bloquean:
 
 ```bash
-go run claude-code/db-connector.go query "INSERT INTO some_table VALUES (1)"
+go run examples/claude-code/db-connector.go query "INSERT INTO some_table VALUES (1)"
 # Debe devolver: Query blocked: read-only mode
 ```
 
@@ -57,7 +57,7 @@ go run claude-code/db-connector.go query "INSERT INTO some_table VALUES (1)"
 Con `MSSQL_WHITELIST_TABLES=temp_ai`, confirma que solo esa tabla acepta escritura:
 
 ```bash
-go run claude-code/db-connector.go query "INSERT INTO temp_ai (data) VALUES ('test')"
+go run examples/claude-code/db-connector.go query "INSERT INTO temp_ai (data) VALUES ('test')"
 # Debe ejecutar correctamente
 ```
 

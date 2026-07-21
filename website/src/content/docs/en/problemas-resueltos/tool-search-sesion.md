@@ -49,7 +49,7 @@ A note was added to Claude's user memory with the complete connector schema:
 
 ```
 mssql connectors (...): Do NOT use tool_search, call directly:
-query_database(query), list_tables(), describe_table(table_name, schema?), ...
+query_database(query), explore(type, filter, pattern), inspect(table_name, detail), ...
 ```
 
 With this, Claude skips `tool_search` and calls the connector directly.

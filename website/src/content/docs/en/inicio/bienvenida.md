@@ -13,7 +13,7 @@ AI assistants are incredibly useful for working with data, but connecting them t
 
 1. **MCP Server** (`main.go`) — Integrates with Claude Desktop through the MCP protocol. Configure it once and Claude will have database tools available in every conversation.
 
-2. **Claude Code CLI** (`claude-code/db-connector.go`) — Direct command-line access. Ideal for development, scripts, and automation.
+2. **Claude Code CLI** (`examples/claude-code/db-connector.go`) — Direct command-line access. Ideal for development, scripts, and automation.
 
 Both share the same security layers: TLS, prepared statements, read-only mode, and whitelist.
 

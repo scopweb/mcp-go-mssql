@@ -29,23 +29,23 @@ Three combined problems:
 
 All queries are now capped at 500 rows. If the result is truncated, the last element includes a `_truncated` warning so Claude knows to narrow the query with `WHERE` or `TOP`.
 
-### 2 — `filter` parameter for `list_tables`
+### 2 — `filter` parameter for object exploration
 
-Data can now be filtered before fetching:
+Data can now be filtered before fetching (currently via `explore`, which unifies the old `list_tables`):
 
 ```
-list_tables  filter="Order"    →  only tables/views containing "Order"
-list_tables  filter="Truck"    →  only tables/views containing "Truck"
+explore  filter="Order"    →  only tables/views containing "Order"
+explore  filter="Truck"    →  only tables/views containing "Truck"
 ```
 
-### 3 — New `search_objects` tool
+### 3 — Direct object search
 
-Direct search in two modes:
+`explore` with `type="search"` (formerly the standalone `search_objects` tool) searches in two modes:
 
 | Mode | Usage | Returns |
 |---|---|---|
-| By name (default) | `search_objects pattern="OrderTruck"` | Tables, views, procs and functions whose **name** matches |
-| By definition | `search_objects pattern="OrderTruck" search_in="definition"` | Procs, functions and views that **reference** that text in their source code |
+| By name (default) | `explore type="search" pattern="OrderTruck"` | Tables, views, procs and functions whose **name** matches |
+| By definition | `explore type="search" pattern="OrderTruck" search_in="definition"` | Procs, functions and views that **reference** that text in their source code |
 
 ## Updated function schema
 
@@ -65,10 +65,10 @@ To find references to `PedidoCamioCarregaCamioAdmin` with states 26/27:
 
 ```sql
 -- 1. Search the object by name
-search_objects  pattern="PedidoCamioCarregaCamioAdmin"
+explore  type="search"  pattern="PedidoCamioCarregaCamioAdmin"
 
 -- 2. Find which procs/views reference it in their code
-search_objects  pattern="PedidoCamioCarregaCamioAdmin"  search_in="definition"
+explore  type="search"  pattern="PedidoCamioCarregaCamioAdmin"  search_in="definition"
 
 -- 3. Direct query filtering by state
 query_database  query="SELECT * FROM PedidoCamioCarregaCamio WHERE Estado IN (26,27)"

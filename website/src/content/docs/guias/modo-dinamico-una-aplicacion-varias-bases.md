@@ -95,11 +95,15 @@ MSSQL_DYNAMIC_APP_WORK_WHITELIST_TABLES=ai_temp_tasks,ai_temp_results,ai_work_or
 
 Estas versiones solo negocian TLS 1.0, que el runtime moderno de Go rechaza de plano. Si una de tus bases de datos relacionadas corre en un servidor legado, define `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` con un DSN en formato URL. El formato URL (`sqlserver://...`) es el workaround probado para el error `protocol version 301` — replica el comportamiento del env var global `MSSQL_CONNECTION_STRING` en modo clásico.
 
-```env
-# Alias de solo lectura contra un SQL Server 2000 legado
+```ini
+# Alias de solo lectura contra un SQL Server 2000 legado (producción)
+DEVELOPER_MODE=false
+MSSQL_ALLOW_INSECURE_TLS=true
 MSSQL_DYNAMIC_LEGACY_READ_ONLY=true
 MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://app_ai_read:...@legacy-sql2000.local:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
 ```
+
+> **`MSSQL_ALLOW_INSECURE_TLS=true` es obligatorio en producción**: sin él, el servidor **se niega a arrancar** (fail-closed) porque la cadena desactiva el cifrado. Con él, la conexión continúa y se registra un WARN auditable en cada conexión afectada.
 
 Puedes mantener también los campos per-alias `_SERVER` / `_DATABASE` / `_USER` / `_PASSWORD`, pero se ignoran mientras `_CONNECTION_STRING` esté presente. La forma mínima recomendada (solo `_READ_ONLY` + `_CONNECTION_STRING`) es la más limpia, ya que la URL contiene todos los datos de conexión.
 
@@ -176,6 +180,14 @@ El servidor aplica **"secure by default"** de forma estricta:
 - Si un alias está en modo escritura pero no defines `WHITELIST_TABLES`, **no se permite ninguna modificación**.
 - Cualquier operación de modificación en un alias con `READ_ONLY=false` requiere confirmación explícita mediante la herramienta `confirm_operation` antes de ejecutarse.
 
+### Datos de hardening del modo dinámico
+
+- **`confirm_operation` está vinculada al alias**: la confirmación pendiente se emite para un alias concreto, **expira a los 90 segundos** y se **descarta al cambiar de alias o desconectarse**.
+- **`execute_procedure`**: bloqueada por completo en aliases de solo lectura; en aliases escribibles requiere confirmación previa vía `confirm_operation`.
+- **Conexión anterior preservada**: si `dynamic_connect` falla, se mantiene la conexión anterior que funcionaba.
+- **Whitelist cualificada por esquema**: un nombre sin esquema se asume en `dbo` (`temp_ai` coincide con `temp_ai`/`dbo.temp_ai`, pero no con `otro_schema.temp_ai`); cualifica objetos fuera de `dbo` (p. ej. `app.temp_ai`).
+- **`confirm_operation` es un reductor de errores accidentales, no una barrera de seguridad**: el mismo agente que genera la modificación también la confirma. El control de escritura real es un **login SQL de mínimo privilegio** a nivel de base de datos.
+
 ### Opción 1: Todo en solo lectura + una base de trabajo (Más segura)
 
 Esta es la recomendación más equilibrada:
@@ -248,8 +260,3 @@ Cuando uses aliases con `READ_ONLY=false`, la IA deberá llamar primero a la her
 - [Variables de Entorno](../configuracion/variables-entorno.md)
 - [Modo Solo Lectura y Whitelist](../seguridad/modo-solo-lectura.md)
 - [Whitelist de Tablas](../seguridad/whitelist-tablas.md)
-```
-
-Now I have created the guide. Next, I should also create or link to an English version, and update the existing dynamic FAQ to reference this new guide.
-
-Let's also create the English version for completeness, since the site is bilingual.

@@ -93,7 +93,7 @@ DEVELOPER_MODE=true
 
 MSSQL_DYNAMIC_CRM_SERVER=192.0.2.10
 MSSQL_DYNAMIC_CRM_DATABASE=ExampleDb
-MSSQL_DYNAMIC_CRM_USER=sa
+MSSQL_DYNAMIC_CRM_USER=app_ai_read
 MSSQL_DYNAMIC_CRM_PASSWORD=...
 MSSQL_DYNAMIC_CRM_READ_ONLY=true
 
@@ -170,17 +170,19 @@ command = "..."
 startup_timeout_sec = 15
 ```
 
-#### Problema 3: Quiero pasar variables adicionales solo para Grok
+#### Problema 3: Quiero más logging o pasar variables adicionales solo para Grok
 
-Aunque no es necesario para las conexiones dinámicas, puedes hacerlo:
+Aunque no es necesario para las conexiones dinámicas, puedes pasar variables adicionales:
 
 ```toml
 [mcp_servers.mssql]
 command = "C:\\MCPs\\MCP-EXE\\mssql2\\mcp-go-mssql-secure.exe"
-env = { MSSQL_EXTRA_LOG = "true" }   # Variables adicionales
+env = { DEVELOPER_MODE = "true" }   # Variables adicionales
 ```
 
 Estas variables se **combinan** con las que ya carga el servidor desde su `.env`.
+
+> **Sobre el logging**: no existe ninguna variable de entorno de "log extra". Los logs de seguridad van a **stderr** vía `slog`, y el nivel se controla mediante la petición MCP `logging/setLevel` del cliente (o temporalmente con `DEVELOPER_MODE=true` para errores más detallados).
 
 #### Problema 4: `dynamic_connect` falla con "protocol version 301" (SQL Server 2000/2008/2012)
 
@@ -188,12 +190,23 @@ Estas variables se **combinan** con las que ya carga el servidor desde su `.env`
 
 **Solución**: define `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` con un DSN en formato URL para ese alias. Ejemplo:
 
-```env
+```ini
+# Producción: obligatorio añadir MSSQL_ALLOW_INSECURE_TLS=true, si no el servidor se niega a arrancar (fail-closed)
+DEVELOPER_MODE=false
+MSSQL_ALLOW_INSECURE_TLS=true
 MSSQL_DYNAMIC_LEGACY_READ_ONLY=true
 MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://app_ai_read:...@legacy-sql2000.local:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
 ```
 
 El servidor detectará el error `protocol version 301` y añadirá automáticamente esta pista al mensaje de error, así que no tienes que recordar el workaround de memoria.
+
+### **🔒 Datos rápidos de hardening (modo dinámico)**
+
+- Los alias se cargan como **solo lectura por defecto** (`_READ_ONLY=true` si se omite).
+- **Un alias escribible sin `_WHITELIST_TABLES` no permite ninguna modificación** (default seguro). Con whitelist, las modificaciones requieren antes `confirm_operation`.
+- `confirm_operation` está **vinculada al alias**, expira a los **90 segundos** y se descarta al cambiar de alias o desconectar. Es un reductor de errores accidentales, no una barrera de seguridad: el control real es un login SQL de mínimo privilegio en la base de datos.
+- `execute_procedure` está **bloqueada en alias de solo lectura** y requiere confirmación en los escribibles.
+- Si `dynamic_connect` falla, **se mantiene la conexión anterior** que funcionaba.
 
 ### **📋 Resumen de Pasos Rápidos**
 

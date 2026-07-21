@@ -80,7 +80,7 @@ booleano `truncated`.
   expuesta por `go-mssqldb` v1.10.0; la capa de conexión se refactorizó
   de `sql.Open("sqlserver", dsn)` a
   `sql.OpenDB(mssql.NewConnector(dsn))` para que esto funcione.
-- La herramienta CLI (`claude-code/db-connector.go`) no se ve afectada
+- La herramienta CLI (`examples/claude-code/db-connector.go`) no se ve afectada
   — los envoltorios son una preocupación exclusiva del tool MCP.
 - Para lotes multi-statement el bloque `stats` reporta los tiempos de
   cada sentencia individualmente (los tiempos de la sentencia base;

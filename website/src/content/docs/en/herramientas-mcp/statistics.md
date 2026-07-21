@@ -77,7 +77,7 @@ wrapper was used) so clients have a stable shape. The previous
   by `go-mssqldb` v1.10.0; the connection layer was refactored from
   `sql.Open("sqlserver", dsn)` to `sql.OpenDB(mssql.NewConnector(dsn))`
   to make this work.
-- The CLI tool (`claude-code/db-connector.go`) is not affected —
+- The CLI tool (`examples/claude-code/db-connector.go`) is not affected —
   wrappers are an MCP-tool concern only.
 - For multi-statement batches the `stats` block reports timings for
   each statement individually (the base statement's timings; the

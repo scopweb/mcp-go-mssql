@@ -21,10 +21,13 @@ Todas las credenciales y opciones de configuración se gestionan mediante variab
 | `MSSQL_PORT` | `1433` | Puerto de SQL Server |
 | `DEVELOPER_MODE` | `false` | `true` para desarrollo (TLS relajado, errores detallados) |
 | `MSSQL_READ_ONLY` | `false` | Bloquea operaciones de escritura |
-| `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación en modo read-only |
-| `MSSQL_AUTH` | `sql` | Modo de autenticación: `sql`, `integrated`, `azure` |
-| `MSSQL_ENCRYPT` | _(auto)_ | Control de cifrado TLS. Solo efectivo con `DEVELOPER_MODE=true`. `false` = desactivar cifrado (**necesario para SQL Server 2008/2012**). Si no se define: `false` en dev, siempre `true` en producción |
-| `MSSQL_CONNECTION_STRING` | _(vacío)_ | Connection string personalizado (anula otras variables) |
+| `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación en modo read-only. **Coincidencia cualificada por esquema**: un nombre sin esquema se asume en `dbo` (`temp_ai` coincide con `temp_ai`/`dbo.temp_ai`, pero no con `otro_schema.temp_ai`); cualifica explícitamente objetos fuera de `dbo` (p. ej. `app.temp_ai`) |
+| `MSSQL_WHITELIST_PROCEDURES` | _(vacío)_ | Lista separada por comas de procedimientos almacenados que la herramienta `execute_procedure` puede ejecutar. Si no se define, `execute_procedure` está completamente deshabilitada |
+| `MSSQL_MAX_QUERY_SIZE` | `1048576` | Tamaño máximo de la entrada SQL en caracteres |
+| `MSSQL_AUTH` | `sql` | Modo de autenticación: `sql`, `integrated`, `windows` (alias de `integrated`). `azure` **no está implementado** — usa `MSSQL_CONNECTION_STRING` para Azure AD |
+| `MSSQL_ENCRYPT` | _(auto)_ | Control de cifrado TLS. Solo efectivo con `DEVELOPER_MODE=true`. `false` = desactivar cifrado (**necesario para SQL Server 2008/2012**). Si no se define: `false` en dev, siempre `true` en producción. **En producción el TLS inseguro falla cerrado**: si el valor efectivo desactiva el cifrado o la validación de certificados, el servidor se niega a arrancar salvo `MSSQL_ALLOW_INSECURE_TLS=true` |
+| `MSSQL_ALLOW_INSECURE_TLS` | `false` | Vía de escape explícita para producción (`DEVELOPER_MODE=false`). Por defecto, si una cadena de conexión desactiva el cifrado (`encrypt=false`/`disable`) o la validación de certificados (`trustservercertificate=true`), el servidor **aborta el arranque**. `true` = permitirlo conscientemente, registrando un **WARN auditable en cada conexión afectada**. Pensado para SQL Server 2000/2008/2012 (solo TLS 1.0) |
+| `MSSQL_CONNECTION_STRING` | _(vacío)_ | Connection string personalizado (anula otras variables). En producción está sujeto al chequeo fail-closed de TLS (ver `MSSQL_ALLOW_INSECURE_TLS`) |
 | `MSSQL_DYNAMIC_MODE` | _(auto-detect)_ | `true` = forzar modo dinámico (múltiples alias). `false` = forzar modo clásico (única conexión). Si no se define, se auto-detecta por presencia de variables `MSSQL_DYNAMIC_*`. **Importante para aislamiento entre múltiples servidores MCP.** |
 | `MSSQL_IGNORE_LOCAL_ENV` | `false` | `true` = ignora completamente cualquier archivo `.env` situado junto al ejecutable. Muy útil para servidores clásicos configurados 100% vía `.mcp.json` cuando hay riesgo de archivos `.env` residuales. |
 
@@ -39,10 +42,10 @@ Cuando `MSSQL_DYNAMIC_MODE=true`, defines cada alias con un conjunto de variable
 | `MSSQL_DYNAMIC_<ALIAS>_DATABASE` | _(requerido si no usas override)_ | Base de datos del alias |
 | `MSSQL_DYNAMIC_<ALIAS>_USER` | _(requerido si no usas override)_ | Usuario SQL del alias |
 | `MSSQL_DYNAMIC_<ALIAS>_PASSWORD` | _(requerido si no usas override)_ | Contraseña del alias |
-| `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` | _(auto)_ | `true` / `false` / `disable`. Sobrescribe el cifrado TLS derivado de `DEVELOPER_MODE` solo para este alias. Útil para servidores legados con TLS 1.0 que no soporten TLS 1.2 (SQL Server 2000/2008/2012). |
-| `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` | _(vacío)_ | Connection string completo (URL o ADO DSN) que anula los campos anteriores del alias. **Recomendado para SQL Server 2000/2008/2012**: `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true`. Si la conexión falla con `protocol version 301`, el servidor sugiere automáticamente este workaround en el mensaje de error. |
+| `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` | _(auto)_ | `true` / `false` / `disable`. Sobrescribe el cifrado TLS derivado de `DEVELOPER_MODE` solo para este alias. Útil para servidores legados con TLS 1.0 que no soporten TLS 1.2 (SQL Server 2000/2008/2012). **En producción, un valor que desactive el cifrado aborta el arranque** salvo que se opte explícitamente con `MSSQL_ALLOW_INSECURE_TLS=true` |
+| `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` | _(vacío)_ | Connection string completo (URL o ADO DSN) que anula los campos anteriores del alias. **Recomendado para SQL Server 2000/2008/2012**: `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true`. Si la conexión falla con `protocol version 301`, el servidor sugiere automáticamente este workaround en el mensaje de error. **En producción está sujeto al chequeo fail-closed de TLS**: `encrypt=disable` / `trustservercertificate=true` abortan el arranque salvo `MSSQL_ALLOW_INSECURE_TLS=true` |
 | `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY` | `true` | `true` = solo lectura, `false` = permite escrituras (sigue requiriendo `_WHITELIST_TABLES` para que la IA pueda tocar tablas concretas) |
-| `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` | _(vacío)_ | Lista separada por comas de tablas permitidas para modificación cuando `READ_ONLY=true` o cuando `READ_ONLY=false` sin whitelist propia |
+| `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` | _(vacío)_ | Lista separada por comas de tablas que el alias puede modificar. **Se aplica incluso cuando `_READ_ONLY=false`**: un alias escribible sin whitelist no permite **ninguna** modificación (default seguro); con whitelist, las modificaciones requieren `confirm_operation` previa. Coincidencia cualificada por esquema: un nombre sin esquema se asume en `dbo`; cualifica explícitamente objetos fuera de `dbo` (p. ej. `app.temp_ai`) |
 
 > **Precedencia dentro de un alias**: `_CONNECTION_STRING` siempre gana sobre el resto de campos per-alias. Si no está definido, se usa `_ENCRYPT`/`_PORT` si están; en su defecto, se aplica el comportamiento por modo (`DEVELOPER_MODE`).
 

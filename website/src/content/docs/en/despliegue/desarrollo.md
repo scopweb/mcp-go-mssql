@@ -57,9 +57,9 @@ go run test-connection.go
 ## Claude Code CLI
 
 ```bash
-go run claude-code/db-connector.go test
-go run claude-code/db-connector.go tables
-go run claude-code/db-connector.go query "SELECT @@VERSION"
+go run examples/claude-code/db-connector.go test
+go run examples/claude-code/db-connector.go tables
+go run examples/claude-code/db-connector.go query "SELECT @@VERSION"
 ```
 
 ## Build

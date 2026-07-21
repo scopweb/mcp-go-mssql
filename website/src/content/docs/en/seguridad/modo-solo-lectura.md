@@ -96,4 +96,8 @@ MSSQL_READ_ONLY=true
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 ```
 
+**Schema-qualified matching:** whitelist entries are compared schema-qualified. A bare name (`temp_ai`) is assumed to be in `dbo`, so it matches `temp_ai` and `dbo.temp_ai`, but **not** `otro_schema.temp_ai` or `otradb.dbo.temp_ai`. To whitelist a non-`dbo` object, qualify it explicitly (e.g. `app.temp_ai`).
+
+**Defense in depth:** the regex-based validation is an additional layer, not the real security boundary. The strongest write control must live in the database: use a least-privilege SQL login with broad `SELECT` and `INSERT`/`UPDATE`/`DELETE` only on the tables the AI may modify. That way, even if the validator is fooled, the database engine itself rejects the write.
+
 See the [Table Whitelist](/en/seguridad/whitelist-tablas/) section for more details.

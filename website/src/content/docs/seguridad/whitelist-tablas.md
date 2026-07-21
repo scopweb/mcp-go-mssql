@@ -109,6 +109,19 @@ BEGIN
 END;
 ```
 
+## Coincidencia cualificada por esquema
+
+Las entradas de la whitelist se comparan **cualificadas por esquema**. Un nombre sin esquema se asume en `dbo`:
+
+- `temp_ai` coincide con `temp_ai` y `dbo.temp_ai`
+- `temp_ai` **no** coincide con `otro_schema.temp_ai` ni con `otradb.dbo.temp_ai` — se tratan como objetos distintos y se bloquean
+
+Para permitir un objeto fuera de `dbo`, cualifícalo explícitamente:
+
+```bash
+MSSQL_WHITELIST_TABLES=temp_ai,app.temp_ai
+```
+
 ## Limitaciones
 
 El parser basado en regex puede no detectar tablas en:
@@ -116,4 +129,4 @@ El parser basado en regex puede no detectar tablas en:
 - SQL dinámico dentro de procedimientos almacenados
 - CTEs con múltiples niveles de anidamiento
 
-**Mitigación:** Para máxima seguridad, combina con permisos a nivel de base de datos (GRANT/DENY).
+**Mitigación:** El control de escritura más fuerte debe vivir en la base de datos, no en este proceso. Usa un login SQL de **mínimo privilegio** con `SELECT` amplio y `INSERT`/`UPDATE`/`DELETE` solo en las tablas dedicadas que la IA pueda modificar: aunque el extractor basado en regex sea engañado por un constructo exótico, el propio motor rechaza la escritura. La whitelist de Go es **defensa en profundidad** — reduce errores y estrecha la superficie de ataque, pero no debe ser la única línea de defensa.

@@ -13,7 +13,7 @@ Los asistentes de IA son increíblemente útiles para trabajar con datos, pero c
 
 1. **Servidor MCP** (`main.go`) — Se integra con Claude Desktop a través del protocolo MCP. Configúralo una vez y Claude tendrá las herramientas de base de datos disponibles en cada conversación.
 
-2. **CLI para Claude Code** (`claude-code/db-connector.go`) — Acceso directo por línea de comandos. Ideal para desarrollo, scripts y automatización.
+2. **CLI para Claude Code** (`examples/claude-code/db-connector.go`) — Acceso directo por línea de comandos. Ideal para desarrollo, scripts y automatización.
 
 Ambos comparten las mismas capas de seguridad: TLS, prepared statements, modo solo lectura y whitelist.
 

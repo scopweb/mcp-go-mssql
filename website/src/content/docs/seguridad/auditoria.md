@@ -12,6 +12,7 @@ El componente `SecurityLogger` se encarga de registrar todos los eventos de segu
 ### Eventos registrados
 
 - Intentos de conexión a la base de datos (éxito y fallo)
+- **TLS inseguro permitido en producción** — cuando `MSSQL_ALLOW_INSECURE_TLS=true` permite una conexión sin cifrado o sin validación de certificados, se emite un **WARN auditable en cada conexión afectada**
 - Queries bloqueadas por modo solo lectura
 - Acceso denegado a tablas fuera del whitelist
 - Intentos de SQL injection detectados

@@ -21,10 +21,13 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_PORT` | `1433` | SQL Server port |
 | `DEVELOPER_MODE` | `false` | `true` for development (relaxed TLS, detailed errors) |
 | `MSSQL_READ_ONLY` | `false` | Blocks write operations |
-| `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode |
-| `MSSQL_AUTH` | `sql` | Authentication mode: `sql`, `integrated`, `azure` |
-| `MSSQL_ENCRYPT` | _(auto)_ | TLS encryption control. Only effective with `DEVELOPER_MODE=true`. `false` = disable encryption (**required for SQL Server 2008/2012**). If not set: `false` in dev, always `true` in production |
-| `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables) |
+| `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode. **Schema-qualified matching**: a bare name is assumed to be in `dbo` (`temp_ai` matches `temp_ai`/`dbo.temp_ai`, but not `otro_schema.temp_ai`); qualify non-`dbo` objects explicitly (e.g. `app.temp_ai`) |
+| `MSSQL_WHITELIST_PROCEDURES` | _(empty)_ | Comma-separated list of stored procedures the `execute_procedure` tool may run. If unset, `execute_procedure` is disabled entirely |
+| `MSSQL_MAX_QUERY_SIZE` | `1048576` | Maximum SQL input size in characters |
+| `MSSQL_AUTH` | `sql` | Authentication mode: `sql`, `integrated`, `windows` (alias of `integrated`). `azure` is **not implemented** — use `MSSQL_CONNECTION_STRING` for Azure AD |
+| `MSSQL_ENCRYPT` | _(auto)_ | TLS encryption control. Only effective with `DEVELOPER_MODE=true`. `false` = disable encryption (**required for SQL Server 2008/2012**). If not set: `false` in dev, always `true` in production. **In production insecure TLS fails closed**: if the effective value disables encryption or certificate validation, the server refuses to start unless `MSSQL_ALLOW_INSECURE_TLS=true` |
+| `MSSQL_ALLOW_INSECURE_TLS` | `false` | Explicit escape hatch for production (`DEVELOPER_MODE=false`). By default, if a connection string disables encryption (`encrypt=false`/`disable`) or certificate validation (`trustservercertificate=true`), the server **aborts startup**. `true` = allow it consciously, logging an **auditable WARN on every affected connection**. Intended for SQL Server 2000/2008/2012 (TLS 1.0 only) |
+| `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables). In production it is subject to the fail-closed TLS check (see `MSSQL_ALLOW_INSECURE_TLS`) |
 | `MSSQL_DYNAMIC_MODE` | _(auto-detect)_ | `true` = force dynamic mode (multiple aliases). `false` = force classic mode (single connection). When unset, auto-detects based on `MSSQL_DYNAMIC_*` variables. **Critical for isolation when running multiple MCP servers.** |
 | `MSSQL_IGNORE_LOCAL_ENV` | `false` | `true` = completely ignore any `.env` file next to the executable. Essential for classic servers configured purely via `.mcp.json` when leftover `.env` files may exist. |
 
@@ -39,10 +42,10 @@ When `MSSQL_DYNAMIC_MODE=true`, you configure each alias with a set of variables
 | `MSSQL_DYNAMIC_<ALIAS>_DATABASE` | _(required unless using override)_ | Database name of the alias |
 | `MSSQL_DYNAMIC_<ALIAS>_USER` | _(required unless using override)_ | SQL Server user of the alias |
 | `MSSQL_DYNAMIC_<ALIAS>_PASSWORD` | _(required unless using override)_ | Password of the alias |
-| `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` | _(auto)_ | `true` / `false` / `disable`. Overrides the TLS encryption derived from `DEVELOPER_MODE` for this alias only. Useful for legacy servers that only negotiate TLS 1.0 (SQL Server 2000/2008/2012). |
-| `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` | _(empty)_ | Full connection string (URL or ADO DSN) that overrides the per-alias fields above. **Recommended for SQL Server 2000/2008/2012**: `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true`. When the connection fails with `protocol version 301`, the server automatically appends this hint to the error message. |
+| `MSSQL_DYNAMIC_<ALIAS>_ENCRYPT` | _(auto)_ | `true` / `false` / `disable`. Overrides the TLS encryption derived from `DEVELOPER_MODE` for this alias only. Useful for legacy servers that only negotiate TLS 1.0 (SQL Server 2000/2008/2012). **In production, a value that disables encryption aborts startup** unless explicitly opted in with `MSSQL_ALLOW_INSECURE_TLS=true` |
+| `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` | _(empty)_ | Full connection string (URL or ADO DSN) that overrides the per-alias fields above. **Recommended for SQL Server 2000/2008/2012**: `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true`. When the connection fails with `protocol version 301`, the server automatically appends this hint to the error message. **In production it is subject to the fail-closed TLS check**: `encrypt=disable` / `trustservercertificate=true` abort startup unless `MSSQL_ALLOW_INSECURE_TLS=true` |
 | `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY` | `true` | `true` = read-only, `false` = allow writes (still requires `_WHITELIST_TABLES` for the AI to touch specific tables) |
-| `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` | _(empty)_ | Comma-separated list of tables allowed for modification when `READ_ONLY=true`, or when `READ_ONLY=false` without its own whitelist |
+| `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` | _(empty)_ | Comma-separated list of tables the alias may modify. **Enforced even when `_READ_ONLY=false`**: a writable alias without a whitelist allows **no** modifications at all (secure default); with a whitelist, modifications require a prior `confirm_operation`. Schema-qualified matching: a bare name is assumed to be in `dbo`; qualify non-`dbo` objects explicitly (e.g. `app.temp_ai`) |
 
 > **Precedence within an alias**: `_CONNECTION_STRING` always wins over the rest of the per-alias fields. When it is not set, `_ENCRYPT` / `_PORT` are honored if present; otherwise the per-mode default (`DEVELOPER_MODE`) is applied.
 

@@ -27,10 +27,9 @@ go build -o mcp-go-mssql.exe
 
 **Como herramienta CLI (para Claude Code):**
 ```bash
-cd claude-code
-go run db-connector.go test
-go run db-connector.go tables
-go run db-connector.go query "SELECT TOP 10 * FROM mi_tabla"
+go run examples/claude-code/db-connector.go test
+go run examples/claude-code/db-connector.go tables
+go run examples/claude-code/db-connector.go query "SELECT TOP 10 * FROM mi_tabla"
 ```
 
 ## Ejemplo de configuración Claude Desktop
@@ -66,13 +65,12 @@ Una vez conectado, Claude Desktop tendrá acceso a estas herramientas:
 |-------------|-------------|
 | `get_database_info` | Estado de conexión, cifrado y modo de acceso |
 | `query_database` | Ejecutar consultas SQL de forma segura |
-| `list_tables` | Listar tablas y vistas |
-| `describe_table` | Estructura de columnas (soporta `schema.tabla`) |
-| `list_databases` | Listar bases de datos del servidor |
-| `get_indexes` | Índices de una tabla |
-| `get_foreign_keys` | Relaciones de claves foráneas |
-| `list_stored_procedures` | Listar procedimientos almacenados |
+| `explore` | Listar tablas, vistas, bases de datos y procedimientos; buscar objetos |
+| `inspect` | Estructura de una tabla: columnas, índices, claves foráneas, dependencias |
 | `execute_procedure` | Ejecutar procedimientos almacenados autorizados |
+| `explain_query` | Plan de ejecución estimado sin ejecutar la consulta |
+
+En modo dinámico se exponen además: `dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list` y `confirm_operation`.
 
 ## Siguiente paso
 

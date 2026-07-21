@@ -95,11 +95,15 @@ MSSQL_DYNAMIC_APP_WORK_WHITELIST_TABLES=ai_temp_tasks,ai_temp_results,ai_work_or
 
 These versions only negotiate TLS 1.0, which the modern Go runtime refuses outright. If one of your related databases is on a legacy server, set `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` to a URL-form DSN. The URL form (`sqlserver://...`) is the proven workaround for the `protocol version 301` error — it mirrors how the global `MSSQL_CONNECTION_STRING` env var works in classic mode.
 
-```env
-# Legacy read-only alias (e.g. SQL Server 2000)
+```ini
+# Legacy read-only alias (e.g. SQL Server 2000) — production
+DEVELOPER_MODE=false
+MSSQL_ALLOW_INSECURE_TLS=true
 MSSQL_DYNAMIC_LEGACY_READ_ONLY=true
 MSSQL_DYNAMIC_LEGACY_CONNECTION_STRING=sqlserver://app_ai_read:...@legacy-sql2000.local:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
 ```
+
+> **`MSSQL_ALLOW_INSECURE_TLS=true` is mandatory in production**: without it, the server **refuses to start** (fail-closed) because the connection string disables encryption. With it, the connection proceeds and an auditable WARN is logged on every affected connection.
 
 You can keep the per-alias `_SERVER` / `_DATABASE` / `_USER` / `_PASSWORD` fields too, but they are ignored as long as `_CONNECTION_STRING` is set. The recommended minimal form (only `_READ_ONLY` + `_CONNECTION_STRING`) is the cleanest, since the URL contains all the connection details.
 
@@ -175,6 +179,14 @@ The server enforces strong safe defaults:
 - If you do not set `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY`, the alias loads as **read-only** by default.
 - If a writable alias has no `WHITELIST_TABLES` defined, **no modifications are allowed**.
 - Any modification on a writable alias requires explicit confirmation via the `confirm_operation` tool.
+
+### Dynamic-mode hardening facts
+
+- **`confirm_operation` is bound to the alias**: a pending confirmation is issued for a specific alias, **expires after 90 seconds**, and is **cleared on alias switch or disconnect**.
+- **`execute_procedure`**: blocked entirely on read-only aliases; on writable aliases it requires prior confirmation via `confirm_operation`.
+- **Previous connection preserved**: if `dynamic_connect` fails, the previous working connection is kept.
+- **Schema-qualified whitelist matching**: a bare name is assumed to be in `dbo` (`temp_ai` matches `temp_ai`/`dbo.temp_ai`, but not `otro_schema.temp_ai`); qualify non-`dbo` objects explicitly (e.g. `app.temp_ai`).
+- **`confirm_operation` is an accident-reducer, not a security barrier**: the same agent that generates a modification also confirms it. The real write control is a **least-privilege SQL login** at the database level.
 
 ### Option 1: Everything read-only + one controlled work database (Safest)
 

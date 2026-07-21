@@ -9,19 +9,18 @@ MCP (Model Context Protocol) es el protocolo que permite a Claude Desktop comuni
 
 ## Herramientas disponibles
 
-El servidor expone 9 herramientas MCP:
+El servidor expone 6 herramientas MCP base (11 en modo dinámico, que añade 5 más):
 
 | Herramienta | Descripción |
 |-------------|-------------|
 | `query_database` | Ejecuta consultas SQL |
-| `list_tables` | Lista todas las tablas de la base de datos |
-| `describe_table` | Muestra la estructura de una tabla |
-| `get_database_info` | Información general de la base de datos |
-| `list_databases` | Lista bases de datos disponibles |
-| `get_indexes` | Muestra índices de una tabla |
-| `get_foreign_keys` | Muestra foreign keys de una tabla |
-| `list_stored_procedures` | Lista procedimientos almacenados |
-| `execute_procedure` | Ejecuta un procedimiento almacenado |
+| `get_database_info` | Información general de la conexión y la base de datos |
+| `explore` | Explora objetos: tablas, vistas, bases de datos, procedimientos y búsqueda |
+| `inspect` | Inspecciona una tabla: columnas, índices, claves foráneas y dependencias |
+| `execute_procedure` | Ejecuta un procedimiento almacenado de la whitelist |
+| `explain_query` | Plan de ejecución estimado de una consulta SELECT sin ejecutarla |
+
+En modo dinámico se exponen además: `dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list` y `confirm_operation`.
 
 ## Flujo de comunicación
 
