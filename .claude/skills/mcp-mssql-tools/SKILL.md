@@ -23,7 +23,7 @@ description: >
 | Run any SQL (SELECT, INSERT, UPDATE, DELETE) | `query_database` | `query` |
 | Run a whitelisted stored procedure | `execute_procedure` | `procedure_name` |
 | Analyze query performance without executing | `explain_query` | `query` |
-| Confirm a destructive DDL operation | `confirm_operation` | `token` |
+| Confirm a modification on a writable dynamic alias | `confirm_operation` | `description` (dynamic mode only) |
 | Discover available dynamic connections | `dynamic_available` | — |
 | Connect to a dynamic database alias | `dynamic_connect` | `alias` |
 | List active dynamic connections | `dynamic_list` | — |
@@ -56,23 +56,25 @@ For complete parameter reference, examples, and usage patterns see [tools-refere
 ## Security Awareness
 
 - **Read-only mode**: When `MSSQL_READ_ONLY=true`, only SELECT is allowed except on whitelisted tables
-- **Cross-database**: `MSSQL_ALLOWED_DATABASES` tables are always read-only
+- **Dynamic aliases**: default to read-only; a writable alias (`_READ_ONLY=false`) still needs `_WHITELIST_TABLES` to modify anything, and modifications require `confirm_operation` first
+- **If a modification is blocked by read-only mode**: DO NOT try to bypass it (no `execute_procedure`, alternative tools, or re-framed statements), and DO NOT suggest elevating permissions unless the user asks. Instead, present the complete SQL in a ```sql code block for the user to execute manually (SSMS, sqlcmd, Azure Data Studio), briefly stating the connection is read-only.
 - **Prepared statements**: All queries use parameterized execution — SQL injection is blocked at server level
-- **Schema validation**: The server validates that referenced tables exist before executing (skipped when `MSSQL_AUTOPILOT=true`)
-- **Destructive confirmation**: DDL operations (DROP, ALTER, CREATE TABLE) ALWAYS require `confirm_operation` — AUTOPILOT does NOT skip this
+- **Stacked statements**: Multi-statement batches are rejected in read-only/whitelist contexts (except `SET STATISTICS` diagnostic wrappers)
+- **Writable-alias confirmation**: Modifications on a writable dynamic alias require `confirm_operation` first (bound to the alias, 90-second expiry)
 
 ## Dynamic Multi-Connection Mode
 
-When `MSSQL_DYNAMIC_MODE=true` (and `MSSQL_SERVER` is not set), the server supports multiple database connections:
+When the server starts in dynamic mode (no classic `MSSQL_SERVER` config, or explicit `MSSQL_DYNAMIC_MODE=true`), it supports multiple database connections:
 
 - `dynamic_available` — Discover configured aliases from `.env` (no credentials shown)
 - `dynamic_connect` — Activate a connection by alias
 - `dynamic_list` — List active connections (alias, server, database — no passwords)
-- `dynamic_disconnect` — Close an active connection
-- `query_database` — Use `connection` param to target a specific dynamic connection
+- `dynamic_disconnect` — Close the active dynamic connection
+- `dynamic_connect` switches the active connection; subsequent `query_database` calls run against it
 
 Credentials are stored in `.env` with prefix `MSSQL_DYNAMIC_<ALIAS>_`. The AI only sees aliases.
 
-**Dual-mode architecture:**
-- `MSSQL_SERVER` set → direct connection mode, no dynamic tools
-- `MSSQL_SERVER` not set → loads `.env`, enables dynamic tools if `MSSQL_DYNAMIC_MODE=true`
+**Mode selection (isDynamicMode):**
+- Explicit `MSSQL_DYNAMIC_MODE=true/false` always wins
+- Otherwise: any classic config (`MSSQL_SERVER` / `MSSQL_CONNECTION_STRING` / `MSSQL_DATABASE`) → classic mode, no dynamic tools
+- Otherwise: any `MSSQL_DYNAMIC_*` var present → dynamic mode (auto-detect)

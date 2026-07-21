@@ -26,19 +26,19 @@ Use the CLI tool to test operations:
 
 ```bash
 # Connection test
-go run claude-code/db-connector.go test
+go run examples/claude-code/db-connector.go test
 
 # Database information
-go run claude-code/db-connector.go info
+go run examples/claude-code/db-connector.go info
 
 # List tables
-go run claude-code/db-connector.go tables
+go run examples/claude-code/db-connector.go tables
 
 # Describe a table
-go run claude-code/db-connector.go describe users
+go run examples/claude-code/db-connector.go describe users
 
 # Execute a query
-go run claude-code/db-connector.go query "SELECT @@VERSION"
+go run examples/claude-code/db-connector.go query "SELECT @@VERSION"
 ```
 
 ## Manual tests
@@ -48,7 +48,7 @@ go run claude-code/db-connector.go query "SELECT @@VERSION"
 With `MSSQL_READ_ONLY=true`, confirm that write queries are blocked:
 
 ```bash
-go run claude-code/db-connector.go query "INSERT INTO some_table VALUES (1)"
+go run examples/claude-code/db-connector.go query "INSERT INTO some_table VALUES (1)"
 # Should return: Query blocked: read-only mode
 ```
 
@@ -57,7 +57,7 @@ go run claude-code/db-connector.go query "INSERT INTO some_table VALUES (1)"
 With `MSSQL_WHITELIST_TABLES=temp_ai`, confirm that only that table accepts writes:
 
 ```bash
-go run claude-code/db-connector.go query "INSERT INTO temp_ai (data) VALUES ('test')"
+go run examples/claude-code/db-connector.go query "INSERT INTO temp_ai (data) VALUES ('test')"
 # Should execute successfully
 ```
 

@@ -13,7 +13,7 @@ MCP-Go-MSSQL ha sido diseñado siguiendo estándares de seguridad reconocidos y 
 |--------|------------|
 | SQL Injection | Prepared statements exclusivos, sin concatenación dinámica |
 | Acceso no autorizado | Modo solo lectura + whitelist de tablas |
-| Intercepción de datos | TLS obligatorio en todas las conexiones |
+| Intercepción de datos | TLS obligatorio en producción con fail-closed (el servidor se niega a arrancar ante TLS inseguro); escape explícito `MSSQL_ALLOW_INSECURE_TLS=true` para servidores legacy |
 | Agotamiento de recursos | Connection pooling con límites configurables |
 | Fuga de información | Errores genéricos al cliente, detalles solo en logs internos |
 | Escalada de privilegios | Validación multi-tabla en JOINs y subqueries |
@@ -28,9 +28,9 @@ MCP-Go-MSSQL ha sido diseñado siguiendo estándares de seguridad reconocidos y 
 
 ### Capa de transporte
 
-- Cifrado TLS obligatorio (`encrypt=true`)
-- Validación de certificados en producción (`trustservercertificate=false`)
-- Certificados autofirmados solo permitidos en modo desarrollo
+- Cifrado TLS obligatorio en producción (`encrypt=true`), con arranque **fail-closed** ante TLS inseguro
+- Validación de certificados en producción (`trustservercertificate=false`); opt-in explícito `MSSQL_ALLOW_INSECURE_TLS=true` con WARN auditable para servidores legacy
+- Certificados autofirmados y cifrado desactivado solo permitidos por defecto en modo desarrollo
 
 ### Capa de aplicación
 
@@ -48,8 +48,8 @@ MCP-Go-MSSQL ha sido diseñado siguiendo estándares de seguridad reconocidos y 
 
 ## Recomendaciones
 
-1. Ejecutar con `MSSQL_READ_ONLY=true` en producción
-2. Definir `MSSQL_WHITELIST_TABLES` solo para tablas temporales de IA
-3. Usar un usuario de base de datos con permisos mínimos
+1. Usar un login SQL de **mínimo privilegio**: `SELECT` amplio y `INSERT`/`UPDATE`/`DELETE` solo en tablas dedicadas — es la frontera de escritura primaria (la validación Go es defensa en profundidad)
+2. Ejecutar con `MSSQL_READ_ONLY=true` en producción
+3. Definir `MSSQL_WHITELIST_TABLES` solo para tablas temporales de IA
 4. Monitorear los logs de seguridad periódicamente
 5. Rotar credenciales de forma regular

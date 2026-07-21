@@ -30,7 +30,7 @@ Todas las queries usan `PrepareContext()`, lo que permite a SQL Server cachear l
 ### Monitoreo
 
 - Observa los tiempos de respuesta de las queries en los logs
-- Usa `get_indexes` para verificar que las tablas tienen índices adecuados
+- Usa `inspect` con `detail="indexes"` para verificar que las tablas tienen índices adecuados
 - Consulta `get_database_info` para ver estadísticas generales
 
 ### Timeouts

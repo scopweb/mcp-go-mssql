@@ -15,11 +15,12 @@ La autenticación integrada de Windows (SSPI) permite conectar sin especificar u
 
 ```bash
 MSSQL_AUTH=integrated
+# `windows` también es válido como alias
 MSSQL_SERVER=your-server
 MSSQL_DATABASE=YourDatabase
 ```
 
-No es necesario definir `MSSQL_USER` ni `MSSQL_PASSWORD`.
+No es necesario definir `MSSQL_USER` ni `MSSQL_PASSWORD`. `MSSQL_DATABASE` es opcional con autenticación integrada.
 
 ## Connection string generado
 
@@ -67,7 +68,21 @@ SQL Server 2008/2012 no soporta TLS 1.2, que es el mínimo requerido por el driv
 }
 ```
 
-> `MSSQL_ENCRYPT=false` solo funciona con `DEVELOPER_MODE=true`. En producción el cifrado es obligatorio.
+> `MSSQL_ENCRYPT=false` solo funciona con `DEVELOPER_MODE=true`. En producción el TLS inseguro **falla cerrado** (el servidor se niega a arrancar), pero los servidores legacy siguen siendo accesibles mediante `MSSQL_CONNECTION_STRING` en forma URL (`encrypt=disable`) más el opt-in explícito `MSSQL_ALLOW_INSECURE_TLS=true`:
+>
+> ```json
+> {
+>   "mssql-legacy-prod": {
+>     "command": "mcp-go-mssql.exe",
+>     "env": {
+>       "MSSQL_AUTH": "integrated",
+>       "DEVELOPER_MODE": "false",
+>       "MSSQL_ALLOW_INSECURE_TLS": "true",
+>       "MSSQL_CONNECTION_STRING": "sqlserver://legacy-server:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true&integrated security=SSPI"
+>     }
+>   }
+> }
+> ```
 
 ## Solución de problemas
 

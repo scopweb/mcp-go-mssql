@@ -8,7 +8,7 @@ MCP-Go-MSSQL implementa múltiples capas de seguridad para proteger bases de dat
 ## Características de seguridad
 
 ### Seguridad de base de datos
-- **Cifrado TLS obligatorio** para todas las conexiones en producción
+- **Cifrado TLS obligatorio** para todas las conexiones en producción — el servidor **falla cerrado** (se niega a arrancar) ante TLS inseguro salvo que se opte explícitamente con `MSSQL_ALLOW_INSECURE_TLS=true` (WARN auditable; pensado para servidores legacy)
 - **Protección contra SQL Injection** con prepared statements exclusivamente
 - **Connection pooling** con límites para prevenir agotamiento de recursos
 - **Timeouts de conexión** configurables

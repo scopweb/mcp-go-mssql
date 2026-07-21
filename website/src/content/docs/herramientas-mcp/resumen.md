@@ -1,9 +1,9 @@
 ---
 title: Herramientas MCP
-description: Resumen de las 5 herramientas disponibles en el servidor MCP
+description: Resumen de las 6 herramientas base disponibles en el servidor MCP
 ---
 
-El servidor MCP-Go-MSSQL expone **5 herramientas** que Claude Desktop puede utilizar para interactuar con bases de datos Microsoft SQL Server de forma segura.
+El servidor MCP-Go-MSSQL expone **6 herramientas base** que Claude Desktop puede utilizar para interactuar con bases de datos Microsoft SQL Server de forma segura. En modo dinámico se exponen **5 herramientas adicionales** (11 en total).
 
 ## Lista de herramientas
 
@@ -11,9 +11,22 @@ El servidor MCP-Go-MSSQL expone **5 herramientas** que Claude Desktop puede util
 |-------------|-------------|------------------|
 | [`query_database`](/herramientas-mcp/query-database/) | Ejecutar consultas SQL | `query` (requerido) |
 | [`get_database_info`](/herramientas-mcp/get-database-info/) | Info de conexión y estado | — |
-| [`explore`](/herramientas-mcp/explore/) | Explorar objetos: tablas, bases de datos, procedimientos, búsqueda | `type`, `filter`, `pattern`, `search_in` |
+| [`explore`](/herramientas-mcp/explore/) | Explorar objetos: tablas, bases de datos, procedimientos, búsqueda | `type`, `filter`, `schema`, `pattern`, `search_in` |
 | [`inspect`](/herramientas-mcp/inspect/) | Inspeccionar estructura de una tabla: columnas, índices, claves foráneas | `table_name` (requerido), `schema`, `detail` |
 | [`execute_procedure`](/herramientas-mcp/execute-procedure/) | Ejecutar procedimiento almacenado (whitelist requerida) | `procedure_name` (requerido), `parameters` |
+| [`explain_query`](/herramientas-mcp/explain-query/) | Plan de ejecución estimado sin ejecutar la consulta (solo SELECT) | `query` (requerido) |
+
+## Herramientas del modo dinámico
+
+Solo se exponen cuando el servidor arranca en modo dinámico (`MSSQL_DYNAMIC_*`):
+
+| Herramienta | Descripción |
+|-------------|-------------|
+| `dynamic_available` | Listar alias de conexión preconfigurados |
+| `dynamic_connect` | Activar una conexión dinámica por alias |
+| `dynamic_disconnect` | Cerrar la conexión dinámica activa |
+| `dynamic_list` | Mostrar alias cargados y cuál está activo |
+| `confirm_operation` | Confirmar una modificación en un alias escribible (expira en 90 segundos) |
 
 ## Protocolo MCP
 

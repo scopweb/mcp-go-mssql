@@ -31,7 +31,7 @@ El CLI es ideal para:
 
 ### Ubicación
 
-El código fuente del CLI se encuentra en `claude-code/db-connector.go` en el repositorio del proyecto.
+El código fuente del CLI se encuentra en `examples/claude-code/db-connector.go` en el repositorio del proyecto.
 
 ### Próximos pasos
 

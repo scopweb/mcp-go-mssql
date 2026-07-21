@@ -3,7 +3,7 @@ title: Protección contra SQL Injection
 description: Cómo MCP-Go-MSSQL previene ataques de inyección SQL
 ---
 
-La protección contra SQL injection es absoluta gracias al uso exclusivo de prepared statements.
+La protección contra SQL injection se basa en prepared statements exclusivos y validación en profundidad. Aun así, la frontera más fuerte son los **permisos de mínimo privilegio a nivel de base de datos**: un login con solo los grants necesarios hace que el propio motor rechace lo que el validador no detecte.
 
 ## Mecanismo de protección
 
@@ -43,7 +43,7 @@ En modo solo lectura, se bloquean:
 
 ### Validación de entrada
 
-- Límite de tamaño de consulta (1MB por defecto, configurable)
+- Límite de tamaño de consulta (1MB por defecto, configurable con `MSSQL_MAX_QUERY_SIZE`)
 - Rechazo de entrada vacía
 - Eliminación de comentarios que podrían ocultar comandos
 

@@ -12,6 +12,7 @@ The `SecurityLogger` component handles recording all security events with automa
 ### Recorded events
 
 - Database connection attempts (success and failure)
+- **Insecure TLS permitted in production** — when `MSSQL_ALLOW_INSECURE_TLS=true` allows a connection without encryption or without certificate validation, an **auditable WARN is emitted on every affected connection**
 - Queries blocked by read-only mode
 - Access denied to tables outside the whitelist
 - Detected SQL injection attempts

@@ -33,6 +33,10 @@ Ejecuta una consulta SQL contra la base de datos MSSQL usando prepared statement
 - Todas las operaciones SQL estándar
 - `EXEC`, `xp_cmdshell` — Siempre bloqueado por seguridad
 
+:::note[Lotes multi-sentencia]
+En modo solo lectura / whitelist se rechazan los lotes con varias sentencias, **excepto** los wrappers de diagnóstico `SET STATISTICS TIME/IO`. Consulta [Estadísticas de ejecución](/herramientas-mcp/statistics/) para más detalles.
+:::
+
 ## Ejemplos de consultas
 
 ```sql

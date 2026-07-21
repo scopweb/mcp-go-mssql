@@ -45,7 +45,7 @@ Get-Content .env | ForEach-Object {
 | `DEVELOPER_MODE` | `false` | `true` for development, `false` for production |
 | `MSSQL_READ_ONLY` | `false` | Read-only mode |
 | `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode |
-| `MSSQL_AUTH` | `sql` | Authentication mode (`sql`, `integrated`, `azure`) |
+| `MSSQL_AUTH` | `sql` | Authentication mode (`sql`, `integrated`/`windows`; `azure` is not implemented — use `MSSQL_CONNECTION_STRING`) |
 | `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables) |
 
 ## Execution modes

@@ -13,7 +13,7 @@ MCP-Go-MSSQL has been designed following recognized security standards and appli
 |--------|------------|
 | SQL Injection | Exclusive prepared statements, no dynamic concatenation |
 | Unauthorized access | Read-only mode + table whitelist |
-| Data interception | Mandatory TLS on all connections |
+| Data interception | Mandatory TLS in production with fail-closed startup (the server refuses to start on insecure TLS); explicit escape `MSSQL_ALLOW_INSECURE_TLS=true` for legacy servers |
 | Resource exhaustion | Connection pooling with configurable limits |
 | Information leakage | Generic errors to client, details only in internal logs |
 | Privilege escalation | Multi-table validation on JOINs and subqueries |
@@ -28,9 +28,9 @@ MCP-Go-MSSQL has been designed following recognized security standards and appli
 
 ### Transport layer
 
-- Mandatory TLS encryption (`encrypt=true`)
-- Certificate validation in production (`trustservercertificate=false`)
-- Self-signed certificates only allowed in development mode
+- Mandatory TLS encryption in production (`encrypt=true`), with **fail-closed** startup on insecure TLS
+- Certificate validation in production (`trustservercertificate=false`); explicit opt-in `MSSQL_ALLOW_INSECURE_TLS=true` with auditable WARN for legacy servers
+- Self-signed certificates and disabled encryption only allowed by default in development mode
 
 ### Application layer
 
@@ -48,8 +48,8 @@ MCP-Go-MSSQL has been designed following recognized security standards and appli
 
 ## Recommendations
 
-1. Run with `MSSQL_READ_ONLY=true` in production
-2. Set `MSSQL_WHITELIST_TABLES` only for AI temporary tables
-3. Use a database user with minimal permissions
+1. Use a **least-privilege** SQL login: broad `SELECT` and `INSERT`/`UPDATE`/`DELETE` only on dedicated tables — this is the primary write boundary (the Go validation is defense in depth)
+2. Run with `MSSQL_READ_ONLY=true` in production
+3. Set `MSSQL_WHITELIST_TABLES` only for AI temporary tables
 4. Monitor security logs periodically
 5. Rotate credentials regularly

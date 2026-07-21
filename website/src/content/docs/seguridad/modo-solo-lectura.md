@@ -96,4 +96,8 @@ MSSQL_READ_ONLY=true
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 ```
 
+**Coincidencia cualificada por esquema:** las entradas de la whitelist se comparan cualificadas por esquema. Un nombre sin esquema (`temp_ai`) se asume en `dbo`, por lo que coincide con `temp_ai` y `dbo.temp_ai`, pero **no** con `otro_schema.temp_ai` ni con `otradb.dbo.temp_ai`. Para permitir un objeto fuera de `dbo`, cualifícalo explícitamente (p. ej. `app.temp_ai`).
+
+**Defensa en profundidad:** la validación con regex es una capa adicional, no la frontera de seguridad real. El control de escritura más fuerte debe vivir en la base de datos: usa un login SQL de mínimo privilegio con `SELECT` amplio y `INSERT`/`UPDATE`/`DELETE` solo en las tablas que la IA pueda modificar. Así, aunque el validador falle, el propio motor rechaza la escritura.
+
 Consulta la sección [Whitelist de tablas](/seguridad/whitelist-tablas/) para más detalles.

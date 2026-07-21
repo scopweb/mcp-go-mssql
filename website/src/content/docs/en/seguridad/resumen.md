@@ -8,7 +8,7 @@ MCP-Go-MSSQL implements multiple security layers to protect databases in product
 ## Security features
 
 ### Database security
-- **Mandatory TLS encryption** for all connections in production
+- **Mandatory TLS encryption** for all connections in production — the server **fails closed** (refuses to start) on insecure TLS unless explicitly opted in with `MSSQL_ALLOW_INSECURE_TLS=true` (auditable WARN; intended for legacy servers)
 - **SQL Injection protection** with exclusive prepared statements
 - **Connection pooling** with limits to prevent resource exhaustion
 - **Configurable connection timeouts**

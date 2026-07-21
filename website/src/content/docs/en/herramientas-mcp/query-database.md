@@ -33,6 +33,10 @@ Executes a SQL query against the MSSQL database using prepared statements.
 - All standard SQL operations
 - `EXEC`, `xp_cmdshell` — Always blocked for security
 
+:::note[Multi-statement batches]
+In read-only / whitelist mode, multi-statement batches are rejected, **except** `SET STATISTICS TIME/IO` diagnostic wrappers. See [Execution statistics](/en/herramientas-mcp/statistics/) for details.
+:::
+
 ## Query examples
 
 ```sql

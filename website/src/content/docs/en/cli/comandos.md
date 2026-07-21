@@ -10,7 +10,7 @@ The Claude Code CLI provides several commands for interacting with MSSQL databas
 ### Basic Usage
 
 ```bash
-go run claude-code/db-connector.go [command] [arguments]
+go run examples/claude-code/db-connector.go [command] [arguments]
 ```
 
 ## Commands
@@ -20,7 +20,7 @@ go run claude-code/db-connector.go [command] [arguments]
 Tests the database connection.
 
 ```bash
-go run claude-code/db-connector.go test
+go run examples/claude-code/db-connector.go test
 ```
 
 **Output**: Confirms if the connection was successful or displays connection errors.
@@ -30,7 +30,7 @@ go run claude-code/db-connector.go test
 Gets general information about the connected database.
 
 ```bash
-go run claude-code/db-connector.go info
+go run examples/claude-code/db-connector.go info
 ```
 
 **Output**: Server information, version, and configuration.
@@ -40,7 +40,7 @@ go run claude-code/db-connector.go info
 Lists all available tables in the database.
 
 ```bash
-go run claude-code/db-connector.go tables
+go run examples/claude-code/db-connector.go tables
 ```
 
 **Output**: List of table names with their schemas.
@@ -50,7 +50,7 @@ go run claude-code/db-connector.go tables
 Describes the structure of a specific table.
 
 ```bash
-go run claude-code/db-connector.go describe TABLE_NAME
+go run examples/claude-code/db-connector.go describe TABLE_NAME
 ```
 
 **Arguments**:
@@ -63,7 +63,7 @@ go run claude-code/db-connector.go describe TABLE_NAME
 Executes a custom SQL query.
 
 ```bash
-go run claude-code/db-connector.go query "SELECT * FROM table WHERE condition"
+go run examples/claude-code/db-connector.go query "SELECT * FROM table WHERE condition"
 ```
 
 **Arguments**:
@@ -109,31 +109,31 @@ Optional variables:
 ### Test connection
 
 ```bash
-go run claude-code/db-connector.go test
+go run examples/claude-code/db-connector.go test
 ```
 
 ### List tables
 
 ```bash
-go run claude-code/db-connector.go tables
+go run examples/claude-code/db-connector.go tables
 ```
 
 ### View table structure
 
 ```bash
-go run claude-code/db-connector.go describe Users
+go run examples/claude-code/db-connector.go describe Users
 ```
 
 ### Execute SELECT query
 
 ```bash
-go run claude-code/db-connector.go query "SELECT TOP 10 * FROM Users WHERE Active = 1"
+go run examples/claude-code/db-connector.go query "SELECT TOP 10 * FROM Users WHERE Active = 1"
 ```
 
 ### Query with JOIN
 
 ```bash
-go run claude-code/db-connector.go query "SELECT u.Name, o.OrderDate FROM Users u JOIN Orders o ON u.Id = o.UserId"
+go run examples/claude-code/db-connector.go query "SELECT u.Name, o.OrderDate FROM Users u JOIN Orders o ON u.Id = o.UserId"
 ```
 
 ## Security

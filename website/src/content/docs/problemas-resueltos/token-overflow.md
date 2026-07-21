@@ -29,23 +29,23 @@ Tres problemas combinados:
 
 Todas las consultas quedan acotadas a 500 filas. Si se trunca el resultado, el último elemento incluye una advertencia `_truncated` para que Claude sepa que debe refinar la query con `WHERE` o `TOP`.
 
-### 2 — Parámetro `filter` en `list_tables`
+### 2 — Parámetro `filter` en la exploración de objetos
 
-Ahora se puede filtrar antes de traer datos:
+Ahora se puede filtrar antes de traer datos (actualmente vía `explore`, que unifica el antiguo `list_tables`):
 
 ```
-list_tables  filter="Pedido"   →  solo tablas/vistas que contengan "Pedido"
-list_tables  filter="Camio"    →  solo tablas/vistas que contengan "Camio"
+explore  filter="Pedido"   →  solo tablas/vistas que contengan "Pedido"
+explore  filter="Camio"    →  solo tablas/vistas que contengan "Camio"
 ```
 
-### 3 — Nuevo tool `search_objects`
+### 3 — Búsqueda directa de objetos
 
-Búsqueda directa en dos modos:
+`explore` con `type="search"` (antes tool independiente `search_objects`) busca en dos modos:
 
 | Modo | Uso | Qué devuelve |
 |---|---|---|
-| Por nombre (default) | `search_objects pattern="PedidoCamio"` | Tablas, vistas, procs y funciones cuyo **nombre** coincide |
-| Por definición | `search_objects pattern="PedidoCamio" search_in="definition"` | Procs, funciones y vistas que **referencian** ese texto en su código fuente |
+| Por nombre (default) | `explore type="search" pattern="PedidoCamio"` | Tablas, vistas, procs y funciones cuyo **nombre** coincide |
+| Por definición | `explore type="search" pattern="PedidoCamio" search_in="definition"` | Procs, funciones y vistas que **referencian** ese texto en su código fuente |
 
 ## Schema actualizado de funciones
 
@@ -65,10 +65,10 @@ Para encontrar referencias a `PedidoCamioCarregaCamioAdmin` con estados 26/27:
 
 ```sql
 -- 1. Buscar el objeto por nombre
-search_objects  pattern="PedidoCamioCarregaCamioAdmin"
+explore  type="search"  pattern="PedidoCamioCarregaCamioAdmin"
 
 -- 2. Buscar qué procs/vistas lo referencian en su código
-search_objects  pattern="PedidoCamioCarregaCamioAdmin"  search_in="definition"
+explore  type="search"  pattern="PedidoCamioCarregaCamioAdmin"  search_in="definition"
 
 -- 3. Consulta directa filtrando por estado
 query_database  query="SELECT * FROM PedidoCamioCarregaCamio WHERE Estado IN (26,27)"

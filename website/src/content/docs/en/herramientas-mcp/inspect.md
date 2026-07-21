@@ -17,7 +17,7 @@ Unified tool for inspecting a table's structure. Replaces `describe_table`, `get
 |-----------|------|-------------|
 | `table_name` | string | **Required.** Table name. Accepts `dbo.Table` or just `Table` |
 | `schema` | string | Schema name (default: `dbo`) |
-| `detail` | string | What to retrieve: `columns` (default), `indexes`, `foreign_keys`, `all` |
+| `detail` | string | What to retrieve: `columns` (default), `indexes`, `foreign_keys`, `dependencies`, `all` |
 
 ## Usage modes
 
@@ -39,13 +39,21 @@ Unified tool for inspecting a table's structure. Replaces `describe_table`, `get
 { "name": "inspect", "arguments": { "table_name": "Orders", "detail": "foreign_keys" } }
 ```
 
+### Dependencies
+
+Objects that reference the table (views, procedures, functions):
+
+```json
+{ "name": "inspect", "arguments": { "table_name": "Orders", "detail": "dependencies" } }
+```
+
 ### Everything in one call
 
 ```json
 { "name": "inspect", "arguments": { "table_name": "Orders", "detail": "all" } }
 ```
 
-With `detail=all` the result groups sections under the keys `columns`, `indexes` and `foreign_keys`.
+With `detail=all` the result groups sections under the keys `columns`, `indexes`, `foreign_keys` and `dependencies`.
 
 ## Example response (detail=all)
 

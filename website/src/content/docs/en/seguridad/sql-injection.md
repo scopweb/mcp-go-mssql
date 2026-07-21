@@ -3,7 +3,7 @@ title: SQL Injection Protection
 description: How MCP-Go-MSSQL prevents SQL injection attacks
 ---
 
-SQL injection protection is absolute thanks to the exclusive use of prepared statements.
+SQL injection protection is built on exclusive prepared statements plus in-depth validation. Even so, the strongest boundary is **least-privilege database permissions**: a login with only the required grants makes the database engine itself reject whatever the validator misses.
 
 ## Protection mechanism
 
@@ -43,7 +43,7 @@ In read-only mode, these are blocked:
 
 ### Input validation
 
-- Query size limit (1 MB by default, configurable)
+- Query size limit (1 MB by default, configurable with `MSSQL_MAX_QUERY_SIZE`)
 - Empty input rejection
 - Comment stripping that could hide commands
 

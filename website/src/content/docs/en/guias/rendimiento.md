@@ -30,7 +30,7 @@ All queries use `PrepareContext()`, which allows SQL Server to cache execution p
 ### Monitoring
 
 - Watch query response times in the logs
-- Use `get_indexes` to verify that tables have adequate indexes
+- Use `inspect` with `detail="indexes"` to verify that tables have adequate indexes
 - Check `get_database_info` for general statistics
 
 ### Timeouts

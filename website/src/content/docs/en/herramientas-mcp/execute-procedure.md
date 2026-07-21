@@ -39,11 +39,11 @@ MSSQL_WHITELIST_PROCEDURES="sp_GetCustomerOrders,sp_GenerateReport"
 - **Dangerous procedures blocked** — `xp_cmdshell`, `sp_configure`, `sp_executesql` and others are explicitly blocked even if added to the whitelist
 - **Security logging** — Each execution is recorded in the security logs
 
-## Safe system procedures
+## Availability
 
-In read-only mode, the following system procedures are allowed without needing to be whitelisted:
+If `MSSQL_WHITELIST_PROCEDURES` is not set, the tool is **entirely disabled** — no procedure is allowed, including system procedures. There are no exceptions.
 
-- `sp_help`, `sp_helptext`, `sp_helpindex`
-- `sp_columns`, `sp_tables`
-- `sp_fkeys`, `sp_pkeys`
-- `sp_databases`
+## Dynamic mode restrictions
+
+- **Read-only aliases**: `execute_procedure` is **blocked**.
+- **Writable aliases** (`_READ_ONLY=false`): requires a prior confirmation with `confirm_operation` before each execution.

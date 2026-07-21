@@ -166,3 +166,6 @@ claude_desktop_config.json
 # OS generated
 .DS_Store
 Thumbs.db
+
+# Custom
+revision-seguridad-mcp-go-mssql.md

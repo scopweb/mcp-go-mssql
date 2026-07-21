@@ -15,7 +15,7 @@ Unified tool for exploring database objects. Replaces `list_tables`, `list_datab
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `type` | string | What to explore: `tables` (default), `databases`, `procedures`, `search` |
+| `type` | string | What to explore: `tables` (default), `views`, `databases`, `procedures`, `search` |
 | `filter` | string | Name filter (LIKE). Valid for `tables` and `procedures` |
 | `schema` | string | Schema filter. Only for `procedures` (optional) |
 | `pattern` | string | Search pattern. **Required** when `type=search` |
@@ -33,6 +33,14 @@ With filter:
 ```json
 { "name": "explore", "arguments": { "filter": "Order" } }
 ```
+
+### List views
+
+```json
+{ "name": "explore", "arguments": { "type": "views" } }
+```
+
+Includes metadata for each view: `check_option`, `is_updatable` and a definition preview.
 
 ### List databases
 
