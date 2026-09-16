@@ -142,6 +142,7 @@ config/                      plantillas de configuración MCP
 - La whitelist y el modo read-only son defensa en profundidad; el control real de escritura debe estar en la base de datos (login con mínimos privilegios).
 - No subas `.env` ni credenciales al repo. Solo `.env.example` y `config/config.example.json`.
 - Política de seguridad y reporte de vulnerabilidades: [SECURITY.md](SECURITY.md).
+- Contrato de agentes: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
 
 ## Licencia
 
