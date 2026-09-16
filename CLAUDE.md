@@ -110,9 +110,9 @@ The server reads database connection from these environment variables. See `.env
 - `DEVELOPER_MODE`: Controls error verbosity and certificate validation
   - `"true"`: Development mode with detailed errors and relaxed TLS certificate validation
   - `"false"`: Production mode with generic errors and strict certificate validation
-- `MSSQL_READ_ONLY`: Enable read-only mode with optional whitelist (security feature)
-  - `"true"`: Only SELECT queries allowed (except for whitelisted tables)
-  - `"false"`: Full access mode (default)
+- `MSSQL_READ_ONLY`: Enable absolute read-only mode (security feature)
+  - `"true"`: Only reads and explicitly allowlisted administrative introspection; no whitelist can enable writes or procedure execution
+  - `"false"`: Writes still require `MSSQL_WHITELIST_TABLES`; an empty whitelist permits no modifications in dynamic mode
 - `MSSQL_ENCRYPT`: Override TLS encryption setting (only effective when `DEVELOPER_MODE=true`)
   - `"false"`: Disable encryption — **required for SQL Server 2008/2012** which don't support TLS 1.2
   - `"true"`: Force encryption even in dev mode
@@ -121,11 +121,10 @@ The server reads database connection from these environment variables. See `.env
   - By default, production **fails closed**: if a connection string (global `MSSQL_CONNECTION_STRING`, a per-alias `_CONNECTION_STRING`, or a per-alias `_ENCRYPT` override) would disable encryption (`encrypt=false`/`encrypt=disable`) or certificate validation (`trustservercertificate=true`), the server **refuses to start** instead of degrading TLS silently.
   - `"true"`: Intentionally allow those insecure settings in production. The connection proceeds and an auditable `WARN` is logged on every affected connection. This is the sanctioned way to keep **legacy SQL Server 2000/2008/2012** (TLS 1.0 only) working — the exception becomes conscious and greppable instead of accidental.
   - If not set: insecure TLS in production aborts startup.
-- `MSSQL_WHITELIST_TABLES`: Comma-separated list of tables/views allowed for modification in read-only mode
+- `MSSQL_WHITELIST_TABLES`: Comma-separated list of tables/views allowed for modification only when `MSSQL_READ_ONLY=false`
   - Example: `"temp_ai,v_temp_ia"`
-  - Only these tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP) when `MSSQL_READ_ONLY=true`
-  - All other tables remain read-only
-  - Prevents accidental data modification in production databases while allowing AI to work with temporary tables
+  - Ignored as a write grant when `MSSQL_READ_ONLY=true`
+  - Only these tables can be modified (INSERT/UPDATE/DELETE/CREATE/DROP) in an explicitly writable context
   - **Schema-qualified matching**: entries are compared schema-qualified. A bare name defaults to the `dbo` schema, so `temp_ai` matches `temp_ai` and `dbo.temp_ai` but **not** `otro_schema.temp_ai` or a database-qualified `otradb.dbo.temp_ai` (those are treated as different objects and blocked). To whitelist a non-`dbo` object, qualify it explicitly (e.g. `app.temp_ai`).
 - `MSSQL_AUTH`: Authentication mode
   - `"sql"` (default): SQL Server authentication (requires `MSSQL_USER` + `MSSQL_PASSWORD` + `MSSQL_DATABASE`)
@@ -398,7 +397,7 @@ go run test-connection.go
 ## Important Claude Code Instructions
 
 ### When a modification is blocked by read-only mode
-If an INSERT/UPDATE/DELETE/CREATE/ALTER/DROP is rejected because the active connection (or dynamic alias) is read-only and the target table is not whitelisted:
+If an INSERT/UPDATE/DELETE/CREATE/ALTER/DROP is rejected because the active connection (or dynamic alias) is read-only:
 
 1. **DO NOT try to bypass the restriction.** Do not attempt `execute_procedure`, alternative tools, `SET` tricks, or re-framing the statement to slip past the validator. Read-only mode is a deliberate security boundary.
 2. **DO NOT suggest elevating permissions** (changing `MSSQL_READ_ONLY`, widening `MSSQL_WHITELIST_TABLES`) unless the user explicitly asks for it.

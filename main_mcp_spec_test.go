@@ -37,6 +37,13 @@ func TestMCPPingHandler(t *testing.T) {
 	}
 }
 
+func TestMCPPingNotificationDoesNotRespond(t *testing.T) {
+	server := newTestMCPServer()
+	if response := server.handleRequest(MCPRequest{JSONRPC: "2.0", Method: "ping"}); response != nil {
+		t.Fatalf("ping notification must not receive a response: %+v", response)
+	}
+}
+
 // TestMCPInitializeCapabilities verifies the server declares required capabilities.
 func TestMCPInitializeCapabilities(t *testing.T) {
 	server := newTestMCPServer()
@@ -71,6 +78,22 @@ func TestMCPInitializeCapabilities(t *testing.T) {
 	}
 	if _, ok := caps["tools"]; !ok {
 		t.Error("Expected tools capability to be declared")
+	}
+}
+
+func TestMCPRejectsUnsupportedProtocolVersion(t *testing.T) {
+	server := newTestMCPServer()
+	response := server.handleRequest(MCPRequest{
+		JSONRPC: "2.0",
+		ID:      "unsupported-version",
+		Method:  "initialize",
+		Params:  InitializeParams{ProtocolVersion: "2099-01-01"},
+	})
+	if response == nil || response.Error == nil {
+		t.Fatal("unsupported protocol version must return an error")
+	}
+	if response.Error.Code != -32602 {
+		t.Fatalf("unsupported protocol version returned code %d, want -32602", response.Error.Code)
 	}
 }
 

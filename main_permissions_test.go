@@ -112,12 +112,12 @@ func TestValidateTablePermissions(t *testing.T) {
 			description:   "UPDATE should be blocked when whitelist is empty",
 		},
 		{
-			name:          "UPDATE allowed on whitelisted table",
-			readOnly:      "true",
+			name:          "UPDATE allowed on whitelisted writable context",
+			readOnly:      "false",
 			whitelist:     "temp_ai,v_temp_ia",
 			query:         "UPDATE temp_ai SET col = 'value'",
 			shouldSucceed: true,
-			description:   "UPDATE should be allowed on whitelisted table",
+			description:   "UPDATE requires READ_ONLY=false and a whitelisted table",
 		},
 		{
 			name:          "UPDATE blocked on non-whitelisted table",
@@ -152,12 +152,12 @@ func TestValidateTablePermissions(t *testing.T) {
 			description:   "UPDATE with subquery accessing non-whitelisted table should be blocked",
 		},
 		{
-			name:          "CREATE VIEW allowed on whitelisted name",
-			readOnly:      "true",
+			name:          "CREATE VIEW allowed on whitelisted writable context",
+			readOnly:      "false",
 			whitelist:     "v_temp_ia,temp_ai",
 			query:         "CREATE VIEW v_temp_ia AS SELECT * FROM temp_ai",
 			shouldSucceed: true,
-			description:   "CREATE VIEW should be allowed when all tables are whitelisted",
+			description:   "CREATE VIEW requires READ_ONLY=false and whitelisted tables",
 		},
 		{
 			name:          "All operations allowed in non-read-only mode",
@@ -385,7 +385,7 @@ func TestValidateTablePermissionsSchemaQualified(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server.config.readOnly = true
+			server.config.readOnly = false
 			server.config.whitelistTables = parseWhitelistTables(tt.whitelist)
 
 			err := server.validateTablePermissions(tt.query)

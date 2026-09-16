@@ -64,11 +64,12 @@ func TestValidateReadOnlyQuery_StatisticsWrapper(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:      "wrapper around a whitelisted modification passes in whitelist mode",
-			query:     "SET STATISTICS TIME ON; DELETE FROM prod_users",
-			readOnly:  true,
-			whitelist: "prod_users",
-			wantErr:   false,
+			name:          "wrapper around a whitelisted modification remains blocked in read-only mode",
+			query:         "SET STATISTICS TIME ON; DELETE FROM prod_users",
+			readOnly:      true,
+			whitelist:     "prod_users",
+			wantErr:       true,
+			wantErrSubstr: "only SELECT",
 		},
 		{
 			name:     "wrapper around full-access DELETE passes when read-only is off",
@@ -209,7 +210,7 @@ func TestValidateTablePermissions_StatisticsWrapper(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestMCPServer()
-			s.config.readOnly = true
+			s.config.readOnly = false
 			s.config.whitelistTables = parseWhitelistTables(tc.whitelist)
 			// Mirror the production call site in executeSecureQuery:
 			// unwrap the SET STATISTICS wrapper and pass the base to
