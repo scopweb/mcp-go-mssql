@@ -44,7 +44,7 @@ Get-Content .env | ForEach-Object {
 | `MSSQL_PORT` | `1433` | Puerto de SQL Server |
 | `DEVELOPER_MODE` | `false` | `true` para desarrollo, `false` para producción |
 | `MSSQL_READ_ONLY` | `false` | Modo solo lectura |
-| `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación en modo read-only |
+| `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación solo si `READ_ONLY=false` |
 | `MSSQL_AUTH` | `sql` | Modo de autenticación (`sql`, `integrated`/`windows`; `azure` no está implementado — usa `MSSQL_CONNECTION_STRING`) |
 | `MSSQL_CONNECTION_STRING` | _(vacío)_ | Connection string personalizado (anula otras variables) |
 
@@ -53,7 +53,7 @@ Get-Content .env | ForEach-Object {
 ### Modo desarrollo
 
 ```bash
-DEVELOPER_MODE=true go run main.go
+DEVELOPER_MODE=true go run ./cmd/mcp-go-mssql
 ```
 
 En modo desarrollo:

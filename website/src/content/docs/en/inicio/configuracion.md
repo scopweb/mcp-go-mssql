@@ -53,7 +53,7 @@ Get-Content .env | ForEach-Object {
 ### Development mode
 
 ```bash
-DEVELOPER_MODE=true go run main.go
+DEVELOPER_MODE=true go run ./cmd/mcp-go-mssql
 ```
 
 In development mode:

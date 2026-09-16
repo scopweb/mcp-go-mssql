@@ -6,7 +6,7 @@ description: Recomendaciones y pasos para desplegar MCP-Go-MSSQL de forma segura
 ## Compilar el binario
 
 ```bash
-go build -ldflags "-w -s" -o mcp-go-mssql
+go build -ldflags "-w -s" -o mcp-go-mssql ./cmd/mcp-go-mssql
 ```
 
 Los flags `-w -s` eliminan información de debug y reducen el tamaño del binario.

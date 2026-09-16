@@ -34,7 +34,7 @@ The server reads everything sensitive from environment variables.
 Before opening a pull request, check:
 
 - `.env` is **not** staged (it is git-ignored; keep it that way).
-- Only `.env.example` and `config.example.json` are tracked.
+- Only `.env.example` and `config/config.example.json` are tracked.
 - No real server, database, user, or password is present in new files.
 
 If you need to add a new connection setting, document the env var name

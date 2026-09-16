@@ -18,11 +18,11 @@ go mod tidy
 if errorlevel 1 goto :error
 
 echo [2/3] Building %OUTPUT_DIR%\mcp-go-mssql-dev.exe ...
-go build -o %OUTPUT_DIR%\mcp-go-mssql-dev.exe .
+go build -o %OUTPUT_DIR%\mcp-go-mssql-dev.exe ./cmd/mcp-go-mssql
 if errorlevel 1 goto :error
 
 echo [3/3] Building %OUTPUT_DIR%\mcp-go-mssql-secure.exe (stripped) ...
-go build -ldflags "-w -s" -o %OUTPUT_DIR%\mcp-go-mssql-secure.exe .
+go build -ldflags "-w -s" -o %OUTPUT_DIR%\mcp-go-mssql-secure.exe ./cmd/mcp-go-mssql
 if errorlevel 1 goto :error
 
 echo.

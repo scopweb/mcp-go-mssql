@@ -25,9 +25,11 @@ Ejecuta una consulta SQL contra la base de datos MSSQL usando prepared statement
 ## Consultas permitidas
 
 ### En modo lectura (`MSSQL_READ_ONLY=true`)
-- `SELECT` — Siempre permitido
-- `INSERT`, `UPDATE`, `DELETE` — Solo en tablas de la whitelist
-- `EXEC`, `xp_cmdshell` — Siempre bloqueado
+- `SELECT` y CTEs de solo lectura — Permitidos
+- Procedimientos administrativos de esquema explícitamente permitidos (`sp_help`, `sp_columns`, …) — Permitidos si son `sys`/`dbo` y no cambian estado
+- `INSERT`, `UPDATE`, `DELETE`, DDL, `SELECT INTO`, `execute_procedure` — Bloqueados, aunque haya whitelist
+- Lotes concatenados (con o sin `;`) — Bloqueados
+- `xp_cmdshell`, `sp_executesql` — Siempre bloqueado
 
 ### En modo completo (`MSSQL_READ_ONLY=false`)
 - Todas las operaciones SQL estándar

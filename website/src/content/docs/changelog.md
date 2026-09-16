@@ -7,6 +7,15 @@ Todos los cambios relevantes de este proyecto se documentan aquí.
 
 ## Último cambio
 
+### Solo lectura absoluto y lotes SQL concatenados
+
+- `MSSQL_READ_ONLY=true` ya no admite escrituras por whitelist. Para escribir hace falta `READ_ONLY=false` y una whitelist explícita.
+- Se rechazan lotes concatenados con o sin `;`, `SELECT INTO` oculto con comentarios y procedimientos administrativos que no sean de `sys`/`dbo` o que cambien estado (`sp_spaceused @updateusage=true`).
+- El CLI es solo lectura por defecto (`MSSQL_CLI_ALLOW_WRITE=true` para el operador).
+- Contrato de agentes: `docs/AGENT_CONTRACT.md`.
+
+---
+
 ### Soporte SQL Server 2008/2012 y diagnóstico mejorado
 
 **Nueva variable:** `MSSQL_ENCRYPT`

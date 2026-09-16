@@ -6,7 +6,7 @@ description: Production deployment guide for MCP-Go-MSSQL
 ## Build the binary
 
 ```bash
-go build -ldflags "-w -s" -o mcp-go-mssql
+go build -ldflags "-w -s" -o mcp-go-mssql ./cmd/mcp-go-mssql
 ```
 
 The `-w -s` flags strip debug information and reduce binary size.

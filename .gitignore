@@ -30,8 +30,8 @@ claude_desktop_config.json
 *.dll
 *.so
 *.dylib
-mcp-go-mssql
-mcp-go-mssql-secure
+/mcp-go-mssql
+/mcp-go-mssql-secure
 build/
 
 # Go build cache

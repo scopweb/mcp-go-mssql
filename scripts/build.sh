@@ -42,7 +42,7 @@ fi
 
 # Build production version with optimizations
 echo "Building production executable..."
-go build -ldflags "-w -s" -o build/mcp-go-mssql -v
+go build -ldflags "-w -s" -o build/mcp-go-mssql -v ./cmd/mcp-go-mssql
 if [ $? -ne 0 ]; then
     echo "Error: Build failed"
     exit 1

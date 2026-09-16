@@ -35,7 +35,7 @@ Rechazado:
 - Más de una sentencia base (`SET STATISTICS TIME ON; SELECT 1; SELECT 2` → bloqueado como multi-statement).
 - Un token distinto de `SET STATISTICS` dentro del envoltorio (`SET STATISTICS TIME ON; PRINT 'x'; SELECT 1` → bloqueado como multi-statement).
 - Sentencias vacías entre los tokens del envoltorio (`SET STATISTICS TIME ON; ; SELECT 1` → bloqueado).
-- El modo whitelist aplica como siempre: `READ_ONLY=true + WHITELIST=temp_ai` sigue permitiendo `SET STATISTICS TIME ON; DELETE FROM temp_ai;`.
+- Un envoltorio alrededor de una escritura se rechaza con `READ_ONLY=true`, aunque la tabla esté en la whitelist.
 
 ## Respuesta
 

@@ -70,16 +70,16 @@ go build
 ### Development Mode
 ```bash
 # Development with detailed errors (env var; config.json no longer used)
-DEVELOPER_MODE=true go run main.go
+DEVELOPER_MODE=true go run ./cmd/mcp-go-mssql
 
 # Production mode (default)
-DEVELOPER_MODE=false go run main.go
+DEVELOPER_MODE=false go run ./cmd/mcp-go-mssql
 ```
 
 ### Production Deployment
 ```bash
 # Build for production
-go build -ldflags "-w -s" -o mcp-go-mssql-secure
+go build -ldflags "-w -s" -o mcp-go-mssql-secure ./cmd/mcp-go-mssql
 
 # Run with production config
 ./mcp-go-mssql-secure
@@ -91,7 +91,7 @@ go build -ldflags "-w -s" -o mcp-go-mssql-secure
 This server now implements the proper MCP (Model Context Protocol) using stdin/stdout JSON-RPC communication, compatible with Claude Desktop.
 
 ### For Claude Desktop Integration
-1. Use `config.example.json` as template for Claude Desktop configuration
+1. Use `config/config.example.json` as template for Claude Desktop configuration
 2. **NEVER commit sensitive credentials to version control**
 3. Place the compiled `mcp-go-mssql.exe` in the same directory
 4. Configuration uses environment variables passed through Claude Desktop MCP settings
@@ -338,7 +338,7 @@ Captured informational messages (e.g. `SQL Server Execution Times: CPU time = X 
 3. **Git Security**: 
    - ✅ `.env` files are in `.gitignore` 
    - ❌ **NEVER** commit `.env` or `config.json` with real credentials
-   - ✅ Only commit `.env.example` and `config.example.json` templates
+    - ✅ Only commit `.env.example` and `config/config.example.json` templates
 4. **Credential Rotation**: Regularly rotate database passwords
 5. **Network Isolation**: Deploy in secure network segments
 
