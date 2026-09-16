@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,8 @@ type QueryResult struct {
 	Error   string                   `json:"error,omitempty"`
 	Info    string                   `json:"info,omitempty"`
 }
+
+var selectIntoPattern = regexp.MustCompile(`(?is)\bSELECT\b.*\bINTO\s+(?:\[[^\]]+\]|\w+)`)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -254,6 +257,12 @@ func showDatabaseInfo(db *sql.DB, config *DatabaseConfig) {
 
 func executeQuery(db *sql.DB, query string) {
 	result := QueryResult{Success: true}
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("MSSQL_CLI_ALLOW_WRITE")), "true") && !isReadOnlyQuery(query) {
+		result.Success = false
+		result.Error = "Write queries are disabled for the CLI. Set MSSQL_CLI_ALLOW_WRITE=true only in an operator-controlled environment."
+		printResult(result)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -267,6 +276,77 @@ func executeQuery(db *sql.DB, query string) {
 	}
 
 	printResult(result)
+}
+
+func isReadOnlyQuery(query string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(stripCLIComments(query)))
+	if !strings.HasPrefix(normalized, "SELECT") && !strings.HasPrefix(normalized, "WITH") {
+		return false
+	}
+	if selectIntoPattern.MatchString(normalized) {
+		return false
+	}
+	if idx := strings.Index(normalized, ";"); idx >= 0 && strings.TrimSpace(normalized[idx+1:]) != "" {
+		return false
+	}
+	padded := " " + strings.Join(strings.Fields(normalized), " ") + " "
+	for _, kw := range []string{
+		" INSERT ", " UPDATE ", " DELETE ", " DROP ", " CREATE ", " ALTER ",
+		" TRUNCATE ", " MERGE ", " EXEC ", " EXECUTE ", " GRANT ", " REVOKE ",
+		" DENY ", " DBCC ", " BACKUP ", " RESTORE ", " BULK ",
+	} {
+		if strings.Contains(padded, kw) {
+			return false
+		}
+	}
+	return true
+}
+
+func stripCLIComments(query string) string {
+	var b strings.Builder
+	runes := []rune(query)
+	state := 0
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		switch state {
+		case 0:
+			if c == '\'' {
+				state = 1
+				b.WriteRune(c)
+			} else if c == '-' && i+1 < len(runes) && runes[i+1] == '-' {
+				state = 2
+				i++
+				b.WriteByte(' ')
+			} else if c == '/' && i+1 < len(runes) && runes[i+1] == '*' {
+				state = 3
+				i++
+				b.WriteByte(' ')
+			} else {
+				b.WriteRune(c)
+			}
+		case 1:
+			b.WriteRune(c)
+			if c == '\'' {
+				if i+1 < len(runes) && runes[i+1] == '\'' {
+					i++
+					b.WriteRune('\'')
+				} else {
+					state = 0
+				}
+			}
+		case 2:
+			if c == '\n' {
+				state = 0
+				b.WriteRune(c)
+			}
+		case 3:
+			if c == '*' && i+1 < len(runes) && runes[i+1] == '/' {
+				state = 0
+				i++
+			}
+		}
+	}
+	return b.String()
 }
 
 func executeSelectQuery(db *sql.DB, ctx context.Context, query string, result *QueryResult) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -109,9 +110,10 @@ type CallToolParams struct {
 }
 
 type CallToolResult struct {
-	Content []ContentItem          `json:"content"`
-	IsError bool                   `json:"isError,omitempty"`
-	Meta    map[string]interface{} `json:"_meta,omitempty"`
+	Content           []ContentItem          `json:"content"`
+	StructuredContent interface{}            `json:"structuredContent,omitempty"`
+	IsError           bool                   `json:"isError,omitempty"`
+	Meta              map[string]interface{} `json:"_meta,omitempty"`
 }
 
 type ContentItem struct {
@@ -169,6 +171,7 @@ func (sl *SecurityLogger) LogConnectionAttempt(success bool) {
 var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(password|pwd|secret|key|token)=[^;\s]*`),
 	regexp.MustCompile(`(?i)(password|pwd)\s*=\s*[^;\s]*`),
+	regexp.MustCompile(`(?i)(://[^:/\s]+:)[^@/\s]+@`),
 }
 
 // Pre-compiled word-boundary patterns for read-only keyword detection
@@ -187,6 +190,8 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 	"BULK":     regexp.MustCompile(`(?i)\bBULK\b`),
 	"BCP":      regexp.MustCompile(`(?i)\bBCP\b`),
 }
+
+var selectIntoPattern = regexp.MustCompile(`(?is)\bSELECT\b.*\bINTO\s+(?:\[[^\]]+\]|\w+)`)
 
 // readOnlyDangerousSPs is the single source of truth for system procedures
 // that must always be blocked in read-only contexts, even when we allow
@@ -316,6 +321,8 @@ type PendingConfirmation struct {
 	Tables      []string
 	Description string
 	Alias       string // dynamic alias this confirmation was issued for; confirmations are not portable across aliases
+	QueryHash   string // exact normalized statement that the approval covers
+	Approved    bool   // set only by confirm_operation; a pending request is never approval
 	ExpiresAt   time.Time
 }
 
@@ -486,16 +493,18 @@ func insecureTLSExplicitlyAllowed() bool {
 
 // productionTLSViolation returns a non-empty, human-readable reason when a
 // connection string would degrade transport security in a way that must not be
-// permitted silently in production: encryption disabled, or certificate
-// validation disabled. A missing 'encrypt=' parameter is intentionally NOT
-// treated as a hard violation here (the driver still negotiates encryption in
-// many cases); it is surfaced separately as a warning by the callers.
+// permitted silently in production: encryption disabled, certificate
+// validation disabled, or an implicit encryption setting. Driver defaults vary
+// by DSN form and version, so production must never rely on an omitted value.
 func productionTLSViolation(connStrLower string) string {
 	// Collapse all whitespace before the substring checks so ADO-style
 	// variants like "encrypt = false" or "trustservercertificate = true"
 	// cannot evade detection. The compacted form is used ONLY for
 	// detection; the original connection string is never modified.
 	compact := strings.Join(strings.Fields(connStrLower), "")
+	if !strings.Contains(compact, "encrypt=") {
+		return "encryption is not explicitly enabled (missing encrypt=true or encrypt=strict)"
+	}
 
 	if strings.Contains(compact, "encrypt=false") || strings.Contains(compact, "encrypt=disable") ||
 		strings.Contains(compact, "encrypt=no") || strings.Contains(compact, "encrypt=0") {
@@ -538,17 +547,6 @@ func buildSecureConnectionString() (string, error) {
 			if err := enforceProductionTLS("MSSQL_CONNECTION_STRING", connStrLower); err != nil {
 				return "", err
 			}
-			if !strings.Contains(connStrLower, "encrypt=") {
-				slog.Warn("custom connection string missing encrypt parameter in production mode")
-			}
-		}
-
-		// Ensure timeout settings are present; append defaults if missing
-		if !strings.Contains(connStrLower, "connection timeout") {
-			customConnStr += ";connection timeout=30"
-		}
-		if !strings.Contains(connStrLower, "command timeout") {
-			customConnStr += ";command timeout=30"
 		}
 
 		return customConnStr, nil
@@ -701,6 +699,9 @@ func stripLeadingComments(query string) string {
 // prefix-based operation detector while SQL Server happily executes the whole
 // batch.
 func hasMultipleStatements(query string) bool {
+	if hasKeywordStackedStatements(query) || hasGOBatchSeparator(query) {
+		return true
+	}
 	const (
 		stNormal = iota
 		stString
@@ -821,15 +822,24 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 		return fmt.Errorf("read-only mode: multiple SQL statements are not allowed in a single request")
 	}
 
-	// If whitelist is configured, allow modifications to pass through to validateTablePermissions()
-	// This enables the use case: READ_ONLY=true + WHITELIST=table1,table2
-	// where only whitelisted tables can be modified
+	if isSelectInto(query) && effective.readOnly {
+		return fmt.Errorf("read-only mode: SELECT INTO is a modification")
+	}
+
+	// A whitelist is a write policy for an explicitly writable context. It
+	// never overrides READ_ONLY=true, which is intentionally absolute.
 	whitelist := effective.whitelistTables
-	if len(whitelist) > 0 {
+	if !effective.readOnly && len(whitelist) > 0 {
 		// Whitelist is configured - let validateTablePermissions() handle modification permissions
 		// We still need to block dangerous operations though
 		normalizedQuery := stripLeadingComments(query)
 		_ = normalizedQuery // used for future pattern matching if needed
+
+		// Procedures have a separate allowlist and must never be reached via
+		// query_database merely because a table whitelist exists.
+		if strings.HasPrefix(strings.ToUpper(stripLeadingComments(query)), "EXEC") {
+			return fmt.Errorf("read-only mode: execute_procedure must be used for stored procedures")
+		}
 
 		// Block dangerous system procedures even with whitelist
 		queryUpper := strings.ToUpper(query)
@@ -917,6 +927,10 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	return fmt.Errorf("read-only mode: only SELECT and read operations are allowed")
 }
 
+func isSelectInto(query string) bool {
+	return selectIntoPattern.MatchString(stripLeadingComments(stripSQLComments(query)))
+}
+
 // isSafeReadOnlyAdminProcedure reports whether the query is an invocation
 // of a well-known read-only system stored procedure used for schema discovery
 // and administrative introspection (e.g. sp_help, sp_helptext, sp_spaceused).
@@ -924,21 +938,26 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 // This is the controlled relaxation that allows legitimate administrative reads
 // via EXEC while the general EXEC/EXECUTE keyword remains dangerous for everything else.
 func isSafeReadOnlyAdminProcedure(query string) bool {
-	q := strings.ToUpper(stripLeadingComments(query))
+	q := strings.ToUpper(stripLeadingComments(stripSQLComments(query)))
 	q = strings.TrimSpace(q)
 
 	// Match common forms:
 	//   EXEC sp_help 'dbo.Table'
 	//   EXECUTE dbo.sp_helptext 'proc'
-	//   EXEC [dbo].[sp_columns] @table_name='x'
-	// We capture the procedure name (last identifier before any parameters).
-	re := regexp.MustCompile(`^\s*EXEC(UTE)?\s+(?:\[?[\w$]+\]?\.)*(?:\[?([\w$]+)\]?)\b`)
+	//   EXEC [sys].[sp_columns] @table_name='x'
+	// Schema is captured so app.sp_help cannot impersonate a system procedure.
+	re := regexp.MustCompile(`^\s*EXEC(UTE)?\s+(?:\[?([\w$]+)\]?\.)?\[?([\w$]+)\]?\b`)
 	matches := re.FindStringSubmatch(q)
-	if len(matches) < 3 {
+	if len(matches) < 4 {
 		return false
 	}
 
-	proc := strings.ToUpper(matches[2])
+	schema := strings.ToUpper(matches[2])
+	if schema != "" && schema != "DBO" && schema != "SYS" {
+		return false
+	}
+
+	proc := strings.ToUpper(matches[3])
 
 	// Conservative allowlist of read-only administrative / schema procedures.
 	// Only add procedures that are:
@@ -964,7 +983,21 @@ func isSafeReadOnlyAdminProcedure(query string) bool {
 		// to keep the surface minimal. Can be evaluated later.
 	}
 
-	return safeAdminProcs[proc]
+	if !safeAdminProcs[proc] {
+		return false
+	}
+	if proc == "SP_SPACEUSED" && spaceUsedUpdatesCatalog(q) {
+		return false
+	}
+	return true
+}
+
+func spaceUsedUpdatesCatalog(queryUpper string) bool {
+	if regexp.MustCompile(`@UPDATEUSAGE\s*=\s*(N)?'?(TRUE|YES|T|1)'?`).MatchString(queryUpper) {
+		return true
+	}
+	return regexp.MustCompile(`SP_SPACEUSED\s+(?:N)?'[^']*'\s*,`).MatchString(queryUpper) ||
+		regexp.MustCompile(`SP_SPACEUSED\s+[A-Z0-9_$.\[\]]+\s*,`).MatchString(queryUpper)
 }
 
 // getWhitelistedTables returns the cached list of tables/views allowed for modification.
@@ -996,7 +1029,12 @@ func (s *MCPMSSQLServer) getEffectiveConfig() serverConfig {
 
 // requireConfirmationForModification is called when a writable alias attempts a modification.
 // It returns an error that tells the AI it must call confirm_operation first.
-func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, tables []string, alias string) error {
+func queryHash(query string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(query)))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, tables []string, alias, query string) error {
 	s.confirmMu.Lock()
 	defer s.confirmMu.Unlock()
 
@@ -1007,6 +1045,7 @@ func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, ta
 		Tables:      tables,
 		Description: desc,
 		Alias:       alias,
+		QueryHash:   queryHash(query),
 		ExpiresAt:   time.Now().Add(90 * time.Second), // 90 seconds to confirm
 	}
 
@@ -1014,7 +1053,7 @@ func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, ta
 }
 
 // isOperationConfirmed checks if there is a valid pending confirmation that matches the current operation.
-func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string, alias string) bool {
+func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string, alias, query string) bool {
 	s.confirmMu.Lock()
 	defer s.confirmMu.Unlock()
 
@@ -1034,13 +1073,16 @@ func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string,
 	if !strings.EqualFold(s.pendingConfirmation.Alias, alias) {
 		return false
 	}
+	if !s.pendingConfirmation.Approved || s.pendingConfirmation.QueryHash != queryHash(query) {
+		return false
+	}
 
 	// Simple matching: same operation and at least one overlapping table
 	if strings.EqualFold(s.pendingConfirmation.Operation, operation) {
 		for _, t1 := range s.pendingConfirmation.Tables {
 			for _, t2 := range tables {
 				if t1 == t2 {
-					// Consume the confirmation after use (one-time use)
+					// Consume the approved confirmation after one exact statement.
 					s.pendingConfirmation = nil
 					return true
 				}
@@ -1191,15 +1233,19 @@ func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
 		}
 	}
 
-	// Find all unique aliases
+	// Find all unique aliases. Aliases may contain underscores, so split on a
+	// known configuration suffix rather than the first underscore.
+	fieldSuffixes := []string{
+		"_CONNECTION_STRING", "_WHITELIST_TABLES", "_READ_ONLY", "_DATABASE",
+		"_PASSWORD", "_SERVER", "_ENCRYPT", "_PORT", "_USER",
+	}
 	aliasSet := make(map[string]bool)
 	for key := range envVars {
 		rest := strings.TrimPrefix(key, prefix)
-		parts := strings.SplitN(rest, "_", 2)
-		if len(parts) == 2 {
-			alias := strings.ToUpper(parts[0])
-			if alias != "MODE" {
-				aliasSet[alias] = true
+		for _, suffix := range fieldSuffixes {
+			if alias, found := strings.CutSuffix(rest, suffix); found && alias != "" {
+				aliasSet[strings.ToUpper(alias)] = true
+				break
 			}
 		}
 	}
@@ -1248,8 +1294,15 @@ func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
 		// Per-alias security posture - ONLY override if explicitly provided
 		// This enforces "secure by default"
 		if ro := envVars[prefix+alias+"_READ_ONLY"]; ro != "" {
-			// User explicitly set the value → respect it
-			a.ReadOnly = strings.ToLower(strings.TrimSpace(ro)) == "true"
+			switch strings.ToLower(strings.TrimSpace(ro)) {
+			case "true":
+				a.ReadOnly = true
+			case "false":
+				a.ReadOnly = false
+			default:
+				secLogger.Printf("Ignoring dynamic alias '%s': invalid READ_ONLY value", alias)
+				continue
+			}
 		}
 		// If not set → remains true (safe default)
 
@@ -1307,16 +1360,6 @@ func buildAliasConnectionString(alias *DynamicAlias, devMode bool, aliasName str
 			if err := enforceProductionTLS(fmt.Sprintf("dynamic alias '%s' connection string", aliasName), csLower); err != nil {
 				return "", err
 			}
-			if !strings.Contains(csLower, "encrypt=") {
-				slog.Warn(fmt.Sprintf("dynamic alias '%s' connection string missing encrypt parameter in production mode", aliasName))
-			}
-		}
-
-		if !strings.Contains(csLower, "connection timeout") {
-			cs += ";connection timeout=30"
-		}
-		if !strings.Contains(csLower, "command timeout") {
-			cs += ";command timeout=30"
 		}
 		return cs, nil
 	}
@@ -1500,7 +1543,10 @@ func (s *MCPMSSQLServer) extractAllQualifiedTablesFromQuery(query string) []stri
 
 // extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
 func (s *MCPMSSQLServer) extractOperation(query string) string {
-	queryUpper := stripLeadingComments(query)
+	queryUpper := stripLeadingComments(stripSQLComments(query))
+	if isSelectInto(queryUpper) {
+		return "SELECT_INTO"
+	}
 
 	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
 	for _, op := range modifyOps {
@@ -1526,6 +1572,12 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// Use effective config (respects active dynamic alias posture)
 	effective := s.getEffectiveConfig()
 	if !effective.readOnly && len(effective.whitelistTables) == 0 {
+		s.dynamicMu.RLock()
+		isWritableDynamicAlias := s.isDynamic && s.activeAlias != ""
+		s.dynamicMu.RUnlock()
+		if isWritableDynamicAlias {
+			return fmt.Errorf("permission denied: writable dynamic aliases require an explicit table whitelist")
+		}
 		return nil // No restrictions configured for the current context, allow all operations
 	}
 
@@ -1533,7 +1585,7 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	operation := s.extractOperation(query)
 
 	// Determine if this is a modification operation
-	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
+	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE", "SELECT_INTO"}
 	isModifyOp := false
 	for _, op := range modifyOps {
 		if operation == op {
@@ -1545,6 +1597,9 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// If not a modify operation (e.g., SELECT), allow it
 	if !isModifyOp {
 		return nil
+	}
+	if effective.readOnly {
+		return fmt.Errorf("permission denied: read-only mode blocks %s operations", operation)
 	}
 
 	// Extract ALL tables referenced in the query. tablesInQuery holds the bare
@@ -1561,10 +1616,6 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	activeAlias := s.activeAlias
 	hasActiveWritableAlias := activeAlias != "" && !effective.readOnly
 	s.dynamicMu.RUnlock()
-
-	if hasActiveWritableAlias && !s.isOperationConfirmed(operation, tablesInQuery, activeAlias) {
-		return s.requireConfirmationForModification(operation, tablesInQuery, activeAlias)
-	}
 
 	s.secLogger.Printf("Permission check - Operation: %s, Tables found: %v, Whitelist: %v",
 		operation, tablesInQuery, whitelist)
@@ -1608,6 +1659,10 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 			return fmt.Errorf("permission denied: table '%s' is not whitelisted for %s operations",
 				table, operation)
 		}
+	}
+
+	if hasActiveWritableAlias && !s.isOperationConfirmed(operation, tablesInQuery, activeAlias, query) {
+		return s.requireConfirmationForModification(operation, tablesInQuery, activeAlias, query)
 	}
 
 	// All tables are whitelisted
@@ -1744,6 +1799,9 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		}
 		results = append(results, row)
 		rowCount++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("reading query results: %w", err)
 	}
 
 	if truncated {
@@ -1901,7 +1959,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 						}
 					}
 					fmt.Fprintf(&info, "  Security Posture: %s\n", ro)
-					if len(effective.whitelistTables) > 0 {
+					if !effective.readOnly && len(effective.whitelistTables) > 0 {
 						fmt.Fprintf(&info, "  Allowed modification tables: %s\n", strings.Join(effective.whitelistTables, ", "))
 					}
 				}
@@ -1927,13 +1985,11 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			// Show read-only status and whitelist (cached config)
 			whitelist := s.getWhitelistedTables()
 			if s.config.readOnly {
+				info.WriteString("Access Mode: READ-ONLY (all modifications and stored procedures blocked)\n")
 				if len(whitelist) > 0 {
-					info.WriteString("Access Mode: READ-ONLY with whitelist exceptions\n")
-					info.WriteString("Whitelisted Tables: " + strings.Join(whitelist, ", ") + "\n")
-					info.WriteString("Note: SELECT allowed on all tables. Modifications (INSERT/UPDATE/DELETE/CREATE/DROP) only allowed on whitelisted tables.\n")
+					info.WriteString("Whitelisted Tables: configured but inactive while READ_ONLY=true\n")
 				} else {
-					info.WriteString("Access Mode: READ-ONLY (SELECT queries only)\n")
-					info.WriteString("Whitelisted Tables: NONE (all modifications blocked)\n")
+					info.WriteString("Whitelisted Tables: NONE\n")
 				}
 			} else {
 				if len(whitelist) > 0 {
@@ -2079,6 +2135,7 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 						Text: fmt.Sprintf("Query executed successfully. Results:\n%s", string(resultBytes)),
 					},
 				},
+				StructuredContent: result,
 			},
 		}
 
@@ -2464,35 +2521,26 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 			queryBuilder.WriteString(strings.Join(paramStrings, ", "))
 		}
 
-		// Enforce the active dynamic alias's security posture for procedure
-		// execution. A globally whitelisted procedure may perform writes, so
-		// on a dynamic connection it must obey the same rules as a
-		// modification query: blocked outright on read-only aliases, and
-		// confirmation-gated on writable ones. Classic single-connection
-		// mode is unchanged (procedure whitelist is the only gate there).
+		// Procedures can write even when their name suggests otherwise, so
+		// READ_ONLY=true blocks them in both classic and dynamic modes.
 		procEffective := s.getEffectiveConfig()
 		s.dynamicMu.RLock()
 		procAlias := s.activeAlias
 		s.dynamicMu.RUnlock()
-		if s.isDynamic && procAlias != "" {
-			if procEffective.readOnly {
-				s.secLogger.Printf("SECURITY VIOLATION: execute_procedure '%s' blocked on read-only dynamic alias '%s'", procName, procAlias)
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{
-								Type: "text",
-								Text: fmt.Sprintf("Error: execute_procedure is not allowed while connected to read-only dynamic alias '%s'. The procedure whitelist is global and procedures may perform writes. Use dynamic_connect to switch to a writable alias, or ask the operator to adjust MSSQL_DYNAMIC_%s_READ_ONLY.", procAlias, procAlias),
-							},
-						},
-						IsError: true,
-					},
-				}
+		if procEffective.readOnly {
+			s.secLogger.Printf("SECURITY VIOLATION: execute_procedure '%s' blocked in read-only mode", procName)
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: "Error: execute_procedure is blocked because READ_ONLY=true. Stored procedures may modify data."}},
+					IsError: true,
+				},
 			}
-			if !s.isOperationConfirmed("EXEC", []string{procNameLower}, procAlias) {
-				confErr := s.requireConfirmationForModification("EXEC", []string{procNameLower}, procAlias)
+		}
+		if s.isDynamic && procAlias != "" {
+			if !s.isOperationConfirmed("EXEC", []string{procNameLower}, procAlias, queryBuilder.String()) {
+				confErr := s.requireConfirmationForModification("EXEC", []string{procNameLower}, procAlias, queryBuilder.String())
 				return &MCPResponse{
 					JSONRPC: "2.0",
 					ID:      id,
@@ -3252,12 +3300,12 @@ func (s *MCPMSSQLServer) handleToolCall(id interface{}, params CallToolParams) *
 
 		if (mentionsOperation && mentionsTable) || echoesPending {
 
-			s.pendingConfirmation = nil // consume it
+			s.pendingConfirmation.Approved = true
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
-					Content: []ContentItem{{Type: "text", Text: "Confirmation accepted. You may now execute the modification query. This confirmation is valid for the next query only."}},
+					Content: []ContentItem{{Type: "text", Text: "Confirmation accepted. You may now execute the exact modification query that generated this approval. This confirmation is valid once."}},
 				},
 			}
 		}
@@ -3302,6 +3350,10 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			if paramBytes, err := json.Marshal(req.Params); err == nil {
 				var initParams InitializeParams
 				if err := json.Unmarshal(paramBytes, &initParams); err == nil && initParams.ProtocolVersion != "" {
+					supported := map[string]bool{"2024-11-05": true, "2025-06-18": true, "2025-11-25": true}
+					if !supported[initParams.ProtocolVersion] {
+						return &MCPResponse{JSONRPC: "2.0", ID: req.ID, Error: &MCPError{Code: -32602, Message: "Unsupported protocol version", Data: map[string]interface{}{"supported": []string{"2024-11-05", "2025-06-18", "2025-11-25"}}}}
+					}
 					clientVersion = initParams.ProtocolVersion
 				}
 			}
@@ -3329,6 +3381,9 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 
 	case "ping":
 		// MCP spec MUST: respond promptly to ping with empty result
+		if req.ID == nil {
+			return nil
+		}
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -3377,20 +3432,20 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 			{
 				Name:        "query_database",
 				Title:       "Query Database",
-				Description: "Execute a secure SQL query against the MSSQL database",
+				Description: "Execute a SQL query subject to the active database policy",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"query": {
 							Type:        "string",
-							Description: "SQL query to execute (uses prepared statements for security)",
+							Description: "SQL query to execute. The server validates the active read-only, whitelist and approval policy.",
 						},
 					},
 					Required: []string{"query"},
 				},
 				Annotations: &ToolAnnotations{
 					ReadOnlyHint:    boolPtr(false),
-					DestructiveHint: boolPtr(false),
+					DestructiveHint: boolPtr(true),
 					IdempotentHint:  boolPtr(false),
 					OpenWorldHint:   boolPtr(false),
 				},

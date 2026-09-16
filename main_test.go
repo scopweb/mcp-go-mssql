@@ -1042,11 +1042,8 @@ func TestBuildAliasConnectionString(t *testing.T) {
 		if !strings.HasPrefix(cs, "sqlserver://") {
 			t.Errorf("expected URL-form override to be returned verbatim, got: %s", cs)
 		}
-		if !strings.Contains(cs, "connection timeout=30") {
-			t.Errorf("default connection timeout must be appended; got: %s", cs)
-		}
-		if !strings.Contains(cs, "command timeout=30") {
-			t.Errorf("default command timeout must be appended; got: %s", cs)
+		if cs != a.ConnectionString {
+			t.Errorf("URL-form override must be returned verbatim to avoid changing its query parameters; got: %s", cs)
 		}
 	})
 
@@ -1060,11 +1057,8 @@ func TestBuildAliasConnectionString(t *testing.T) {
 		if !strings.Contains(cs, "connection timeout=10") {
 			t.Errorf("user-supplied connection timeout=10 must be preserved; got: %s", cs)
 		}
-		if strings.Contains(cs, "connection timeout=10;connection timeout=30") {
-			t.Errorf("default must not be appended when already present; got: %s", cs)
-		}
-		if !strings.Contains(cs, "command timeout=30") {
-			t.Errorf("command timeout (absent) must be appended; got: %s", cs)
+		if cs != a.ConnectionString {
+			t.Errorf("URL-form override must be returned verbatim to avoid changing its query parameters; got: %s", cs)
 		}
 	})
 

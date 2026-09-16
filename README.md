@@ -15,6 +15,8 @@ Documentación completa: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb
 
 Pensado para entornos donde la seguridad importa: modo solo lectura con whitelist por tabla, prepared statements, TLS fail-closed en producción y soporte explícito para SQL Server 2008/2012 (TLS 1.0).
 
+Contrato para agentes y arneses: [AGENT_CONTRACT.md](AGENT_CONTRACT.md).
+
 ## Instalación
 
 Descarga el binario de la [última release](https://github.com/scopweb/mcp-go-mssql/releases/latest) o compila:
@@ -39,15 +41,14 @@ Requiere Go 1.26+.
         "MSSQL_USER": "ai_user",
         "MSSQL_PASSWORD": "your_password",
         "DEVELOPER_MODE": "false",
-        "MSSQL_READ_ONLY": "true",
-        "MSSQL_WHITELIST_TABLES": "temp_ai"
+        "MSSQL_READ_ONLY": "true"
       }
     }
   }
 }
 ```
 
-Con `MSSQL_READ_ONLY=true` el agente solo puede hacer SELECT, salvo en las tablas de la whitelist. `MSSQL_WHITELIST_TABLES` es opcional; sin ella no se permite ninguna modificación.
+Con `MSSQL_READ_ONLY=true` el agente solo puede realizar lecturas y consultas administrativas explícitamente permitidas. Ninguna whitelist puede habilitar escritura en este modo. Para permitir escrituras controladas, configura `MSSQL_READ_ONLY=false` y una whitelist explícita.
 
 Variables principales:
 
@@ -92,8 +93,9 @@ Reglas importantes:
 
 - Cada alias nace en `READ_ONLY=true`.
 - Un alias escribible (`_READ_ONLY=false`) sin `_WHITELIST_TABLES` no permite modificar nada.
-- Con whitelist, las modificaciones piden `confirm_operation` primero.
+- La whitelist solo se aplica con `_READ_ONLY=false`; las modificaciones piden `confirm_operation` primero.
 - No uses `MSSQL_READ_ONLY=false` global en modo dinámico.
+- Ejecuta una instancia `stdio` por agente o sesión; el alias activo pertenece al proceso y no es un límite de aislamiento entre agentes.
 
 Guía completa: [modo dinámico](https://mcp-go-mssql.scopweb.com/guias/modo-dinamico-una-aplicacion-varias-bases).
 
@@ -105,6 +107,10 @@ go run examples/claude-code/db-connector.go tables                  # listar tab
 go run examples/claude-code/db-connector.go describe MiTabla        # estructura
 go run examples/claude-code/db-connector.go query "SELECT TOP 10 * FROM MiTabla"
 ```
+
+El CLI rechaza escrituras por defecto. Solo un operador puede habilitarlas con
+`MSSQL_CLI_ALLOW_WRITE=true`; para agentes se recomienda el servidor MCP y su
+política de whitelist.
 
 ## Troubleshooting
 

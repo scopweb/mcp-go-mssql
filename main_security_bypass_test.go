@@ -29,6 +29,10 @@ func TestHasMultipleStatements(t *testing.T) {
 		{"semicolon inside line comment", "SELECT 1 -- a;b\nFROM users", false},
 		{"semicolon inside block comment", "SELECT 1 /* a;b */ FROM users", false},
 		{"real second statement after literal", "SELECT 'x;y'; DELETE FROM prod", true},
+		{"stacked without semicolon", "SELECT 1\nDELETE FROM prod", true},
+		{"admin then delete without semicolon", "EXEC sys.sp_help N'x'\nDELETE FROM prod", true},
+		{"union select is one statement", "SELECT a FROM t UNION SELECT b FROM u", false},
+		{"select into with comment separator", "SELECT 1 AS id INTO/**/prod", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -271,6 +275,8 @@ func TestConfirmationBoundToAlias(t *testing.T) {
 			Tables:      []string{"temp_ai"},
 			Description: "DELETE on tables: temp_ai (alias APP_A)",
 			Alias:       "APP_A",
+			QueryHash:   queryHash("DELETE FROM temp_ai"),
+			Approved:    true,
 			ExpiresAt:   time.Now().Add(time.Minute),
 		}
 		return s
@@ -278,19 +284,201 @@ func TestConfirmationBoundToAlias(t *testing.T) {
 
 	// A different alias must not consume the confirmation (and it stays pending).
 	s := newServer()
-	if s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "APP_B") {
+	if s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "APP_B", "DELETE FROM temp_ai") {
 		t.Error("confirmation issued for alias APP_A must not be consumable on alias APP_B")
 	}
 
 	// The originating alias consumes it (one-time use).
-	if !s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "APP_A") {
+	if !s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "APP_A", "DELETE FROM temp_ai") {
 		t.Error("confirmation should be consumable on the alias it was issued for")
 	}
 
 	// Alias comparison is case-insensitive (aliases are normalized to upper).
 	s = newServer()
-	if !s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "app_a") {
+	if !s.isOperationConfirmed("DELETE", []string{"temp_ai"}, "app_a", "DELETE FROM temp_ai") {
 		t.Error("alias binding should be case-insensitive")
+	}
+}
+
+func TestDynamicWritableAliasRequiresWhitelist(t *testing.T) {
+	server := newTestMCPServer()
+	server.isDynamic = true
+	server.activeAlias = "WORK"
+	server.dynamicAliases = map[string]DynamicAlias{
+		"WORK": {Alias: "WORK", ReadOnly: false},
+	}
+
+	if err := server.validateTablePermissions("DELETE FROM temp_ai WHERE id = 1"); err == nil {
+		t.Fatal("writable dynamic alias without a whitelist must deny modifications")
+	}
+}
+
+func TestConfirmationRequiresExactApprovedQuery(t *testing.T) {
+	server := newTestMCPServer()
+	server.isDynamic = true
+	server.activeAlias = "WORK"
+	server.dynamicAliases = map[string]DynamicAlias{
+		"WORK": {Alias: "WORK", ReadOnly: false, WhitelistTables: []string{"temp_ai"}},
+	}
+	query := "DELETE FROM temp_ai WHERE id = 1"
+
+	if err := server.validateTablePermissions(query); err == nil {
+		t.Fatal("first modification must require confirmation")
+	}
+	if err := server.validateTablePermissions(query); err == nil {
+		t.Fatal("replaying a pending modification must not bypass confirmation")
+	}
+
+	response := server.handleToolCall("confirm", CallToolParams{
+		Name:      "confirm_operation",
+		Arguments: map[string]interface{}{"description": server.pendingConfirmation.Description},
+	})
+	if response.Result.(CallToolResult).IsError {
+		t.Fatalf("exact confirmation should succeed: %+v", response.Result)
+	}
+	if err := server.validateTablePermissions(query); err != nil {
+		t.Fatalf("approved exact query should be allowed: %v", err)
+	}
+	if err := server.validateTablePermissions("DELETE FROM temp_ai WHERE id = 2"); err == nil {
+		t.Fatal("approval must not cover a different statement")
+	}
+}
+
+func TestReadOnlyClassifiesSelectIntoAsWrite(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = true
+	query := "SELECT 1 AS id INTO temp_ai"
+	if err := server.validateReadOnlyQuery(query); err == nil {
+		t.Fatal("SELECT INTO must be denied without a whitelist")
+	}
+
+	server.config.whitelistTables = []string{"temp_ai"}
+	if err := server.validateReadOnlyQuery(query); err == nil {
+		t.Fatal("SELECT INTO must remain blocked when READ_ONLY is true, even with a whitelist")
+	}
+}
+
+func TestReadOnlyIsAbsoluteWithWhitelist(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = true
+	server.config.whitelistTables = []string{"temp_ai"}
+
+	for _, query := range []string{
+		"INSERT INTO temp_ai VALUES (1)",
+		"UPDATE temp_ai SET value = 1",
+		"DELETE FROM temp_ai",
+		"CREATE TABLE temp_ai_copy (id int)",
+		"DROP TABLE temp_ai",
+		"MERGE temp_ai AS t USING temp_ai AS s ON 1 = 0 WHEN NOT MATCHED THEN INSERT (id) VALUES (1)",
+	} {
+		if err := server.validateReadOnlyQuery(query); err == nil {
+			t.Errorf("READ_ONLY=true allowed write query %q", query)
+		}
+		if err := server.validateTablePermissions(query); err == nil {
+			t.Errorf("READ_ONLY=true permission gate allowed write query %q", query)
+		}
+	}
+}
+
+func TestStackedStatementsWithoutSemicolonAreBlocked(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = true
+	server.config.whitelistTables = []string{"Ferratge", "_Consultas"}
+
+	blocked := []string{
+		"EXEC sys.sp_help N'dbo.Ferratge'\nDELETE FROM Ferratge",
+		"SELECT 1\nDELETE FROM Ferratge",
+		"SELECT 1 AS id INTO/**/dbo.audit_probe",
+		"SELECT 1 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+		"EXEC sys.sp_spaceused @updateusage = N'TRUE'",
+		"EXEC app.sp_help N'dbo.Ferratge'",
+		"EXEC(N'DEL' + N'ETE FROM Ferratge')",
+		"SELECT 1; DELETE FROM Ferratge",
+		"SELECT 1\nGO\nDELETE FROM Ferratge",
+	}
+	for _, q := range blocked {
+		if err := server.validateReadOnlyQuery(q); err == nil {
+			t.Errorf("read-only query was accepted: %q", q)
+		}
+		if err := server.validateTablePermissions(q); err == nil && !strings.HasPrefix(strings.ToUpper(stripLeadingComments(q)), "SELECT") && !strings.HasPrefix(strings.ToUpper(stripLeadingComments(q)), "EXEC") {
+			t.Errorf("table permission gate accepted write query: %q", q)
+		}
+	}
+
+	allowed := []string{
+		"SELECT TOP 10 * FROM sys.tables",
+		"EXEC sys.sp_help N'dbo.Ferratge'",
+		"EXEC dbo.sp_columns @table_name = N'Ferratge'",
+		"SELECT a FROM t UNION SELECT b FROM t",
+		"WITH cte AS (SELECT 1 AS id) SELECT * FROM cte",
+	}
+	for _, q := range allowed {
+		if err := server.validateReadOnlyQuery(q); err != nil {
+			t.Errorf("legitimate read-only query was blocked: %q (%v)", q, err)
+		}
+	}
+}
+
+func TestWritableWhitelistStillRejectsUnseparatedStack(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = false
+	server.config.whitelistTables = []string{"Ferratge"}
+	if err := server.validateReadOnlyQuery("SELECT 1\nDELETE FROM Ferratge"); err == nil {
+		t.Fatal("writable whitelist must still reject concatenated statements")
+	}
+}
+
+func TestReadOnlyAllowsOnlySafeAdministrativeProcedures(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = true
+	server.config.whitelistTables = []string{"temp_ai"}
+	if err := server.validateReadOnlyQuery("EXEC sp_help 'dbo.temp_ai'"); err != nil {
+		t.Fatalf("safe administrative procedure should remain available: %v", err)
+	}
+	if err := server.validateReadOnlyQuery("EXEC dbo.unlisted_procedure"); err == nil {
+		t.Fatal("unlisted procedure must be blocked in read-only mode")
+	}
+}
+
+func TestTableWhitelistCannotAuthorizeProcedureViaQuery(t *testing.T) {
+	server := newTestMCPServer()
+	server.config.readOnly = true
+	server.config.whitelistTables = []string{"temp_ai"}
+	if err := server.validateReadOnlyQuery("EXEC dbo.unlisted_procedure"); err == nil {
+		t.Fatal("procedure execution must use its dedicated procedure whitelist")
+	}
+}
+
+func TestSanitizeForLoggingRedactsURLPassword(t *testing.T) {
+	secret := "must-not-appear"
+	got := NewSecurityLogger().sanitizeForLogging("sqlserver://user:" + secret + "@db.example:1433?database=app")
+	if strings.Contains(got, secret) {
+		t.Fatalf("URL password leaked in sanitized log: %q", got)
+	}
+}
+
+func TestProductionRejectsCustomDSNWithoutEncryption(t *testing.T) {
+	t.Setenv("DEVELOPER_MODE", "false")
+	t.Setenv("MSSQL_ALLOW_INSECURE_TLS", "false")
+	t.Setenv("MSSQL_CONNECTION_STRING", "server=db.example;database=app;user id=user;password=pass")
+	if _, err := buildSecureConnectionString(); err == nil {
+		t.Fatal("production must reject a custom DSN without explicit encryption")
+	}
+}
+
+func TestDynamicAliasWithUnderscoreAndInvalidReadOnly(t *testing.T) {
+	t.Setenv("MSSQL_DYNAMIC_APP_MAIN_SERVER", "db.example")
+	t.Setenv("MSSQL_DYNAMIC_APP_MAIN_DATABASE", "app")
+	t.Setenv("MSSQL_DYNAMIC_APP_MAIN_READ_ONLY", "true")
+	aliases := loadDynamicAliases(NewSecurityLogger())
+	if _, ok := aliases["APP_MAIN"]; !ok {
+		t.Fatalf("alias with underscore was not loaded: %#v", aliases)
+	}
+
+	t.Setenv("MSSQL_DYNAMIC_APP_MAIN_READ_ONLY", "tru")
+	aliases = loadDynamicAliases(NewSecurityLogger())
+	if _, ok := aliases["APP_MAIN"]; ok {
+		t.Fatal("alias with an invalid READ_ONLY value must be rejected")
 	}
 }
 
