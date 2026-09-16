@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **secure** Go-based solution that provides MSSQL database connectivity for critical data environments in two ways:
 
-1. **MCP Server** (`main.go`): For Claude Desktop integration via Model Context Protocol
+1. **MCP Server** (`cmd/mcp-go-mssql/`): For Claude Desktop integration via Model Context Protocol
 2. **CLI Tool** (`examples/claude-code/db-connector.go`): For Claude Code direct database access
 
 Both implementations serve as hardened bridges to Microsoft SQL Server databases, with comprehensive security features including TLS encryption, input validation, and connection pooling.
@@ -26,6 +26,7 @@ The codebase implements a security-first architecture with these key components:
 - **Encryption fail-closed in production**: TLS is mandatory in production (encrypt=true, trustservercertificate=false); insecure TLS aborts startup unless explicitly allowed via MSSQL_ALLOW_INSECURE_TLS=true (legacy servers)
 - **Connection pooling**: Limited connection counts to prevent resource exhaustion
 - **SQL Injection Protection**: Uses prepared statements exclusively - NO dynamic SQL
+- **Stacked batches**: Restricted contexts reject concatenated statements with or without `;`
 - **Secure error handling**: Generic error messages to clients, detailed logs internally
 
 ### Network Security
@@ -64,7 +65,7 @@ Get-Content .env | ForEach-Object {
 
 ### Build
 ```bash
-go build
+go build ./cmd/mcp-go-mssql
 ```
 
 ### Development Mode
@@ -142,7 +143,7 @@ The server reads database connection from these environment variables. See `.env
 
 - Grant the login used by the MCP server `SELECT` broadly, and `INSERT`/`UPDATE`/`DELETE` **only** on the specific tables the AI is allowed to modify (ideally dedicated `temp_ai`-style tables).
 - With that in place, even if the regex-based extractor is fooled by an exotic construct (`MERGE` variants, `OUTPUT ... INTO`, `SELECT ... INTO`, updatable views, triggers), the database engine itself rejects the write. This also neutralizes the schema/database confusion at the root.
-- Treat `MSSQL_READ_ONLY` + `MSSQL_WHITELIST_TABLES` as a second layer that reduces mistakes and narrows the surface — not as the sole line of defense.
+- Treat `MSSQL_READ_ONLY=true` as an absolute process-level write deny. `MSSQL_WHITELIST_TABLES` only applies when read-only is off. Both are a second layer — not the sole line of defense.
 
 **On `confirm_operation` (dynamic mode only — the tool is not exposed in classic mode):** the confirmation step is an **accidental-error reducer, not a security barrier.** The same agent that generates a modification also confirms it, so a jailbroken model or a prompt-injection payload can satisfy the confirmation trivially. It genuinely helps against fat-finger mistakes; it does **not** stop a determined or compromised caller. For real human-in-the-loop approval, move authorization out of the agent loop — a least-privilege DB account (no write grants for the alias) is the simplest and most reliable option.
 
@@ -153,7 +154,7 @@ The server reads database connection from these environment variables. See `.env
 Recommended secure pattern for "One Application + Multiple Related Databases":
 - Define only the aliases that belong to that logical application (e.g. `APP_MAIN`, `APP_IDENTITY`, `APP_AUDIT`).
 - Set `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY=true` for all production/important databases.
-- Use `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` if you allow any writes.
+- Use `_READ_ONLY=false` plus `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` only on a dedicated writable alias. A whitelist does nothing while `_READ_ONLY=true`.
 - Create one dedicated "AI work" database/alias with very strict whitelist for any write operations the AI needs.
 
 **Per-alias env vars** (all optional; secure defaults applied when omitted):
@@ -165,22 +166,21 @@ Recommended secure pattern for "One Application + Multiple Related Databases":
 - `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING` — full DSN override (URL or ADO form); takes precedence over the per-alias fields above. **Required for SQL Server 2000/2008/2012** instances that only negotiate TLS 1.0, since modern Go runtimes reject that protocol. The proven URL-form workaround is `sqlserver://USER:PASS@HOST:1433?database=DB&encrypt=disable&trustservercertificate=true`.
 - `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY` — `true` (default, safe) / `false`
 - `MSSQL_DYNAMIC_<ALIAS>_WHITELIST_TABLES` — comma-separated allowlist of tables the alias may modify. Enforced **even when `_READ_ONLY=false`**: a writable alias without a whitelist allows no modifications at all (secure default); with a whitelist, modifications require `confirm_operation` first
-- Dynamic-mode extra guards: `execute_procedure` is **blocked on read-only aliases** and requires confirmation on writable ones; a pending `confirm_operation` is **bound to the alias** it was issued for and is cleared on alias switch/disconnect (90-second expiry)
+- Extra guards: `execute_procedure` is **blocked whenever READ_ONLY=true** (classic or dynamic) and requires confirmation on writable dynamic aliases; a pending `confirm_operation` is bound to the alias **and the exact SQL hash**, expires in 90 seconds, and is one-shot. Concatenated batches (with or without `;`) are rejected in restricted contexts.
 
 Full recommended configuration and best practices: see the guide  
 `website/src/content/docs/guias/modo-dinamico-una-aplicacion-varias-bases.md` (and English version).
 
 **Configuration Examples:**
 ```bash
-# Production Azure SQL with AI Whitelist (RECOMMENDED for AI assistants)
+# Production Azure SQL (RECOMMENDED for AI assistants)
 MSSQL_SERVER=prod-server.database.windows.net
 MSSQL_DATABASE=ProductionDB
 MSSQL_USER=prod_user@prod-server
 MSSQL_PASSWORD=your_password
 DEVELOPER_MODE=false
 MSSQL_READ_ONLY=true
-MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
-# This allows AI to read all data but only modify temp_ai and v_temp_ia
+# Absolute read-only: SELECT and schema introspection only. Whitelist cannot enable writes.
 
 # Production with Full Read-Only (No modifications)
 MSSQL_SERVER=prod-server.database.windows.net
@@ -189,7 +189,7 @@ MSSQL_USER=prod_user@prod-server
 MSSQL_PASSWORD=your_password
 DEVELOPER_MODE=false
 MSSQL_READ_ONLY=true
-# No MSSQL_WHITELIST_TABLES means ALL modifications are blocked
+# Absolute read-only. Do not add a whitelist expecting it to allow writes.
 
 # Local Development (Full Access)
 MSSQL_SERVER=localhost
@@ -225,7 +225,6 @@ MSSQL_DYNAMIC_APP_AIWORK_USER=ai_limited_writer
 MSSQL_DYNAMIC_APP_AIWORK_PASSWORD=...
 MSSQL_DYNAMIC_APP_AIWORK_READ_ONLY=false
 MSSQL_DYNAMIC_APP_AIWORK_WHITELIST_TABLES=ai_temp_tasks,ai_results,ai_audit
-```
 
 # Legacy SQL Server 2000/2008/2012 in dynamic mode
 # These servers only negotiate TLS 1.0, which modern Go refuses. Use the

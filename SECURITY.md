@@ -36,20 +36,25 @@ If you discover a security vulnerability in this project, please report it respo
 ### Scope
 
 The following are in scope:
-- SQL injection bypasses
-- Authentication/authorization flaws
+
+- SQL injection or stacked-statement bypasses
+- Authorization flaws (`READ_ONLY`, whitelist, `confirm_operation`)
 - TLS/encryption weaknesses
-- Connection string credential exposure
+- Connection string or credential exposure in logs or tool results
 - Input validation bypasses
 - Dependency vulnerabilities
 
 ### Security Features
 
-This project implements multiple security layers:
-- Prepared statements (no dynamic SQL)
-- TLS encryption for all production connections
-- Read-only mode with table whitelist
+- Prepared statements (no string-concatenated SQL)
+- TLS fail-closed in production unless `MSSQL_ALLOW_INSECURE_TLS=true`
+- Absolute read-only mode: a table whitelist cannot enable writes while `READ_ONLY=true`
+- Whitelist writes only in an explicitly writable context, with schema-qualified matching
+- Stacked batches rejected in restricted contexts, with or without `;`
+- Administrative procedures limited to `sys`/`dbo` read-only forms
 - Security event logging with credential sanitization
-- Input validation and SQL injection protection
+- CLI read-only by default (`MSSQL_CLI_ALLOW_WRITE` is operator-only)
 
-For details, see [docs/SECURITY_ANALYSIS.md](docs/SECURITY_ANALYSIS.md).
+The Go validators are defense in depth. The real write boundary is a least-privilege SQL login.
+
+Details: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md) and [security docs](https://mcp-go-mssql.scopweb.com/seguridad/resumen/).

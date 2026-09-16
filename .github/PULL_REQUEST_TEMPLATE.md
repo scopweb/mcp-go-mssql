@@ -15,7 +15,7 @@ Brief description of what this PR does.
 Fixes #(issue_number)
 
 ## Changes Made
-- [ ] Updated `main.go` with new functionality
+- [ ] Updated `cmd/mcp-go-mssql` with new functionality
 - [ ] Added/updated environment variables
 - [ ] Updated documentation (README.md, CLAUDE.md)
 - [ ] Added tests or debugging tools
