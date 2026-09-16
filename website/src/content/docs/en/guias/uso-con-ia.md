@@ -9,13 +9,14 @@ MCP-Go-MSSQL is designed so that Claude and other AI assistants can work with pr
 
 ```bash
 MSSQL_READ_ONLY=true
-MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 ```
 
 This configuration allows the AI to:
 - **Read** any table in the database
-- **Write** only to `temp_ai` and `v_temp_ia`
-- All other tables remain protected from modification
+- **Explore schema** with `explore`/`inspect` and read-only admin procedures
+- **Not write, delete, or alter** anything. A whitelist does not change this.
+
+For a writable temporary workspace, use a separate alias or instance with `READ_ONLY=false` and an explicit whitelist.
 
 ## Typical workflow
 
@@ -44,7 +45,7 @@ MSSQL_WHITELIST_TABLES=temp_ai
 
 ## Error protection
 
-The read-only + whitelist mode protects against:
+Absolute read-only mode protects against:
 - Accidental deletion of production data
 - Modification of critical tables
 - SQL injection attempting to access unauthorized tables via JOIN

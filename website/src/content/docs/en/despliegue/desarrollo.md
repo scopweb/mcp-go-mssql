@@ -39,7 +39,7 @@ MSSQL_READ_ONLY=false
 ## Run in development mode
 
 ```bash
-go run main.go
+go run ./cmd/mcp-go-mssql
 ```
 
 In development mode (`DEVELOPER_MODE=true`):

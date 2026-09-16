@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`READ_ONLY=true` is absolute.** A table whitelist can no longer enable `INSERT`/`UPDATE`/`DELETE`/DDL/`MERGE`/`SELECT INTO` or `execute_procedure` while read-only is on. Whitelist writes require an explicitly writable context (`MSSQL_READ_ONLY=false` or `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY=false`) plus a non-empty whitelist. Dynamic writable aliases without a whitelist still permit no modifications.
+- **Stacked SQL batches are rejected in restricted contexts with or without semicolons.** `SELECT 1` followed by `DELETE`, or `EXEC sp_help` followed by `DELETE`, is blocked even when no `;` is present. `GO` batch separators are also rejected. The only multi-statement form still allowed in read-only mode is the existing `SET STATISTICS TIME/IO` diagnostic wrapper around a single read-only base statement.
+- **`SELECT INTO` cannot be hidden with comments.** `SELECT 1 INTO/**/table` is classified as a write.
+- **Administrative procedures are identity- and argument-restricted.** Only `sys`/`dbo` (or unqualified) names from the read-only admin allowlist are accepted. `app.sp_help` is rejected. `sp_spaceused @updateusage=true` (and positional update-usage arguments) is rejected because it can run `DBCC UPDATEUSAGE`.
+- **CLI is read-only by default.** `examples/claude-code/db-connector.go` rejects writes unless the operator sets `MSSQL_CLI_ALLOW_WRITE=true`. Concatenated statements and `SELECT INTO` are also rejected.
+- **Production custom DSNs must set encryption explicitly.** A missing `encrypt=` parameter is a fail-closed TLS violation. URL-form DSNs are no longer mutated by appending ADO timeout fields.
+- **Confirmation is bound to the exact statement.** Dynamic writable modifications require `confirm_operation` for the alias, operation, tables, and SHA-256 of the exact SQL; a pending request is not treated as approval, and an approval is one-shot.
+
+### Added
+
+- `docs/AGENT_CONTRACT.md`: versioned contract for MCP clients, agent harnesses, and this server (session isolation, policy, results, retries).
+- `cmd/mcp-go-mssql/sql_policy.go`: comment-aware stacked-statement detection used by the MCP validators.
+
+### Changed
+
+- **Repository layout:** MCP server sources live in `cmd/mcp-go-mssql/`. Agent contract and audit notes live in `docs/`. Build scripts target `./cmd/mcp-go-mssql`.
+
 ### Added
 
 - 🆕 **Read-only mode: optional `SET STATISTICS TIME/IO` diagnostic wrappers**. The `query_database` tool now accepts the pattern `SET STATISTICS (TIME|IO) (ON|OFF); <single read-only query>; [SET STATISTICS (TIME|IO) (ON|OFF);]` as the **only** multi-statement form allowed in read-only mode. The wrapper is purely observability — it neither reads nor writes user data — and the base statement is itself validated against the existing read-only + whitelist rules (so a wrapper around `DELETE FROM prod` is still rejected). Captured SQL Server informational messages are surfaced in the response via the `sqlexp.ReturnMessage` queue (the connection layer was refactored from `sql.Open("sqlserver", dsn)` to `sql.OpenDB(mssql.NewConnector(dsn))` for this). The new `stats` block in the payload contains `enabled`, `time_on`, `io_on`, `messages` (raw text), and `parsed.cpu_time_ms` / `parsed.elapsed_time_ms` / `parsed.logical_reads` / `parsed.physical_reads` plus per-table breakdown. The wrapper allowlist is closed — `PRINT`, `RAISERROR`, and any other multi-statement patterns remain rejected. The `query_database` response shape changes from a bare JSON array to `{rows, row_count, truncated, stats}`; the previous `_truncated` sentinel row is replaced by the `truncated` boolean. No new tool is registered.

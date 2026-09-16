@@ -50,6 +50,6 @@ MCP-Go-MSSQL has been designed following recognized security standards and appli
 
 1. Use a **least-privilege** SQL login: broad `SELECT` and `INSERT`/`UPDATE`/`DELETE` only on dedicated tables — this is the primary write boundary (the Go validation is defense in depth)
 2. Run with `MSSQL_READ_ONLY=true` in production
-3. Set `MSSQL_WHITELIST_TABLES` only for AI temporary tables
+3. If a writable workspace is needed, use `READ_ONLY=false` and `MSSQL_WHITELIST_TABLES` only for AI temporary tables. With `READ_ONLY=true` the whitelist does not grant writes.
 4. Monitor security logs periodically
 5. Rotate credentials regularly

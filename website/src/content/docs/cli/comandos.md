@@ -102,7 +102,8 @@ Variables opcionales:
 - `MSSQL_PORT`: Puerto (predeterminado: 1433)
 - `DEVELOPER_MODE`: Modo desarrollo (true/false)
 - `MSSQL_READ_ONLY`: Modo solo lectura (true/false)
-- `MSSQL_WHITELIST_TABLES`: Tablas permitidas en modo solo lectura
+- `MSSQL_WHITELIST_TABLES`: Tablas permitidas para escritura solo si `READ_ONLY=false`
+- `MSSQL_CLI_ALLOW_WRITE`: `true` habilita escrituras en el CLI (por defecto el CLI es solo lectura)
 
 ## Ejemplos de uso
 

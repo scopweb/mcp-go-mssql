@@ -33,7 +33,7 @@ Rejected:
 - More than one base statement (`SET STATISTICS TIME ON; SELECT 1; SELECT 2` → blocked as multi-statement).
 - A non-`SET STATISTICS` token inside the wrapper (`SET STATISTICS TIME ON; PRINT 'x'; SELECT 1` → blocked as multi-statement).
 - Empty statements between the wrapper tokens (`SET STATISTICS TIME ON; ; SELECT 1` → blocked).
-- Whitelist mode applies as usual: `READ_ONLY=true + WHITELIST=temp_ai` still allows `SET STATISTICS TIME ON; DELETE FROM temp_ai;`.
+- A wrapper around a write is rejected when `READ_ONLY=true`, even if the table is whitelisted.
 
 ## Response
 

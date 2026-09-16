@@ -49,7 +49,6 @@ Add this to your `claude_desktop_config.json`:
         "MSSQL_PASSWORD": "my_password",
         "MSSQL_PORT": "1433",
         "MSSQL_READ_ONLY": "true",
-        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia",
         "DEVELOPER_MODE": "false"
       }
     }

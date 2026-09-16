@@ -21,7 +21,7 @@ Todas las credenciales y opciones de configuración se gestionan mediante variab
 | `MSSQL_PORT` | `1433` | Puerto de SQL Server |
 | `DEVELOPER_MODE` | `false` | `true` para desarrollo (TLS relajado, errores detallados) |
 | `MSSQL_READ_ONLY` | `false` | Bloquea operaciones de escritura |
-| `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación en modo read-only. **Coincidencia cualificada por esquema**: un nombre sin esquema se asume en `dbo` (`temp_ai` coincide con `temp_ai`/`dbo.temp_ai`, pero no con `otro_schema.temp_ai`); cualifica explícitamente objetos fuera de `dbo` (p. ej. `app.temp_ai`) |
+| `MSSQL_WHITELIST_TABLES` | _(vacío)_ | Tablas permitidas para modificación **solo cuando `MSSQL_READ_ONLY=false`**. Con `READ_ONLY=true` la whitelist no concede escrituras. **Coincidencia cualificada por esquema**: un nombre sin esquema se asume en `dbo` (`temp_ai` coincide con `temp_ai`/`dbo.temp_ai`, pero no con `otro_schema.temp_ai`); cualifica explícitamente objetos fuera de `dbo` (p. ej. `app.temp_ai`) |
 | `MSSQL_WHITELIST_PROCEDURES` | _(vacío)_ | Lista separada por comas de procedimientos almacenados que la herramienta `execute_procedure` puede ejecutar. Si no se define, `execute_procedure` está completamente deshabilitada |
 | `MSSQL_MAX_QUERY_SIZE` | `1048576` | Tamaño máximo de la entrada SQL en caracteres |
 | `MSSQL_AUTH` | `sql` | Modo de autenticación: `sql`, `integrated`, `windows` (alias de `integrated`). `azure` **no está implementado** — usa `MSSQL_CONNECTION_STRING` para Azure AD |

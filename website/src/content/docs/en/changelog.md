@@ -5,7 +5,16 @@ description: MCP-Go-MSSQL change history
 
 All relevant changes to this project are documented here.
 
-## Latest changes
+## Latest change
+
+### Absolute read-only and stacked SQL batches
+
+- `MSSQL_READ_ONLY=true` no longer allows whitelist writes. Writing requires `READ_ONLY=false` and an explicit whitelist.
+- Concatenated batches with or without `;`, comment-hidden `SELECT INTO`, and non-`sys`/`dbo` or mutating admin procedures are rejected.
+- The CLI is read-only by default (`MSSQL_CLI_ALLOW_WRITE=true` for operators).
+- Agent contract: `docs/AGENT_CONTRACT.md`.
+
+---
 
 ### SQL Server 2008/2012 support and improved diagnostics
 

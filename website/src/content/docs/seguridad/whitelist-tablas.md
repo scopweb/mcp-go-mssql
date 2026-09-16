@@ -3,7 +3,7 @@ title: Whitelist de tablas
 description: Sistema de permisos granulares para control de acceso a tablas
 ---
 
-El sistema de whitelist permite modificar tablas específicas incluso en modo solo lectura, ideal para dar a asistentes de IA un espacio de trabajo temporal.
+El sistema de whitelist permite modificar tablas específicas **solo cuando `READ_ONLY=false`**. Con `READ_ONLY=true` la whitelist no concede escrituras.
 
 ## Problema que resuelve
 
@@ -15,7 +15,7 @@ Cuando se usan asistentes de IA con bases de datos de producción, existe riesgo
 ## Configuración
 
 ```bash
-MSSQL_READ_ONLY=true
+MSSQL_READ_ONLY=false
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 ```
 

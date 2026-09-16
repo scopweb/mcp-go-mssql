@@ -22,8 +22,7 @@ Edit the Claude Desktop configuration file and add the MCP server:
         "MSSQL_PASSWORD": "your_password",
         "MSSQL_PORT": "1433",
         "DEVELOPER_MODE": "false",
-        "MSSQL_READ_ONLY": "true",
-        "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia"
+        "MSSQL_READ_ONLY": "true"
       }
     }
   }
@@ -44,8 +43,7 @@ Edit the Claude Desktop configuration file and add the MCP server:
       "MSSQL_USER": "readonly_user",
       "MSSQL_PASSWORD": "your_password",
       "DEVELOPER_MODE": "false",
-      "MSSQL_READ_ONLY": "true",
-      "MSSQL_WHITELIST_TABLES": "temp_ai,v_temp_ia"
+      "MSSQL_READ_ONLY": "true"
     }
   }
 }

@@ -89,10 +89,12 @@ UPDATE users SET status = 'active'
 
 ## Combining with whitelist
 
-To allow modifications only on specific tables, combine with `MSSQL_WHITELIST_TABLES`:
+`MSSQL_READ_ONLY=true` is **absolute**: no whitelist can enable writes, DDL, `SELECT INTO`, or `execute_procedure`. Concatenated batches (with or without `;`) are also rejected.
+
+To allow controlled writes, turn read-only **off** and set a whitelist:
 
 ```bash
-MSSQL_READ_ONLY=true
+MSSQL_READ_ONLY=false
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 ```
 

@@ -29,7 +29,7 @@ if %errorlevel% neq 0 (
 
 REM Build production version
 echo Building production executable...
-go build -ldflags "-w -s" -o build/mcp-go-mssql.exe
+go build -ldflags "-w -s" -o build/mcp-go-mssql.exe ./cmd/mcp-go-mssql
 if %errorlevel% neq 0 (
     echo Error: Build failed
     pause

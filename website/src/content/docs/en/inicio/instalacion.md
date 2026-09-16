@@ -43,7 +43,7 @@ go build -o mcp-go-mssql
 ### Production build (optimized binary)
 
 ```bash
-go build -ldflags "-w -s" -o mcp-go-mssql-secure
+go build -ldflags "-w -s" -o mcp-go-mssql-secure ./cmd/mcp-go-mssql
 ```
 
 The `-w -s` flags strip debug information from the binary, reducing its size and making reverse engineering harder.

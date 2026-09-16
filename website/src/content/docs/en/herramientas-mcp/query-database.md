@@ -25,9 +25,11 @@ Executes a SQL query against the MSSQL database using prepared statements.
 ## Allowed queries
 
 ### In read mode (`MSSQL_READ_ONLY=true`)
-- `SELECT` — Always allowed
-- `INSERT`, `UPDATE`, `DELETE` — Only on whitelisted tables
-- `EXEC`, `xp_cmdshell` — Always blocked
+- `SELECT` and read-only CTEs — Allowed
+- Explicitly allowlisted schema admin procedures (`sp_help`, `sp_columns`, …) — Allowed only as `sys`/`dbo` with no state change
+- `INSERT`, `UPDATE`, `DELETE`, DDL, `SELECT INTO`, `execute_procedure` — Blocked even with a whitelist
+- Concatenated batches (with or without `;`) — Blocked
+- `xp_cmdshell`, `sp_executesql` — Always blocked
 
 ### In full mode (`MSSQL_READ_ONLY=false`)
 - All standard SQL operations

@@ -89,10 +89,12 @@ UPDATE users SET status = 'active'
 
 ## Combinación con whitelist
 
-Para permitir modificaciones solo en tablas específicas, combina con `MSSQL_WHITELIST_TABLES`:
+`MSSQL_READ_ONLY=true` es **absoluto**: ninguna whitelist habilita escrituras, DDL, `SELECT INTO` ni `execute_procedure`. Los lotes concatenados (con o sin `;`) también se rechazan.
+
+Para permitir escrituras controladas hay que desactivar el modo solo lectura **y** definir una whitelist:
 
 ```bash
-MSSQL_READ_ONLY=true
+MSSQL_READ_ONLY=false
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 ```
 

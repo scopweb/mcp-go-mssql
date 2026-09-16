@@ -44,7 +44,7 @@ MSSQL_ENCRYPT=false
 
 ### "Query blocked: read-only mode"
 
-The query is trying to modify data and `MSSQL_READ_ONLY=true` is active. If you need to modify specific tables, add them to `MSSQL_WHITELIST_TABLES`.
+The query is trying to modify data and `MSSQL_READ_ONLY=true` is active. A whitelist does not enable writes in this mode. Run the SQL yourself or use an explicitly writable context (`READ_ONLY=false` + whitelist).
 
 ### "Table not in whitelist"
 

@@ -28,7 +28,7 @@ This project aims to provide a secure, production-ready Microsoft SQL Server con
 go build -o mcp-go-mssql.exe
 
 # Production build
-go build -ldflags "-w -s" -o mcp-go-mssql-secure.exe
+go build -ldflags "-w -s" -o mcp-go-mssql-secure.exe ./cmd/mcp-go-mssql
 
 # Quick build (Windows)
 build.bat

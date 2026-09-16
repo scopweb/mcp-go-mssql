@@ -3,7 +3,7 @@ title: Table Whitelist
 description: Granular permission system for table access control
 ---
 
-The whitelist system allows modifying specific tables even in read-only mode — ideal for giving AI assistants a temporary workspace.
+The whitelist allows modifying specific tables **only when `READ_ONLY=false`**. With `READ_ONLY=true` the whitelist does not grant writes.
 
 ## Problem it solves
 
@@ -15,7 +15,7 @@ When using AI assistants with production databases, there's a risk of:
 ## Configuration
 
 ```bash
-MSSQL_READ_ONLY=true
+MSSQL_READ_ONLY=false
 MSSQL_WHITELIST_TABLES=temp_ai,v_temp_ia
 ```
 

@@ -43,7 +43,7 @@ go build -o mcp-go-mssql
 ### Compilación de producción (binario optimizado)
 
 ```bash
-go build -ldflags "-w -s" -o mcp-go-mssql-secure
+go build -ldflags "-w -s" -o mcp-go-mssql-secure ./cmd/mcp-go-mssql
 ```
 
 Las flags `-w -s` eliminan información de depuración del binario, reduciendo su tamaño y dificultando la ingeniería inversa.
