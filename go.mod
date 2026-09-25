@@ -3,9 +3,8 @@ module mcp-go-mssql
 go 1.26.5
 
 require (
-	github.com/golang-sql/sqlexp v0.1.0
-	github.com/microsoft/go-mssqldb v1.10.0
-	golang.org/x/mod v0.36.0
+	github.com/golang-sql/sqlexp v0.1.0 // informational messages (SET STATISTICS)
+	github.com/microsoft/go-mssqldb v1.10.0 // SQL Server driver
 )
 
 require (
