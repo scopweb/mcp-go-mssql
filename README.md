@@ -15,6 +15,8 @@ Full documentation: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com)
 
 Built for environments where the security boundary matters: absolute read-only mode, a table whitelist only when writes are explicitly enabled, prepared statements, TLS fail-closed in production, and an explicit opt-in for SQL Server 2008/2012 (TLS 1.0).
 
+These controls do not replace a least-privilege SQL login. They are an extra layer you can turn on quickly, without changing that database user.
+
 Agent and harness contract: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
 
 ## Install
