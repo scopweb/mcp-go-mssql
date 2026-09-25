@@ -1,6 +1,6 @@
 {
   "name": "mcp-go-mssql",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Secure Microsoft SQL Server MCP server for Claude Desktop. Production-ready with TLS encryption, SQL injection protection, and support for SQL Server 2008-2022 + Azure SQL Database.",
   "author": {
     "name": "scopweb",

@@ -1,3 +1,5 @@
+// Command db-connector is a terminal client for Microsoft SQL Server.
+// Writes stay disabled unless the operator sets MSSQL_CLI_ALLOW_WRITE=true.
 package main
 
 import (

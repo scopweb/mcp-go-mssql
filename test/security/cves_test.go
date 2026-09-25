@@ -18,11 +18,11 @@
 package security
 
 import (
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
-
-	"golang.org/x/mod/semver"
 )
 
 // CVERecord represents a known CVE vulnerability
@@ -70,7 +70,12 @@ func TestKnownCVEs(t *testing.T) {
 		actual := ensureVPrefix(actualVersion)
 		minimum := ensureVPrefix(cve.MinSafeVersion)
 
-		if semver.Compare(actual, minimum) < 0 {
+		cmp, cmpErr := compareSemver(actual, minimum)
+		if cmpErr != nil {
+			t.Errorf("[%s] %s: %v", cve.CVEId, cve.PackageName, cmpErr)
+			continue
+		}
+		if cmp < 0 {
 			t.Errorf("[%s] %s %s is below minimum safe version %s (%s: %s)",
 				cve.CVEId, cve.PackageName, actualVersion, cve.MinSafeVersion,
 				cve.Severity, cve.Description)
@@ -98,6 +103,80 @@ func ensureVPrefix(version string) string {
 		return "v" + version
 	}
 	return version
+}
+
+// compareSemver reports whether a is less than, equal to, or greater than b.
+// It accepts the versions recorded in go.mod: vMAJOR.MINOR.PATCH, with an
+// optional pre-release suffix. A pre-release is older than its release.
+// Unparsable input returns an error so the CVE guard fails closed.
+func compareSemver(a, b string) (int, error) {
+	an, aPre, err := parseSemver(a)
+	if err != nil {
+		return 0, err
+	}
+	bn, bPre, err := parseSemver(b)
+	if err != nil {
+		return 0, err
+	}
+	for i := 0; i < 3; i++ {
+		if an[i] < bn[i] {
+			return -1, nil
+		}
+		if an[i] > bn[i] {
+			return 1, nil
+		}
+	}
+	if aPre != bPre {
+		if aPre {
+			return -1, nil
+		}
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func parseSemver(v string) ([3]int, bool, error) {
+	v = strings.TrimPrefix(v, "v")
+	pre := false
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		pre = v[i] == '-'
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 || len(parts) > 3 {
+		return [3]int{}, false, fmt.Errorf("unsupported version %q", v)
+	}
+	var out [3]int
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return [3]int{}, false, fmt.Errorf("unsupported version component %q", p)
+		}
+		out[i] = n
+	}
+	return out, pre, nil
+}
+
+func TestCompareSemver(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"v0.53.0", "v0.31.0", 1},
+		{"v0.18.0", "v0.18.0", 0},
+		{"v0.17.0", "v0.18.0", -1},
+		{"v0.31.0-rc.1", "v0.31.0", -1},
+		{"v1.2.3+meta", "v1.2.3", 0},
+	}
+	for _, tc := range cases {
+		got, err := compareSemver(tc.a, tc.b)
+		if err != nil {
+			t.Fatalf("compareSemver(%s, %s): %v", tc.a, tc.b, err)
+		}
+		if got != tc.want {
+			t.Errorf("compareSemver(%s, %s) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
 }
 
 // TestSQLInjectionVulnerability checks for SQL injection vulnerabilities

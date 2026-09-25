@@ -1,39 +1,41 @@
 # MCP Go MSSQL
 
-MCP server y CLI en Go para dar acceso seguro a Microsoft SQL Server desde Claude Desktop, Claude Code y otros clientes MCP.
+Secure MCP server and CLI in Go for Microsoft SQL Server. It gives Claude Desktop, Claude Code, and other MCP clients a hardened stdio bridge to the database.
 
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Documentación completa: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com)
+Full documentation: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com)
 
-## Qué hace
+## What it does
 
-- Servidor MCP (stdio) con 6 herramientas base: `query_database`, `get_database_info`, `explore`, `inspect`, `execute_procedure`, `explain_query`.
-- Modo dinámico opcional para varias bases de datos con un solo servidor (añade `dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list`, `confirm_operation`).
-- CLI independiente para uso directo desde terminal (`examples/claude-code/db-connector.go`).
+- Stdio MCP server with six tools: `query_database`, `get_database_info`, `explore`, `inspect`, `execute_procedure`, `explain_query`.
+- Optional dynamic mode for several related databases in one process (`dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list`, `confirm_operation`).
+- Standalone CLI for terminal use (`examples/claude-code/db-connector.go`).
 
-Pensado para entornos donde la seguridad importa: modo solo lectura absoluto, whitelist solo en contextos explícitamente escribibles, prepared statements, TLS fail-closed en producción y soporte explícito para SQL Server 2008/2012 (TLS 1.0).
+Built for environments where the security boundary matters: absolute read-only mode, a table whitelist only when writes are explicitly enabled, prepared statements, TLS fail-closed in production, and an explicit opt-in for SQL Server 2008/2012 (TLS 1.0).
 
-Contrato para agentes y arneses: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
+Agent and harness contract: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
 
-## Instalación
+## Install
 
-Descarga el binario de la [última release](https://github.com/scopweb/mcp-go-mssql/releases/latest) o compila:
+Download the [latest release](https://github.com/scopweb/mcp-go-mssql/releases/latest) or build:
 
 ```bash
-go build -ldflags "-w -s" -o mcp-go-mssql.exe ./cmd/mcp-go-mssql
+go build -ldflags "-w -s" -o mcp-go-mssql ./cmd/mcp-go-mssql
 ```
 
-Requiere Go 1.26+.
+Requires Go 1.26+.
 
-## Configuración (Claude Desktop)
+## Claude Desktop
+
+Point `command` at the binary. Do not commit real credentials.
 
 ```json
 {
   "mcpServers": {
     "mssql": {
-      "command": "C:\\MCPs\\mcp-go-mssql.exe",
+      "command": "/absolute/path/to/mcp-go-mssql",
       "args": [],
       "env": {
         "MSSQL_SERVER": "your-server.database.windows.net",
@@ -48,37 +50,63 @@ Requiere Go 1.26+.
 }
 ```
 
-Con `MSSQL_READ_ONLY=true` el agente solo puede realizar lecturas y consultas administrativas explícitamente permitidas. Ninguna whitelist puede habilitar escritura en este modo. Para permitir escrituras controladas, configura `MSSQL_READ_ONLY=false` y una whitelist explícita.
+With `MSSQL_READ_ONLY=true` the agent can only read and run explicitly allowed administrative introspection. No whitelist can enable writes in that mode. For controlled writes, set `MSSQL_READ_ONLY=false` and an explicit `MSSQL_WHITELIST_TABLES` list.
 
-Variables principales:
-
-| Variable | Descripción |
+| Variable | Description |
 |----------|-------------|
-| `MSSQL_SERVER` / `MSSQL_PORT` | Host y puerto (1433 por defecto) |
-| `MSSQL_DATABASE` | Base de datos (opcional con auth integrada) |
-| `MSSQL_USER` / `MSSQL_PASSWORD` | Credenciales SQL |
-| `MSSQL_AUTH` | `sql` (defecto), `integrated`/`windows` (SSPI, sin contraseña) |
-| `MSSQL_CONNECTION_STRING` | DSN completo; anula el resto de variables `MSSQL_*` |
-| `DEVELOPER_MODE` | `false` = producción (TLS estricto, errores genéricos) |
-| `MSSQL_READ_ONLY` / `MSSQL_WHITELIST_TABLES` | Solo lectura absoluto / whitelist de escritura (solo si `READ_ONLY=false`) |
-| `MSSQL_WHITELIST_PROCEDURES` | Procedimientos que puede ejecutar `execute_procedure` |
-| `MSSQL_ALLOW_INSECURE_TLS` | Permite TLS inseguro en producción (solo servidores legacy) |
+| `MSSQL_SERVER` / `MSSQL_PORT` | Host and port (default 1433) |
+| `MSSQL_DATABASE` | Database (optional with integrated auth) |
+| `MSSQL_USER` / `MSSQL_PASSWORD` | SQL authentication credentials |
+| `MSSQL_AUTH` | `sql` (default), `integrated` / `windows` (SSPI, no password) |
+| `MSSQL_CONNECTION_STRING` | Full DSN; overrides the other `MSSQL_*` fields |
+| `DEVELOPER_MODE` | `false` = production (strict TLS, generic errors) |
+| `MSSQL_READ_ONLY` / `MSSQL_WHITELIST_TABLES` | Absolute read-only / write whitelist (whitelist applies only when `READ_ONLY=false`) |
+| `MSSQL_WHITELIST_PROCEDURES` | Procedures `execute_procedure` may run |
+| `MSSQL_ALLOW_INSECURE_TLS` | Allow insecure TLS in production (legacy servers only) |
 
-La lista completa está en [.env.example](.env.example) y en la [documentación](https://mcp-go-mssql.scopweb.com/configuracion/variables-entorno).
+The full list is in [.env.example](.env.example) and in the [environment variable docs](https://mcp-go-mssql.scopweb.com/configuracion/variables-entorno).
 
-## SQL Server legacy (2008/2012, TLS 1.0)
+## OpenCode
 
-El runtime de Go actual no negocia TLS 1.0. Para estos servidores usa un connection string en formato URL:
+Add this to `opencode.json` in the project, or to `~/.config/opencode/opencode.json`. OpenCode uses `mcp`, not `mcpServers`. `command` is an array and variables go in `environment`.
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mssql": {
+      "type": "local",
+      "command": ["/absolute/path/to/mcp-go-mssql"],
+      "enabled": true,
+      "timeout": 30000,
+      "environment": {
+        "MSSQL_SERVER": "your-server.database.windows.net",
+        "MSSQL_DATABASE": "YourDatabase",
+        "MSSQL_USER": "ai_user",
+        "MSSQL_PASSWORD": "{env:MSSQL_PASSWORD}",
+        "DEVELOPER_MODE": "false",
+        "MSSQL_READ_ONLY": "true"
+      }
+    }
+  }
+}
+```
+
+On Windows, `command` is `["C:\\path\\to\\mcp-go-mssql.exe"]`. `{env:MSSQL_PASSWORD}` reads the password from the environment so it is not stored in the config file. `timeout` is milliseconds for the first tool listing; the default is 5000, which is often too short for a cold start. Check the server with `opencode mcp list`.
+
+## Legacy SQL Server (2008/2012, TLS 1.0)
+
+Current Go runtimes do not negotiate TLS 1.0. Use a URL-form connection string:
 
 ```ini
 MSSQL_CONNECTION_STRING=sqlserver://user:password@legacy-server:1433?database=LegacyDB&encrypt=disable&trustservercertificate=true
 ```
 
-En producción (`DEVELOPER_MODE=false`) esto falla al arrancar por diseño (fail-closed); hay que confirmarlo explícitamente con `MSSQL_ALLOW_INSECURE_TLS=true`, que deja un `WARN` auditable en el log de cada conexión.
+In production (`DEVELOPER_MODE=false`) this refuses to start by design. Confirm it with `MSSQL_ALLOW_INSECURE_TLS=true`. Every affected connection then logs an auditable `WARN`.
 
-## Modo dinámico (varias bases de datos)
+## Dynamic mode
 
-Si necesitas acceder a varias bases de datos relacionadas con una sola instancia del servidor:
+One process can reach several related databases. Each alias is read-only unless you say otherwise.
 
 ```ini
 MSSQL_DYNAMIC_MODE=true
@@ -86,64 +114,62 @@ MSSQL_DYNAMIC_APP_MAIN_SERVER=sql01.local
 MSSQL_DYNAMIC_APP_MAIN_DATABASE=AppDB
 MSSQL_DYNAMIC_APP_MAIN_USER=ai_reader
 MSSQL_DYNAMIC_APP_MAIN_PASSWORD=...
-# Cada alias es read-only por defecto
 ```
 
-Reglas importantes:
+- Every alias defaults to `READ_ONLY=true`.
+- A writable alias (`_READ_ONLY=false`) with no `_WHITELIST_TABLES` cannot modify anything.
+- The whitelist applies only when `_READ_ONLY=false`. Modifications require `confirm_operation` first.
+- Do not set a global `MSSQL_READ_ONLY=false` in dynamic mode.
+- Run one stdio process per agent or session. The active alias belongs to the process and is not isolation between agents.
 
-- Cada alias nace en `READ_ONLY=true`.
-- Un alias escribible (`_READ_ONLY=false`) sin `_WHITELIST_TABLES` no permite modificar nada.
-- La whitelist solo se aplica con `_READ_ONLY=false`; las modificaciones piden `confirm_operation` primero.
-- No uses `MSSQL_READ_ONLY=false` global en modo dinámico.
-- Ejecuta una instancia `stdio` por agente o sesión; el alias activo pertenece al proceso y no es un límite de aislamiento entre agentes.
+Guide: [dynamic mode](https://mcp-go-mssql.scopweb.com/guias/modo-dinamico-una-aplicacion-varias-bases).
 
-Guía completa: [modo dinámico](https://mcp-go-mssql.scopweb.com/guias/modo-dinamico-una-aplicacion-varias-bases).
-
-## CLI (Claude Code / terminal)
+## CLI
 
 ```bash
-go run examples/claude-code/db-connector.go test                    # probar conexión
-go run examples/claude-code/db-connector.go tables                  # listar tablas
-go run examples/claude-code/db-connector.go describe MiTabla        # estructura
-go run examples/claude-code/db-connector.go query "SELECT TOP 10 * FROM MiTabla"
+go run examples/claude-code/db-connector.go test
+go run examples/claude-code/db-connector.go tables
+go run examples/claude-code/db-connector.go describe MyTable
+go run examples/claude-code/db-connector.go query "SELECT TOP 10 * FROM MyTable"
 ```
 
-El CLI rechaza escrituras por defecto. Solo un operador puede habilitarlas con
-`MSSQL_CLI_ALLOW_WRITE=true`; para agentes se recomienda el servidor MCP y su
-política de whitelist.
+The CLI rejects writes unless an operator sets `MSSQL_CLI_ALLOW_WRITE=true`. Agents should use the MCP server and its whitelist policy.
 
 ## Troubleshooting
 
-| Error | Causa | Solución |
-|-------|-------|----------|
-| `certificate signed by unknown authority` | Certificado autofirmado | `DEVELOPER_MODE=true` (solo dev) |
-| `protocol version 301` / TLS handshake | Servidor con TLS 1.0 (2008/2012) | Connection string URL con `encrypt=disable` (ver arriba) |
-| `Refusing to start... MSSQL_ALLOW_INSECURE_TLS` | TLS inseguro en producción | Corrige el cifrado o confirma con `MSSQL_ALLOW_INSECURE_TLS=true` |
-| `Database not connected` | Variables sin definir | Revisa `.env` (ver `.env.example`) |
-| `read-only mode: only SELECT...` | Modo solo lectura activo | Ejecuta el SQL a mano. La whitelist no habilita escrituras mientras `READ_ONLY=true` |
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `certificate signed by unknown authority` | Self-signed certificate | `DEVELOPER_MODE=true` (development only) |
+| `protocol version 301` / TLS handshake | TLS 1.0 server (2008/2012) | URL connection string with `encrypt=disable` (see above) |
+| `Refusing to start... MSSQL_ALLOW_INSECURE_TLS` | Insecure TLS in production | Fix encryption, or opt in with `MSSQL_ALLOW_INSECURE_TLS=true` |
+| `Database not connected` | Missing variables | Check `.env` against `.env.example` |
+| `read-only mode: only SELECT...` | Read-only is on | Run the SQL yourself. A whitelist does not enable writes while `READ_ONLY=true` |
 
-Probar la conexión sin levantar el servidor: `go run test/test-connection.go`.
+Connection check without starting the server: `go run test/test-connection.go`.
 
-## Estructura del repo
+## Layout
 
 ```
-cmd/mcp-go-mssql/            servidor MCP (package main)
-docs/                        contrato de agentes y notas de auditoría
-examples/claude-code/        CLI (db-connector.go)
-test/                        utilidad de test de conexión
-scripts/                     scripts de build y diagnóstico
-website/                     documentación (Astro/Starlight)
-config/                      plantillas de configuración MCP
-.env.example                 plantilla de variables
+cmd/mcp-go-mssql/       MCP server
+docs/                   agent contract
+examples/claude-code/   CLI
+test/                   connection check and security tests
+scripts/                build and diagnostic scripts
+website/                documentation site (Astro Starlight)
+config/                 MCP config templates
+.env.example            environment template
 ```
 
-## Notas de seguridad
+## Security
 
-- La whitelist y el modo read-only son defensa en profundidad; el control real de escritura debe estar en la base de datos (login con mínimos privilegios).
-- No subas `.env` ni credenciales al repo. Solo `.env.example` y `config/config.example.json`.
-- Política de seguridad y reporte de vulnerabilidades: [SECURITY.md](SECURITY.md).
-- Contrato de agentes: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
+The whitelist and read-only guard are defense in depth. The control you can rely on is a least-privilege SQL login. Do not commit `.env` or real credentials. Report vulnerabilities via [SECURITY.md](SECURITY.md).
 
-## Licencia
+## License
 
-MIT — ver [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
+
+## Español
+
+Documentación en español: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com).
+
+Servidor MCP y CLI en Go para Microsoft SQL Server. El modo por defecto es solo lectura absoluto: ninguna whitelist habilita escrituras mientras `MSSQL_READ_ONLY=true`. La instalación, las variables y el modo dinámico están en el sitio de documentación.
