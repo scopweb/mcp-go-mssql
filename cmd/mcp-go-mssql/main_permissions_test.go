@@ -312,6 +312,28 @@ func TestExtractOperation(t *testing.T) {
 			query:    "-- This is a comment\nUPDATE temp_ai SET col = 'value'",
 			expected: "UPDATE",
 		},
+		// Regression: CTE + column whose name CONTAINS a keyword must stay a SELECT
+		// (substring match used to report UPDATE and block it in read-only mode).
+		{
+			name:     "WITH CTE selecting column containing Update",
+			query:    "WITH ato AS (SELECT PedidoID, MAX(o.DataUltimUpdate) AS MaxDataUpdate FROM Observacions o GROUP BY PedidoID) SELECT * FROM ato",
+			expected: "SELECT",
+		},
+		{
+			name:     "WITH CTE selecting bracketed column containing Update",
+			query:    "WITH x AS (SELECT [IDUsuariUltimUpdate] FROM t) SELECT * FROM x",
+			expected: "SELECT",
+		},
+		{
+			name:     "WITH CTE followed by DELETE (whole word still detected)",
+			query:    "WITH cte AS (SELECT id FROM users) DELETE FROM temp_ai WHERE id IN (SELECT id FROM cte)",
+			expected: "DELETE",
+		},
+		{
+			name:     "WITH CTE lowercase update still detected",
+			query:    "WITH cte AS (SELECT id FROM users) update temp_ai SET col = 1",
+			expected: "UPDATE",
+		},
 	}
 
 	for _, tt := range tests {

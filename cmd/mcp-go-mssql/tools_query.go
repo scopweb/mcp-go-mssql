@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -239,7 +241,7 @@ func (s *MCPMSSQLServer) toolExplainQuery(id interface{}, params CallToolParams)
 
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
-		_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF") // #nosec G104 - best-effort cleanup
+		resetShowplanOrDiscard(ctx, conn)
 		planErrMsg := "Error getting execution plan"
 		if s.devMode {
 			planErrMsg += ": " + err.Error()
@@ -253,16 +255,28 @@ func (s *MCPMSSQLServer) toolExplainQuery(id interface{}, params CallToolParams)
 			},
 		}
 	}
-	defer rows.Close()
 
+	// SHOWPLAN_TEXT returns TWO result sets per statement: first the statement text, then
+	// the plan. Read ALL of them: reading only the first returned the caller's own SQL,
+	// and leaving the rest unread made the next command on this connection (SHOWPLAN OFF)
+	// run against a half-consumed TDS stream - the likely cause of the server hang.
 	var planLines []string
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err == nil {
-			planLines = append(planLines, line)
+	for {
+		for rows.Next() {
+			var line sql.NullString
+			if err := rows.Scan(&line); err == nil && line.Valid {
+				planLines = append(planLines, line.String)
+			}
+		}
+		if !rows.NextResultSet() {
+			break
 		}
 	}
-	_, _ = conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF") // #nosec G104 - best-effort cleanup
+	// Close explicitly BEFORE issuing another command on the same connection
+	// (a deferred Close ran only after SHOWPLAN OFF).
+	_ = rows.Close()
+
+	resetShowplanOrDiscard(ctx, conn)
 
 	if len(planLines) == 0 {
 		planLines = []string{"(no plan returned — query may be too simple or unsupported)"}
@@ -284,4 +298,16 @@ func (s *MCPMSSQLServer) toolExplainQuery(id interface{}, params CallToolParams)
 	// === Dynamic multi-connection tools (only reachable when s.isDynamic) ===
 	// When !s.isDynamic these cases are unreachable because the tools are not
 	// advertised in tools/list, but we keep cheap runtime guards for safety.
+}
+
+// resetShowplanOrDiscard turns SHOWPLAN_TEXT off on a dedicated connection before it
+// goes back to the pool. If that fails (expired ctx, broken stream...) the connection is
+// DISCARDED instead: a pooled connection left in SHOWPLAN mode would make a later
+// query_database return an execution plan instead of data, silently.
+func resetShowplanOrDiscard(ctx context.Context, conn *sql.Conn) {
+	if _, err := conn.ExecContext(ctx, "SET SHOWPLAN_TEXT OFF"); err != nil {
+		// Returning driver.ErrBadConn from Raw makes database/sql close the connection
+		// on conn.Close() instead of returning it to the pool.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
 }
