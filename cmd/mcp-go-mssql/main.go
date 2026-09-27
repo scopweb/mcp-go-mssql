@@ -324,7 +324,8 @@ func main() {
 		secLogger.Printf("Processing request: method=%s", req.Method)
 		secLogger.Debugf("Request body: %s", secLogger.sanitizeForLogging(line))
 
-		response := server.handleRequest(req)
+		// Bounded: a handler that never returns must not stall the loop (see handler_deadline.go)
+		response := server.handleWithDeadline(req)
 
 		// Only send response if one is needed (not for notifications)
 		if response != nil {

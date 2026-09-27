@@ -275,17 +275,22 @@ func (s *MCPMSSQLServer) extractOperation(query string) string {
 		}
 	}
 
-	// If WITH is found, check if there's a modify operation after the CTE
+	// If WITH is found, check if there's a modify operation after the CTE.
+	// Whole-word match: a substring search flagged any CTE touching a column such as
+	// DataUltimUpdate / IDUsuariUltimUpdate as UPDATE (false positive that blocked plain
+	// SELECTs in read-only mode). A keyword inside a string literal still matches, which
+	// errs on the safe side.
 	if strings.HasPrefix(queryUpper, "WITH") {
-		for _, op := range modifyOps {
-			if strings.Contains(queryUpper, op) {
-				return op
-			}
+		if m := cteModifyKeywordRe.FindString(queryUpper); m != "" {
+			return strings.ToUpper(m)
 		}
 	}
 
 	return "SELECT" // Default to SELECT for read operations
 }
+
+// cteModifyKeywordRe detects a modifying statement after a CTE as a WHOLE WORD.
+var cteModifyKeywordRe = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|MERGE)\b`)
 
 // validateTablePermissions validates that all tables in a modify operation are whitelisted
 func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
