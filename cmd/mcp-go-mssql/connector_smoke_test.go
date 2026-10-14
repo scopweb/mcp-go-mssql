@@ -10,18 +10,18 @@ import (
 )
 
 // TestConnectorAPICompiles is a compile-time assertion that the
-// go-mssqldb v1.10.0 + sqlexp v0.1.0 APIs the connection refactor
+// go-mssqldb + sqlexp APIs the connection refactor
 // depends on still exist. If a future driver version removes or
 // renames them, this test breaks at compile time before the
 // production code does.
 func TestConnectorAPICompiles(t *testing.T) {
 	// mssql.NewConnector signature
-	var _ func(string) (*mssql.Connector, error) = mssql.NewConnector
+	var _ func(string) (*mssql.Connector, error) = mssql.NewConnector //nolint:staticcheck // Explicit type asserts the API signature.
 	// sql.OpenDB takes a driver.Connector; confirm mssql.Connector
 	// satisfies the interface by assigning nil to it.
 	var _ driverConnector = (*mssql.Connector)(nil)
 	// sqlexp.ReturnMessage + helpers
-	var rm *sqlexp.ReturnMessage = &sqlexp.ReturnMessage{}
+	rm := &sqlexp.ReturnMessage{}
 	sqlexp.ReturnMessageInit(rm)
 	var _ sqlexp.MsgNotice
 	var _ sqlexp.MsgNextResultSet

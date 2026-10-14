@@ -12,8 +12,16 @@ import (
 // toolGetDatabaseInfo handles the get_database_info tool.
 func (s *MCPMSSQLServer) toolGetDatabaseInfo(id interface{}, params CallToolParams) *MCPResponse {
 	var info strings.Builder
+	if s.isDynamic {
+		fmt.Fprintf(&info, "MCP Server Process ID: %d\n", os.Getpid())
+		info.WriteString("Dynamic connection lifetime: this server process. The selected alias persists across tool calls and turns, but not across process restarts.\n")
+	}
 
-	if s.getDB() == nil {
+	if s.getDB() == nil && s.isDynamic {
+		info.WriteString("Database Status: DISCONNECTED\n\n")
+		info.WriteString("No active dynamic database connection in this process. Use dynamic_available to list configured aliases, then dynamic_connect with the desired alias.\n")
+		info.WriteString("If an alias was previously connected, check whether the MCP host restarted/replaced the server process or dynamic_disconnect was called. Pool idle/lifetime limits do not clear the selected alias.\n")
+	} else if s.getDB() == nil {
 		info.WriteString("Database Status: DISCONNECTED\n\n")
 
 		// Show current configuration so Claude can diagnose

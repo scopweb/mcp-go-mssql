@@ -5,7 +5,7 @@ description: Development environment setup for MCP-Go-MSSQL
 
 ## Requirements
 
-- Go 1.26.0 or later
+- Go 1.27.2 or later
 - Microsoft SQL Server (local or remote)
 - Git
 
