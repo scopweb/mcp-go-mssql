@@ -77,7 +77,7 @@ booleano `truncated`.
 ## Notas
 
 - El envoltorio se captura a través de la cola `sqlexp.ReturnMessage`
-  expuesta por `go-mssqldb` v1.10.0; la capa de conexión se refactorizó
+  expuesta por `go-mssqldb` v1.11.2; la capa de conexión se refactorizó
   de `sql.Open("sqlserver", dsn)` a
   `sql.OpenDB(mssql.NewConnector(dsn))` para que esto funcione.
 - La herramienta CLI (`examples/claude-code/db-connector.go`) no se ve afectada

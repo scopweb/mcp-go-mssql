@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/microsoft/go-mssqldb/msdsn"
 )
 
 // Connection-string construction and the production TLS fail-closed check.
@@ -36,23 +38,23 @@ func insecureTLSExplicitlyAllowed() bool {
 // permitted silently in production: encryption disabled, certificate
 // validation disabled, or an implicit encryption setting. Driver defaults vary
 // by DSN form and version, so production must never rely on an omitted value.
-func productionTLSViolation(connStrLower string) string {
-	// Collapse all whitespace before the substring checks so ADO-style
-	// variants like "encrypt = false" or "trustservercertificate = true"
-	// cannot evade detection. The compacted form is used ONLY for
-	// detection; the original connection string is never modified.
-	compact := strings.Join(strings.Fields(connStrLower), "")
-	if !strings.Contains(compact, "encrypt=") {
+func productionTLSViolation(connStr string) string {
+	// Use the driver's parser so URL escaping, quoted/braced values and
+	// keyword synonyms have exactly the same meaning at validation and dial.
+	// Preserve case: passwords and certificate paths may be case-sensitive.
+	cfg, err := msdsn.Parse(connStr)
+	if err != nil {
+		// Parser errors may contain DSN values; do not expose them.
+		return "connection string could not be validated"
+	}
+	if _, ok := cfg.Parameters[msdsn.Encrypt]; !ok {
 		return "encryption is not explicitly enabled (missing encrypt=true or encrypt=strict)"
 	}
 
-	if strings.Contains(compact, "encrypt=false") || strings.Contains(compact, "encrypt=disable") ||
-		strings.Contains(compact, "encrypt=no") || strings.Contains(compact, "encrypt=0") {
+	if cfg.Encryption != msdsn.EncryptionRequired && cfg.Encryption != msdsn.EncryptionStrict {
 		return "encryption is disabled (encrypt=false)"
 	}
-	if strings.Contains(compact, "trustservercertificate=true") ||
-		strings.Contains(compact, "trustservercertificate=yes") ||
-		strings.Contains(compact, "trustservercertificate=1") {
+	if cfg.TLSConfig == nil || cfg.TLSConfig.InsecureSkipVerify {
 		return "server certificate validation is disabled (trustservercertificate=true)"
 	}
 	return ""
@@ -64,8 +66,8 @@ func productionTLSViolation(connStrLower string) string {
 // auditable warning so the intentional legacy exception stays visible in the
 // logs. In development mode this must not be called (callers gate on
 // isProduction).
-func enforceProductionTLS(label, connStrLower string) error {
-	violation := productionTLSViolation(connStrLower)
+func enforceProductionTLS(label, connStr string) error {
+	violation := productionTLSViolation(connStr)
 	if violation == "" {
 		return nil
 	}
@@ -79,12 +81,11 @@ func enforceProductionTLS(label, connStrLower string) error {
 func buildSecureConnectionString() (string, error) {
 	// Check for custom connection string first
 	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
-		connStrLower := strings.ToLower(customConnStr)
 		isProduction := strings.ToLower(os.Getenv("DEVELOPER_MODE")) != "true"
 
 		if isProduction {
 			// Fail closed on insecure TLS in production (M2).
-			if err := enforceProductionTLS("MSSQL_CONNECTION_STRING", connStrLower); err != nil {
+			if err := enforceProductionTLS("MSSQL_CONNECTION_STRING", customConnStr); err != nil {
 				return "", err
 			}
 		}
@@ -203,12 +204,11 @@ func buildAliasConnectionString(alias *DynamicAlias, devMode bool, aliasName str
 	// Priority 1: full override per alias (URL or ADO DSN).
 	if alias.ConnectionString != "" {
 		cs := alias.ConnectionString
-		csLower := strings.ToLower(cs)
 		isProduction := !devMode
 
 		if isProduction {
 			// Fail closed on insecure TLS in production (M2).
-			if err := enforceProductionTLS(fmt.Sprintf("dynamic alias '%s' connection string", aliasName), csLower); err != nil {
+			if err := enforceProductionTLS(fmt.Sprintf("dynamic alias '%s' connection string", aliasName), cs); err != nil {
 				return "", err
 			}
 		}

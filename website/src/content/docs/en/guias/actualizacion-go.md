@@ -5,7 +5,7 @@ description: Guide for upgrading the Go version in MCP-Go-MSSQL
 
 ## Required version
 
-MCP-Go-MSSQL requires Go 1.26 (toolchain 1.26.5).
+MCP-Go-MSSQL requires Go 1.27.2 or later. CI reads the version from `go.mod`.
 
 ## Check current version
 
@@ -23,11 +23,11 @@ Download the installer from [go.dev/dl](https://go.dev/dl/) and run the `.msi`.
 
 ```bash
 # Download (adjust version)
-wget https://go.dev/dl/go1.26.5.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
 
 # Install
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.26.5.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
 ```
 
 ### macOS
@@ -46,7 +46,7 @@ go version
 go mod tidy
 
 # Build
-go build
+go build ./...
 
 # Run tests
 go test ./...
@@ -56,4 +56,4 @@ go test ./...
 
 - The `go.mod` file specifies the minimum Go version
 - Dependencies are managed automatically with Go modules
-- The `go-mssqldb` driver is pinned at **v1.10.0**, compatible with Go 1.26+
+- The `go-mssqldb` driver is pinned at **v1.11.2**

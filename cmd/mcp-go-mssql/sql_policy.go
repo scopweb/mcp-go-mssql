@@ -211,6 +211,15 @@ func hasKeywordStackedStatements(query string) bool {
 			previous = kw
 			continue
 		}
+		// UNION ALL is one set operator; an arbitrary ALL must not
+		// exempt a subsequent SELECT from the stacked-statement guard.
+		if kw == "ALL" && previous == "UNION" {
+			previous = "UNION ALL"
+			continue
+		}
+		if kw == "SELECT" && previous == "UNION ALL" {
+			previous = "UNION"
+		}
 		if isKeywordStackedStatement(current, kw, previous) {
 			return true
 		}

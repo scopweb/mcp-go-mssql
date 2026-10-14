@@ -10,6 +10,15 @@ The stdio server is a single security context. Run one server process per
 agent or user session. Do not share a dynamic-mode process between agents:
 the selected alias is process state, not an identity or authorization boundary.
 
+The selected dynamic alias persists across tool calls and conversation turns
+while the same server process is running. Pool idle/lifetime limits recycle
+physical SQL connections, not the selected alias. Explicit `dynamic_disconnect`
+clears it; a new server process starts disconnected and requires `dynamic_connect`
+again. Clients should keep the stdio process alive across turns. If a connection
+appears lost, use `get_database_info` (which includes the process ID in dynamic
+mode) and check host restart/disconnect logs before reconnecting the intended
+alias. The server does not automatically choose or restore an alias on startup.
+
 The client must complete `initialize` and `notifications/initialized` before
 calling tools. Supported MCP protocol versions are `2024-11-05`, `2025-06-18`,
 and `2025-11-25`.
@@ -24,6 +33,8 @@ in depth and never replaces least-privilege grants in SQL Server.
   absolute: a table whitelist cannot override it.
 - Concatenated batches are rejected in restricted contexts, with or without
   semicolons. Comments cannot hide `SELECT INTO` or extra statements.
+  Read-only set queries such as `SELECT ... UNION ALL SELECT ...` are single
+  statements and are allowed.
 - Administrative procedures are limited to `sys`/`dbo` names and read-only
   arguments. `sp_spaceused @updateusage=true` is not treated as a read.
 - A table whitelist permits modifications only in an explicitly writable

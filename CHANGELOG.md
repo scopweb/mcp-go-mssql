@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Dependency refresh (2026-10-14):** require Go 1.27.2 (fixes GO-2026-6607), upgrade `go-mssqldb` to 1.11.2, `decimal` to 1.5.0, `x/crypto` to 0.58.0 and `x/text` to 0.43.0. Upgrade documentation dependencies to Astro 7.3.8, Starlight 0.42.6 and Sharp 0.35.5; pin the vulnerable nested CSS parser to 7.1.6 with a scoped override.
+- **Validate production TLS using the driver's DSN parser.** Quoted/braced and URL-encoded values, boolean synonyms and `encrypt=optional` can no longer bypass the check. DSNs are parsed without lowercasing credentials or certificate paths, and parse errors returned by the guard do not expose DSN values.
 - **`READ_ONLY=true` is absolute.** A table whitelist can no longer enable `INSERT`/`UPDATE`/`DELETE`/DDL/`MERGE`/`SELECT INTO` or `execute_procedure` while read-only is on. Whitelist writes require an explicitly writable context (`MSSQL_READ_ONLY=false` or `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY=false`) plus a non-empty whitelist. Dynamic writable aliases without a whitelist still permit no modifications.
 - **Stacked SQL batches are rejected in restricted contexts with or without semicolons.** `SELECT 1` followed by `DELETE`, or `EXEC sp_help` followed by `DELETE`, is blocked even when no `;` is present. `GO` batch separators are also rejected. The only multi-statement form still allowed in read-only mode is the existing `SET STATISTICS TIME/IO` diagnostic wrapper around a single read-only base statement.
 - **`SELECT INTO` cannot be hidden with comments.** `SELECT 1 INTO/**/table` is classified as a write.
@@ -21,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs/AGENT_CONTRACT.md`: versioned contract for MCP clients, agent harnesses, and this server (session isolation, policy, results, retries).
 - `cmd/mcp-go-mssql/sql_policy.go`: comment-aware stacked-statement detection used by the MCP validators.
+
+### Changed
+
+- CI reads its Go version from `go.mod`; golangci-lint is updated to 2.14.0. Installation guides now require Go 1.27.2+.
+- Dynamic `get_database_info` reports the process ID and explains process-local alias lifetime, with actionable disconnected diagnostics.
+
+### Fixed
+
+- Read-only `SELECT ... UNION ALL SELECT ...` no longer triggers the multiple-statement detector. Regression tests retain rejection of stacked statements and `SELECT INTO`.
 
 ### Changed
 

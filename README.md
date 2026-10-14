@@ -2,7 +2,7 @@
 
 Secure MCP server and CLI in Go for Microsoft SQL Server. It gives Claude Desktop, Claude Code, and other MCP clients a hardened stdio bridge to the database.
 
-[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.27.2+-00ADD8?logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Full documentation: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com)
@@ -27,7 +27,7 @@ Download the [latest release](https://github.com/scopweb/mcp-go-mssql/releases/l
 go build -ldflags "-w -s" -o mcp-go-mssql ./cmd/mcp-go-mssql
 ```
 
-Requires Go 1.26+.
+Requires Go 1.27.2+ (also used by CI via `go.mod`).
 
 ## Claude Desktop
 

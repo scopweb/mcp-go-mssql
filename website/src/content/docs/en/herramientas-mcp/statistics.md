@@ -74,7 +74,7 @@ wrapper was used) so clients have a stable shape. The previous
 ## Notes
 
 - The wrapper is captured via the `sqlexp.ReturnMessage` queue exposed
-  by `go-mssqldb` v1.10.0; the connection layer was refactored from
+  by `go-mssqldb` v1.11.2; the connection layer was refactored from
   `sql.Open("sqlserver", dsn)` to `sql.OpenDB(mssql.NewConnector(dsn))`
   to make this work.
 - The CLI tool (`examples/claude-code/db-connector.go`) is not affected —

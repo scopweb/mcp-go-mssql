@@ -67,14 +67,6 @@ type wrapperEdge struct {
 	IOOff   bool
 }
 
-// edgeKind identifies which edge of the base a wrapper token is on.
-type edgeKind int
-
-const (
-	edgeLeading edgeKind = iota
-	edgeTrailing
-)
-
 // parseStatisticsWrapper reports whether query is a SET STATISTICS wrapper
 // around a single base statement. On success it returns a *statisticsWrapper
 // describing the net effect and the base statement. On any other input shape
