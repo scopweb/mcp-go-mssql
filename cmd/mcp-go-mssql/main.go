@@ -86,6 +86,14 @@ func main() {
 	server.rateLimiter.lastReset = time.Now()
 	server.rateLimiter.interval = time.Minute
 
+	// Usage accounting: one counted record per tool call, written to stderr
+	// as JSON (component="usage"). It counts facts about requests that really
+	// happened and never carries SQL, results or credentials.
+	usageLogger := NewUsageLogger(usageLogEnabled())
+	if usageLogger.enabled {
+		secLogger.Printf("Usage accounting enabled (stderr, component=usage)")
+	}
+
 	// Try to establish database connection (non-fatal)
 	// Use context for cancellation and WaitGroup for clean shutdown
 	connCtx, connCancel := context.WithCancel(context.Background())
@@ -325,7 +333,9 @@ func main() {
 		secLogger.Debugf("Request body: %s", secLogger.sanitizeForLogging(line))
 
 		// Bounded: a handler that never returns must not stall the loop (see handler_deadline.go)
-		response := server.handleWithDeadline(req)
+		requestStart := time.Now()
+		outcome := server.handleWithDeadlineOutcome(req)
+		response := outcome.response
 
 		// Only send response if one is needed (not for notifications)
 		if response != nil {
@@ -336,6 +346,27 @@ func main() {
 			}
 
 			fmt.Println(string(responseBytes))
+
+			// Count the call once, at the transport boundary, where the
+			// bytes on the wire are already known.
+			if tool := toolNameFromParams(req.Method, req.Params); tool != "" {
+				rows, truncated, textBytes, structuredBytes, isToolError := usageFromResponse(response)
+				alias, readOnly := server.usageContext()
+				usageLogger.LogCall(UsageRecord{
+					CallID:          usageLogger.NextCallID(),
+					Tool:            tool,
+					Method:          req.Method,
+					Status:          usageStatus(response, outcome.timedOut, isToolError),
+					ElapsedMS:       time.Since(requestStart).Milliseconds(),
+					ResponseBytes:   len(responseBytes),
+					TextBytes:       textBytes,
+					StructuredBytes: structuredBytes,
+					Rows:            rows,
+					RowTruncated:    truncated,
+					Alias:           alias,
+					ReadOnly:        readOnly,
+				})
+			}
 		}
 	}
 	// Note: we intentionally do not recover here; a panic in the main loop is fatal

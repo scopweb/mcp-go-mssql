@@ -1,5 +1,25 @@
 # MCP MSSQL Tools — Complete Reference
 
+<!-- BEGIN GENERATED TOOL CATALOG -->
+<!-- Generated from tools/list by cmd/mcp-go-mssql/tools_docs_test.go. Do not edit by hand. -->
+<!-- Regenerate: go test ./cmd/mcp-go-mssql -run TestToolCatalogDocumentation -update -->
+
+| Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
+| --- | --- | --- | --- | --- | --- | --- |
+| `query_database` | `query:string` | `query` | classic | no | yes | no |
+| `get_database_info` | — | — | classic | yes | no | yes |
+| `explore` | `filter:string`, `limit:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
+| `inspect` | `detail:string`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
+| `execute_procedure` | `parameters:string`, `procedure_name:string` | `procedure_name` | classic | no | yes | no |
+| `explain_query` | `query:string` | `query` | classic | yes | no | yes |
+| `dynamic_available` | — | — | dynamic-only | yes | no | yes |
+| `dynamic_connect` | `alias:string` | `alias` | dynamic-only | no | no | no |
+| `dynamic_disconnect` | — | — | dynamic-only | yes | no | yes |
+| `dynamic_list` | — | — | dynamic-only | yes | no | yes |
+| `confirm_operation` | `description:string` | `description` | dynamic-only | no | yes | no |
+
+<!-- END GENERATED TOOL CATALOG -->
+
 ## 1. `explore`
 
 Discover database objects. The starting point for any database interaction.
@@ -10,9 +30,11 @@ Discover database objects. The starting point for any database interaction.
 |-------|------|----------|-------------|
 | `type` | string | No | `tables` (default), `views`, `databases`, `procedures`, `search` |
 | `filter` | string | No | Name filter (LIKE match, e.g. `Pedido`) |
-| `schema` | string | No | Schema filter for procedures |
+| `schema` | string | No | Schema filter for procedures; exact schema filter for a column search |
+| `table` | string | No | Table filter for a column search (literal substring) |
 | `pattern` | string | When `type=search` | Search term |
-| `search_in` | string | No | `name` (default) or `definition` (searches inside source code) |
+| `search_in` | string | No | `name` (default), `definition` (searches inside source code), `column` (columns whose name contains the term) |
+| `limit` | integer | No | Maximum results for `type=search` (default 50, max 200) |
 
 **Annotations:** read-only, non-destructive, idempotent
 
@@ -34,12 +56,45 @@ explore(type="search", pattern="Pedido")
 # Search inside procedure/view source code
 explore(type="search", pattern="INSERT INTO temp_ai", search_in="definition")
 
+# Find which table owns a column
+explore(type="search", pattern="ClienteId", search_in="column")
+
+# Narrow a column search
+explore(type="search", pattern="Cliente", search_in="column", schema="dbo", table="Pedido", limit=20)
+
 # List all views with metadata (check_option, is_updatable, definition preview)
 explore(type="views")
 
 # List all databases on the server
 explore(type="databases")
 ```
+
+**Cautions:**
+- `search_in="definition"` returns the **full source** of every match: keep the pattern specific, and expect a large response when many modules match.
+- Definitions may be hidden without `VIEW DEFINITION` permission; encrypted modules expose nothing.
+- Reading a definition is not permission to execute it.
+
+### Column search (`search_in="column"`)
+
+Finds the tables that own a column. The term is a **literal substring** of the column name: wildcards are escaped, so `100%` matches the column `100%` and not every column ending in `100`. Matching follows the database collation (case-insensitive by default).
+
+This mode answers with an **object**, not the array the other modes return:
+
+```json
+{
+  "matches": [
+    {"schema_name": "dbo", "table_name": "Pedido", "column_name": "ClienteId",
+     "data_type": "int", "max_length": null, "is_nullable": "NO"}
+  ],
+  "returned": 1,
+  "truncated": false,
+  "limit": 50
+}
+```
+
+`truncated: true` means more columns matched than `limit` returned: narrow the search with `schema`, `table` or a more specific term instead of treating the list as complete. `max_length` is null for non-character types.
+
+The query reads `INFORMATION_SCHEMA.COLUMNS` only, with a deterministic order (schema, table, column position). It asks for one row more than the limit, so it detects further matches without running a second count over the catalog.
 
 ---
 
@@ -82,7 +137,9 @@ inspect(table_name="staging.ImportData", detail="columns")
 
 Check connection status and server configuration. No parameters.
 
-**Returns:** server name, database name, version, read-only status, whitelist tables, connection pool stats.
+**Returns:** plain text with the connection status, the server and database, the encryption mode, the access mode (read-only / whitelist-protected / full access) and, in dynamic mode, the active alias and its effective posture.
+
+It does not report the server version or connection-pool statistics.
 
 **When to use:**
 - Start of conversation — confirm you're connected
@@ -95,15 +152,13 @@ Check connection status and server configuration. No parameters.
 
 Execute SQL against the database. All queries use prepared statements.
 
-**Aliases:** run_sql, execute_sql, db_query, sql_execute, sql_query, run_query, exec_query
-
 **Parameters:**
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
 | `query` | string | Yes | SQL query (SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP) |
 
-**Annotations:** not read-only, not destructive, not idempotent
+**Annotations:** not read-only, destructive, not idempotent
 
 **Examples:**
 
@@ -125,9 +180,11 @@ query_database(query="CREATE TABLE temp_ai (id INT IDENTITY PRIMARY KEY, clave N
 ```
 
 **Security constraints:**
-- Read-only mode blocks INSERT/UPDATE/DELETE/CREATE/DROP except on whitelisted tables
+- Read-only mode blocks INSERT/UPDATE/DELETE/CREATE/DROP and every other modification, `EXEC` and `execute_procedure`. There is no whitelist exception while read-only is active.
+- A whitelist only limits modifications in an explicitly writable context (`MSSQL_READ_ONLY=false` or a dynamic alias with `_READ_ONLY=false`); a writable alias without a whitelist permits no modifications.
 - Multi-statement batches are rejected in read-only/whitelist contexts (only `SET STATISTICS TIME/IO` diagnostic wrappers are allowed)
 - All queries executed as prepared statements
+- Results are capped at 500 rows; the `truncated` flag marks a partial result that must be presented as partial
 
 **When a modification is blocked by read-only mode:**
 1. DO NOT try to bypass it — no `execute_procedure`, alternative tools, `SET` tricks, or re-framed statements. Read-only is a deliberate security boundary.
@@ -219,12 +276,13 @@ confirm_operation(description="DELETE on tables: temp_ai (alias AIWORK)")
 
 ### Pattern: Data exploration workflow
 ```
-get_database_info           → check connection & mode
-explore(type="tables")      → see all tables
-explore(type="search", pattern="Order") → find relevant tables
-inspect(table_name="Orders", detail="all") → understand structure
+get_database_info           → check connection & access mode
+explore(type="search", pattern="Order") → find the relevant objects first
+inspect(table_name="Orders", detail="columns") → understand the structure you need
 query_database(query="SELECT TOP 5 * FROM Orders") → sample data
 ```
+
+Prefer a targeted search over a full catalog listing, and `detail="columns"` over `detail="all"` (which runs four catalog queries).
 
 ### Pattern: Performance investigation
 ```
@@ -235,15 +293,17 @@ query_database(query="optimized query") → run with improvements
 
 ### Pattern: Safe write to temp table
 ```
-get_database_info → confirm whitelist includes temp_ai
+get_database_info → confirm the whitelist includes temp_ai
 query_database(query="CREATE TABLE temp_ai (...)")
 query_database(query="INSERT INTO temp_ai SELECT ... FROM SourceTable")
 query_database(query="SELECT * FROM temp_ai") → verify results
 ```
 
+Requires an explicitly writable context: with `MSSQL_READ_ONLY=true` the server rejects the modifications and you must hand the SQL to the user.
+
 ---
 
-## 11. `dynamic_available`
+## 8. `dynamic_available`
 
 Discover pre-configured dynamic connections from `.env` (without connecting).
 
@@ -265,7 +325,7 @@ dynamic_available()
 
 ---
 
-## 12. `dynamic_connect`
+## 9. `dynamic_connect`
 
 Activate a pre-configured dynamic database connection.
 
@@ -275,7 +335,7 @@ Activate a pre-configured dynamic database connection.
 |-------|------|----------|-------------|
 | `alias` | string | Yes | Connection alias from `.env` (e.g., `ferratge`, `identity`) |
 
-**Annotations:** non-destructive, idempotent (reconnecting overwrites existing)
+**Annotations:** non-destructive, not idempotent (reconnecting replaces the active connection)
 
 **Examples:**
 
@@ -292,7 +352,7 @@ dynamic_connect(alias="ferratge")
 
 ---
 
-## 13. `dynamic_list`
+## 10. `dynamic_list`
 
 List all active (connected) dynamic database connections.
 
@@ -316,7 +376,7 @@ Active dynamic connections:
 
 ---
 
-## 14. `dynamic_disconnect`
+## 11. `dynamic_disconnect`
 
 Close the currently active dynamic connection and return to disconnected state.
 
@@ -332,6 +392,6 @@ dynamic_disconnect()
 
 ---
 
-## 15. Targeting a dynamic connection
+## 12. Targeting a dynamic connection
 
 There is no `connection` parameter on `query_database`. Use `dynamic_connect(alias="...")` to switch the active connection; all subsequent `query_database` calls run against that alias and inherit its security posture (per-alias READ_ONLY + WHITELIST_TABLES).

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agent-facing documentation now matches the served tool catalog.** `.claude/skills/mcp-mssql-tools/SKILL.md` announced "10 tools" while the server serves six in classic mode and eleven in dynamic mode; it documented an `alias` parameter that `dynamic_disconnect` does not accept; it stated that read-only mode allows writes on whitelisted tables, which contradicts the v1 contract (read-only is absolute — a whitelist cannot enable writes while it is active); and it never mentioned the 500-row cap or the `truncated` flag. The skill reference repeated the read-only error, described `get_database_info` as returning the server version and pool statistics (it returns neither), marked `query_database` as non-destructive (the server publishes `destructiveHint: true`) and `dynamic_connect` as idempotent (the server publishes `idempotentHint: false`), and numbered its sections 1–7 followed by 11–15. The skill now also states the truncation rule, that only canonical tool names are dispatched, and how to reuse an existing view or procedure before hand-writing a JOIN.
+- **Documentation can no longer drift silently.** `cmd/mcp-go-mssql/tools_docs_test.go` compares the served `tools/list` catalog (classic and dynamic) against a generated block in `SKILL.md`, `reference/tools-reference.md` and `README.md`, including parameter names, types, required arguments and the published annotations. It also checks that every served tool has a section in the skill reference, and that the skill does not advertise a tool count the server does not serve. Regenerate the blocks with `go test ./cmd/mcp-go-mssql -run TestToolCatalogDocumentation -update`.
+
 ### Security
 
 - **Dependency refresh (2026-10-14):** require Go 1.27.2 (fixes GO-2026-6607), upgrade `go-mssqldb` to 1.11.2, `decimal` to 1.5.0, `x/crypto` to 0.58.0 and `x/text` to 0.43.0. Upgrade documentation dependencies to Astro 7.3.8, Starlight 0.42.6 and Sharp 0.35.5; pin the vulnerable nested CSS parser to 7.1.6 with a scoped override.
@@ -21,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Column discovery in `explore`.** `explore` with `type=search` and `search_in="column"` finds the tables that own a column, in one call, instead of listing the catalog and calling `inspect` once per table. The term is a literal substring (LIKE wildcards are escaped), with optional `schema` (exact) and `table` (substring) filters, and a `limit` (default 50, max 200). The answer is an object (`matches`, `returned`, `truncated`, `limit`) instead of the plain array the other modes return; `truncated` is true when more columns matched than the limit returned. The query only reads `INFORMATION_SCHEMA.COLUMNS`, is fully parameterized, has a deterministic order, and asks for one row more than the limit so it can detect further matches without a second count over the catalog. Compatible with SQL Server 2008/2012.
+- **Per-call usage accounting.** Every tool call is counted once and written to stderr as JSON with `component="usage"`: tool, elapsed time, bytes on the wire, bytes of text and of structured content, rows delivered and truncation flag when the tool exposes them, and the outcome (`success`, `tool_error`, `rpc_error`, `timeout`). The records contain no SQL, results, definitions or credentials, and the stream is not affected by the MCP `logging/setLevel` request. `MSSQL_USAGE_LOG=false` disables it. This makes "bytes per task" and "calls per task" measurable instead of estimated; no tool result changes and the agent contract v1 result shape is untouched.
 - `docs/AGENT_CONTRACT.md`: versioned contract for MCP clients, agent harnesses, and this server (session isolation, policy, results, retries).
 - `cmd/mcp-go-mssql/sql_policy.go`: comment-aware stacked-statement detection used by the MCP validators.
 
