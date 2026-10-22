@@ -352,21 +352,25 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 		WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2
 		ORDER BY ORDINAL_POSITION
 	`
+	// One row per indexed column: the columns of an index are grouped in Go
+	// (see tools_index_grouping.go) because STRING_AGG only exists from
+	// SQL Server 2017 and this project supports 2008 and 2012.
 	indexesQuery := `
 		SELECT
 			i.name as index_name,
 			i.type_desc as index_type,
 			i.is_unique,
 			i.is_primary_key,
-			STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) as columns
+			c.name as column_name,
+			ic.key_ordinal,
+			ic.index_column_id
 		FROM sys.indexes i
 		INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
 		INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
 		INNER JOIN sys.tables t ON i.object_id = t.object_id
 		INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
 		WHERE t.name = @p1 AND s.name = @p2 AND i.name IS NOT NULL
-		GROUP BY i.name, i.type_desc, i.is_unique, i.is_primary_key
-		ORDER BY i.is_primary_key DESC, i.name
+		ORDER BY i.is_primary_key DESC, i.name, ic.key_ordinal, ic.index_column_id
 	`
 	fkQuery := `
 		SELECT
@@ -401,6 +405,7 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err)}}, IsError: true,
 			}}
 		}
+		idxResults = groupIndexRows(idxResults)
 		fkResults, _, err := s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
 		if err != nil {
 			return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
@@ -455,6 +460,9 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 	case "indexes":
 		label = fmt.Sprintf("Indexes for '%s.%s'", schemaName, tableName)
 		results, _, err = s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
+		if err == nil {
+			results = groupIndexRows(results)
+		}
 	case "foreign_keys":
 		label = fmt.Sprintf("Foreign keys for '%s.%s'", schemaName, tableName)
 		results, _, err = s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
