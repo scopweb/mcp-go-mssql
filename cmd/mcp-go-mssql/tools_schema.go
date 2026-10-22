@@ -36,9 +36,38 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// Optional response budgets. They are applied in Go while the rows are
+	// read; the SQL of the catalog is never rewritten.
+	limits, limitsErr := parseQueryLimits(params.Arguments)
+	if limitsErr != nil {
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{Type: "text", Text: fmt.Sprintf("Error in explore: %v", limitsErr)},
+				},
+				IsError: true,
+			},
+		}
+	}
+
 	var results []map[string]interface{}
+	var outcome queryOutcome
 	var err error
 	var label string
+
+	// run executes a catalog query and keeps the shape the catalog tools
+	// have always had: the rows, plus the "_truncated" sentinel when the
+	// row cap was reached.
+	run := func(query string, args ...interface{}) error {
+		outcome, err = s.executeSecureQueryWithLimits(ctx, query, limits, args...)
+		if err != nil {
+			return err
+		}
+		results = withTruncationSentinel(outcome.Rows, outcome.RowsTruncated)
+		return nil
+	}
 
 	switch exploreType {
 	case "databases":
@@ -53,7 +82,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 			WHERE database_id > 4
 			ORDER BY name
 		`
-		results, _, err = s.executeSecureQuery(ctx, query)
+		err = run(query)
 
 	case "procedures":
 		label = "Stored procedures found"
@@ -70,7 +99,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				WHERE SCHEMA_NAME(p.schema_id) = @p1 AND p.name LIKE @p2
 				ORDER BY schema_name, procedure_name
 			`
-			results, _, err = s.executeSecureQuery(ctx, query, schemaFilter, "%"+filterVal+"%")
+			err = run(query, schemaFilter, "%"+filterVal+"%")
 		} else if schemaFilter != "" {
 			query := `
 				SELECT
@@ -82,7 +111,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				WHERE SCHEMA_NAME(p.schema_id) = @p1
 				ORDER BY schema_name, procedure_name
 			`
-			results, _, err = s.executeSecureQuery(ctx, query, schemaFilter)
+			err = run(query, schemaFilter)
 		} else if filterVal != "" {
 			query := `
 				SELECT
@@ -94,7 +123,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				WHERE p.name LIKE @p1
 				ORDER BY schema_name, procedure_name
 			`
-			results, _, err = s.executeSecureQuery(ctx, query, "%"+filterVal+"%")
+			err = run(query, "%"+filterVal+"%")
 		} else {
 			query := `
 				SELECT
@@ -105,7 +134,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				FROM sys.procedures p
 				ORDER BY schema_name, procedure_name
 			`
-			results, _, err = s.executeSecureQuery(ctx, query)
+			err = run(query)
 		}
 
 	case "search":
@@ -131,7 +160,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 			limit, _ := params.Arguments["limit"].(float64)
 
 			label = fmt.Sprintf("Columns matching '%s'", pattern)
-			search, searchErr := s.searchColumns(ctx, schemaFilter, tableFilter, pattern, int(limit))
+			search, searchErr := s.searchColumns(ctx, schemaFilter, tableFilter, pattern, int(limit), limits)
 			if searchErr != nil {
 				return &MCPResponse{
 					JSONRPC: "2.0",
@@ -166,6 +195,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 					Content: []ContentItem{
 						{Type: "text", Text: fmt.Sprintf("%s:\n%s", label, string(encoded))},
 					},
+					StructuredContent: search,
 				},
 			}
 		}
@@ -182,7 +212,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				WHERE m.definition LIKE @p1
 				ORDER BY o.type_desc, o.name
 			`
-			results, _, err = s.executeSecureQuery(ctx, query, likePattern)
+			err = run(query, likePattern)
 		} else {
 			label = fmt.Sprintf("Objects matching '%s' in name", pattern)
 			query := `
@@ -197,7 +227,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				  AND o.type IN ('U','V','P','FN','IF','TF')
 				ORDER BY o.type_desc, o.name
 			`
-			results, _, err = s.executeSecureQuery(ctx, query, likePattern)
+			err = run(query, likePattern)
 		}
 
 	case "views":
@@ -205,10 +235,10 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 		viewFilter, _ := params.Arguments["filter"].(string)
 		if viewFilter != "" {
 			query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v WHERE v.TABLE_NAME LIKE @p1 ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-			results, _, err = s.executeSecureQuery(ctx, query, "%"+viewFilter+"%")
+			err = run(query, "%"+viewFilter+"%")
 		} else {
 			query := "SELECT v.TABLE_SCHEMA AS schema_name, v.TABLE_NAME AS view_name, v.CHECK_OPTION AS check_option, v.IS_UPDATABLE AS is_updatable, LEFT(v.VIEW_DEFINITION, 300) AS definition_preview FROM INFORMATION_SCHEMA.VIEWS v ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME"
-			results, _, err = s.executeSecureQuery(ctx, query)
+			err = run(query)
 		}
 
 	default: // "tables"
@@ -225,7 +255,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				  AND TABLE_NAME LIKE @p1
 				ORDER BY TABLE_SCHEMA, TABLE_NAME
 			`
-			results, _, err = s.executeSecureQuery(ctx, query, filterPattern)
+			err = run(query, filterPattern)
 		} else {
 			query := `
 				SELECT
@@ -236,7 +266,7 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 				WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
 				ORDER BY TABLE_SCHEMA, TABLE_NAME
 			`
-			results, _, err = s.executeSecureQuery(ctx, query)
+			err = run(query)
 		}
 	}
 
@@ -273,6 +303,24 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 		}
 	}
 
+	envelope := ResultEnvelope{
+		Rows:              outcome.Rows,
+		RowCount:          len(outcome.Rows),
+		Truncated:         outcome.RowsTruncated,
+		RowsTruncated:     outcome.RowsTruncated,
+		CellsTruncated:    outcome.CellsTruncated,
+		ResponseTruncated: outcome.ResponseTruncated,
+		TruncatedCells:    outcome.TruncatedCells,
+		Limits:            outcome.Limits,
+	}
+
+	// The text keeps the shape it has always had, plus an explicit notice
+	// when the answer is not complete.
+	text := fmt.Sprintf("%s:\n%s", label, string(resultBytes))
+	if notice := truncationNotice(outcome.RowsTruncated, outcome.CellsTruncated, outcome.ResponseTruncated, outcome.CellsCut); notice != "" {
+		text += "\n" + notice
+	}
+
 	return &MCPResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -280,9 +328,10 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 			Content: []ContentItem{
 				{
 					Type: "text",
-					Text: fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
+					Text: text,
 				},
 			},
+			StructuredContent: envelope,
 		},
 	}
 }
@@ -392,21 +441,45 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 		ORDER BY fk.name
 	`
 
+	limits, limitsErr := parseQueryLimits(params.Arguments)
+	if limitsErr != nil {
+		return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
+			Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error in inspect: %v", limitsErr)}}, IsError: true,
+		}}
+	}
+
 	if detail == "all" {
-		colResults, _, err := s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
+		// Every section is read with the same budgets, and the facts of the
+		// truncation are accumulated for the structured result.
+		all := InspectAllResult{}
+		read := func(query string, args ...interface{}) ([]map[string]interface{}, error) {
+			outcome, err := s.executeSecureQueryWithLimits(ctx, query, limits, args...)
+			if err != nil {
+				return nil, err
+			}
+			all.RowsTruncated = all.RowsTruncated || outcome.RowsTruncated
+			all.CellsTruncated = all.CellsTruncated || outcome.CellsTruncated
+			all.ResponseTruncated = all.ResponseTruncated || outcome.ResponseTruncated
+			all.CellsCut += outcome.CellsCut
+			all.TruncatedCells = append(all.TruncatedCells, outcome.TruncatedCells...)
+			all.Limits = outcome.Limits
+			return outcome.Rows, nil
+		}
+
+		colResults, err := read(columnsQuery, schemaName, tableName)
 		if err != nil {
 			return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting columns: %v", err)}}, IsError: true,
 			}}
 		}
-		idxResults, _, err := s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
+		idxResults, err := read(indexesQuery, tableName, schemaName)
 		if err != nil {
 			return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting indexes: %v", err)}}, IsError: true,
 			}}
 		}
 		idxResults = groupIndexRows(idxResults)
-		fkResults, _, err := s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
+		fkResults, err := read(fkQuery, tableName, schemaName)
 		if err != nil {
 			return &MCPResponse{JSONRPC: "2.0", ID: id, Result: CallToolResult{
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error getting foreign keys: %v", err)}}, IsError: true,
@@ -425,7 +498,15 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 			  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
 			ORDER BY o.type_desc, referencing_schema, referencing_object
 		`
-		depsResults, _, _ := s.executeSecureQuery(ctx, depsAllQuery, tableName, schemaName) // #nosec G104 - dependencies query is optional, errors handled gracefully
+		depsResults, _ := read(depsAllQuery, tableName, schemaName) // #nosec G104 - dependencies query is optional, errors handled gracefully
+
+		all.Columns = colResults
+		all.Indexes = idxResults
+		all.ForeignKeys = fkResults
+		all.Dependencies = depsResults
+		all.Truncated = all.RowsTruncated
+		all.RowCount = len(colResults) + len(idxResults) + len(fkResults) + len(depsResults)
+
 		combined := map[string]interface{}{
 			"columns":      colResults,
 			"indexes":      idxResults,
@@ -438,6 +519,12 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error formatting results: %v", err)}}, IsError: true,
 			}}
 		}
+
+		text := fmt.Sprintf("Full inspection of '%s.%s':\n%s", schemaName, tableName, string(resultBytes))
+		if notice := truncationNotice(all.RowsTruncated, all.CellsTruncated, all.ResponseTruncated, all.CellsCut); notice != "" {
+			text += "\n" + notice
+		}
+
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
@@ -445,27 +532,45 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 				Content: []ContentItem{
 					{
 						Type: "text",
-						Text: fmt.Sprintf("Full inspection of '%s.%s':\n%s", schemaName, tableName, string(resultBytes)),
+						Text: text,
 					},
 				},
+				StructuredContent: all,
 			},
 		}
 	}
 
 	var results []map[string]interface{}
+	var outcome queryOutcome
 	var err error
 	var label string
+
+	// run executes a catalog query and keeps the shape the catalog tools
+	// have always had: the rows, plus the "_truncated" sentinel when the
+	// row cap was reached.
+	run := func(query string, args ...interface{}) error {
+		outcome, err = s.executeSecureQueryWithLimits(ctx, query, limits, args...)
+		if err != nil {
+			return err
+		}
+		results = withTruncationSentinel(outcome.Rows, outcome.RowsTruncated)
+		return nil
+	}
 
 	switch detail {
 	case "indexes":
 		label = fmt.Sprintf("Indexes for '%s.%s'", schemaName, tableName)
-		results, _, err = s.executeSecureQuery(ctx, indexesQuery, tableName, schemaName)
+		err = run(indexesQuery, tableName, schemaName)
 		if err == nil {
-			results = groupIndexRows(results)
+			// The grouped rows are the ones the caller receives, in the
+			// text and in the structured result.
+			grouped := groupIndexRows(outcome.Rows)
+			outcome.Rows = grouped
+			results = withTruncationSentinel(grouped, outcome.RowsTruncated)
 		}
 	case "foreign_keys":
 		label = fmt.Sprintf("Foreign keys for '%s.%s'", schemaName, tableName)
-		results, _, err = s.executeSecureQuery(ctx, fkQuery, tableName, schemaName)
+		err = run(fkQuery, tableName, schemaName)
 	case "dependencies":
 		label = fmt.Sprintf("Objects that depend on '%s.%s'", schemaName, tableName)
 		depsQuery := `
@@ -481,10 +586,10 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 			  AND (sed.referenced_schema_name = @p2 OR sed.referenced_schema_name IS NULL)
 			ORDER BY o.type_desc, referencing_schema, referencing_object
 		`
-		results, _, err = s.executeSecureQuery(ctx, depsQuery, tableName, schemaName)
+		err = run(depsQuery, tableName, schemaName)
 	default: // "columns"
 		label = fmt.Sprintf("Table structure for '%s'", tableName)
-		results, _, err = s.executeSecureQuery(ctx, columnsQuery, schemaName, tableName)
+		err = run(columnsQuery, schemaName, tableName)
 		if err == nil && len(results) == 0 {
 			return &MCPResponse{
 				JSONRPC: "2.0",
@@ -532,6 +637,24 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 		}
 	}
 
+	envelope := ResultEnvelope{
+		Rows:              outcome.Rows,
+		RowCount:          len(outcome.Rows),
+		Truncated:         outcome.RowsTruncated,
+		RowsTruncated:     outcome.RowsTruncated,
+		CellsTruncated:    outcome.CellsTruncated,
+		ResponseTruncated: outcome.ResponseTruncated,
+		TruncatedCells:    outcome.TruncatedCells,
+		Limits:            outcome.Limits,
+	}
+
+	// The text keeps the shape it has always had, plus an explicit notice
+	// when the answer is not complete.
+	text := fmt.Sprintf("%s:\n%s", label, string(resultBytes))
+	if notice := truncationNotice(outcome.RowsTruncated, outcome.CellsTruncated, outcome.ResponseTruncated, outcome.CellsCut); notice != "" {
+		text += "\n" + notice
+	}
+
 	return &MCPResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -539,9 +662,10 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 			Content: []ContentItem{
 				{
 					Type: "text",
-					Text: fmt.Sprintf("%s:\n%s", label, string(resultBytes)),
+					Text: text,
 				},
 			},
+			StructuredContent: envelope,
 		},
 	}
 }

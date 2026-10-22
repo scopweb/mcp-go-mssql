@@ -25,10 +25,10 @@ Agent and harness contract: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
 
 | Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
 | --- | --- | --- | --- | --- | --- | --- |
-| `query_database` | `query:string` | `query` | classic | no | yes | no |
+| `query_database` | `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
 | `get_database_info` | — | — | classic | yes | no | yes |
-| `explore` | `filter:string`, `limit:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
-| `inspect` | `detail:string`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
+| `explore` | `filter:string`, `limit:integer`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
+| `inspect` | `detail:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
 | `execute_procedure` | `parameters:string`, `procedure_name:string` | `procedure_name` | classic | no | yes | no |
 | `explain_query` | `query:string` | `query` | classic | yes | no | yes |
 | `dynamic_available` | — | — | dynamic-only | yes | no | yes |
@@ -169,6 +169,24 @@ The CLI rejects writes unless an operator sets `MSSQL_CLI_ALLOW_WRITE=true`. Age
 | `read-only mode: only SELECT...` | Read-only is on | Run the SQL yourself. A whitelist does not enable writes while `READ_ONLY=true` |
 
 Connection check without starting the server: `go run test/test-connection.go`.
+
+## Response budgets
+
+`query_database`, `explore` and `inspect` accept two optional budgets:
+
+- `max_cell_bytes` (minimum 16): the cap of a single cell. A longer value is shortened, keeps its beginning and is marked. Without it a `nvarchar(max)`, `xml` or `varbinary` cell is returned whole — a single 1 MiB cell can reach 6 MB of JSON.
+- `max_response_bytes` (minimum 512): an approximate cap for the whole result. The result stops there.
+
+They are opt-in and the server never rewrites your SQL to fit a budget. Every result reports `rows_truncated`, `cells_truncated` and `response_truncated` separately, plus a `limits` object with the budgets that were applied.
+
+```json
+{"rows":[{"id":1,"notes":"<prefix> [truncated: 1048576 bytes total]"}],
+ "row_count":1,"truncated":false,"rows_truncated":false,
+ "cells_truncated":true,"response_truncated":false,
+ "truncated_cells":[{"row":0,"column":"notes","original_bytes":1048576}],
+ "limits":{"max_rows":500,"max_cell_bytes":4096,"max_response_bytes":null},
+ "stats":{"enabled":false,"messages":[]}}
+```
 
 ## Usage accounting
 

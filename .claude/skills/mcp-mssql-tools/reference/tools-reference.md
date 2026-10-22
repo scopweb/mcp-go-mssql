@@ -6,10 +6,10 @@
 
 | Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
 | --- | --- | --- | --- | --- | --- | --- |
-| `query_database` | `query:string` | `query` | classic | no | yes | no |
+| `query_database` | `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
 | `get_database_info` | — | — | classic | yes | no | yes |
-| `explore` | `filter:string`, `limit:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
-| `inspect` | `detail:string`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
+| `explore` | `filter:string`, `limit:integer`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
+| `inspect` | `detail:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
 | `execute_procedure` | `parameters:string`, `procedure_name:string` | `procedure_name` | classic | no | yes | no |
 | `explain_query` | `query:string` | `query` | classic | yes | no | yes |
 | `dynamic_available` | — | — | dynamic-only | yes | no | yes |
@@ -35,6 +35,8 @@ Discover database objects. The starting point for any database interaction.
 | `pattern` | string | When `type=search` | Search term |
 | `search_in` | string | No | `name` (default), `definition` (searches inside source code), `column` (columns whose name contains the term) |
 | `limit` | integer | No | Maximum results for `type=search` (default 50, max 200) |
+| `max_cell_bytes` | integer | No | Cap for a single cell (minimum 16). A longer value is shortened and marked |
+| `max_response_bytes` | integer | No | Approximate cap for the whole result (minimum 512). The result stops there |
 
 **Annotations:** read-only, non-destructive, idempotent
 
@@ -109,6 +111,8 @@ Deep-dive into a single table's structure.
 | `table_name` | string | Yes | Table name (can include schema: `dbo.TableName`) |
 | `schema` | string | No | Schema name (defaults to `dbo`) |
 | `detail` | string | No | `columns` (default), `indexes`, `foreign_keys`, `dependencies`, `all` |
+| `max_cell_bytes` | integer | No | Cap for a single cell (minimum 16). A longer value is shortened and marked |
+| `max_response_bytes` | integer | No | Approximate cap for the whole result (minimum 512). The result stops there |
 
 **Annotations:** read-only, non-destructive, idempotent
 
@@ -157,6 +161,28 @@ Execute SQL against the database. All queries use prepared statements.
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
 | `query` | string | Yes | SQL query (SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP) |
+| `max_cell_bytes` | integer | No | Cap for a single cell (minimum 16). A longer value is shortened and marked |
+| `max_response_bytes` | integer | No | Approximate cap for the whole result (minimum 512). The result stops there |
+
+**Result shape:**
+
+```json
+{
+  "rows": [{"column": "value"}],
+  "row_count": 1,
+  "truncated": false,
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {"max_rows": 500, "max_cell_bytes": null, "max_response_bytes": null},
+  "stats": {"enabled": false, "messages": []}
+}
+```
+
+- `truncated` (contract v1) and `rows_truncated` mean the same: the row cap was reached.
+- `cells_truncated` is true when at least one cell was shortened by `max_cell_bytes`; the shortened cells are listed in `truncated_cells` with their original size.
+- `response_truncated` is true when `max_response_bytes` stopped the result.
+- The budgets are opt-in and the server never rewrites the SQL: no `TOP` is injected.
 
 **Annotations:** not read-only, destructive, not idempotent
 

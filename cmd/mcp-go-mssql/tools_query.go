@@ -50,7 +50,9 @@ func (s *MCPMSSQLServer) toolQueryDatabase(id interface{}, params CallToolParams
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	results, statsMsgs, err := s.executeSecureQuery(ctx, query)
+	// Optional response budgets. They are opt-in and never rewrite the SQL
+	// of the caller: the caps are applied in Go while the rows are read.
+	limits, err := parseQueryLimits(params.Arguments)
 	if err != nil {
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -67,17 +69,24 @@ func (s *MCPMSSQLServer) toolQueryDatabase(id interface{}, params CallToolParams
 		}
 	}
 
-	// Strip the legacy _truncated sentinel row from the results;
-	// its information is now carried by Truncated bool.
-	rowCount := len(results)
-	truncated := false
-	if rowCount > 0 {
-		if _, ok := results[rowCount-1]["_truncated"]; ok {
-			truncated = true
-			results = results[:rowCount-1]
-			rowCount--
+	outcome, err := s.executeSecureQueryWithLimits(ctx, query, limits)
+	if err != nil {
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{
+						Type: "text",
+						Text: fmt.Sprintf("Query Error: %v", err),
+					},
+				},
+				IsError: true,
+			},
 		}
 	}
+	results := outcome.Rows
+	statsMsgs := outcome.StatsMessages
 
 	// Build the Stats payload. When statsMsgs is non-nil the query
 	// was a SET STATISTICS wrapper; the parser detection ran inside
@@ -99,10 +108,17 @@ func (s *MCPMSSQLServer) toolQueryDatabase(id interface{}, params CallToolParams
 	}
 
 	result := QueryResult{
-		Rows:      results,
-		RowCount:  rowCount,
-		Truncated: truncated,
-		Stats:     stats,
+		ResultEnvelope: ResultEnvelope{
+			Rows:              results,
+			RowCount:          len(results),
+			Truncated:         outcome.RowsTruncated,
+			RowsTruncated:     outcome.RowsTruncated,
+			CellsTruncated:    outcome.CellsTruncated,
+			ResponseTruncated: outcome.ResponseTruncated,
+			TruncatedCells:    outcome.TruncatedCells,
+			Limits:            outcome.Limits,
+		},
+		Stats: stats,
 	}
 
 	// Format result as JSON
