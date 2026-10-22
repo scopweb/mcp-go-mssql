@@ -9,8 +9,8 @@ Full documentation: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com)
 
 ## What it does
 
-- Stdio MCP server with six tools: `query_database`, `get_database_info`, `explore`, `inspect`, `execute_procedure`, `explain_query`.
-- Optional dynamic mode for several related databases in one process (`dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list`, `confirm_operation`).
+- Stdio MCP server with six tools in classic mode (`query_database`, `get_database_info`, `explore`, `inspect`, `execute_procedure`, `explain_query`).
+- Optional dynamic mode for several related databases in one process, which adds five more (`dynamic_available`, `dynamic_connect`, `dynamic_disconnect`, `dynamic_list`, `confirm_operation`).
 - Standalone CLI for terminal use (`examples/claude-code/db-connector.go`).
 
 Built for environments where the security boundary matters: absolute read-only mode, a table whitelist only when writes are explicitly enabled, prepared statements, TLS fail-closed in production, and an explicit opt-in for SQL Server 2008/2012 (TLS 1.0).
@@ -18,6 +18,26 @@ Built for environments where the security boundary matters: absolute read-only m
 These controls do not replace a least-privilege SQL login. They are an extra layer you can turn on quickly, without changing that database user.
 
 Agent and harness contract: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
+
+<!-- BEGIN GENERATED TOOL CATALOG -->
+<!-- Generated from tools/list by cmd/mcp-go-mssql/tools_docs_test.go. Do not edit by hand. -->
+<!-- Regenerate: go test ./cmd/mcp-go-mssql -run TestToolCatalogDocumentation -update -->
+
+| Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
+| --- | --- | --- | --- | --- | --- | --- |
+| `query_database` | `query:string` | `query` | classic | no | yes | no |
+| `get_database_info` | — | — | classic | yes | no | yes |
+| `explore` | `filter:string`, `limit:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
+| `inspect` | `detail:string`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
+| `execute_procedure` | `parameters:string`, `procedure_name:string` | `procedure_name` | classic | no | yes | no |
+| `explain_query` | `query:string` | `query` | classic | yes | no | yes |
+| `dynamic_available` | — | — | dynamic-only | yes | no | yes |
+| `dynamic_connect` | `alias:string` | `alias` | dynamic-only | no | no | no |
+| `dynamic_disconnect` | — | — | dynamic-only | yes | no | yes |
+| `dynamic_list` | — | — | dynamic-only | yes | no | yes |
+| `confirm_operation` | `description:string` | `description` | dynamic-only | no | yes | no |
+
+<!-- END GENERATED TOOL CATALOG -->
 
 ## Install
 
@@ -65,6 +85,7 @@ With `MSSQL_READ_ONLY=true` the agent can only read and run explicitly allowed a
 | `MSSQL_READ_ONLY` / `MSSQL_WHITELIST_TABLES` | Absolute read-only / write whitelist (whitelist applies only when `READ_ONLY=false`) |
 | `MSSQL_WHITELIST_PROCEDURES` | Procedures `execute_procedure` may run |
 | `MSSQL_ALLOW_INSECURE_TLS` | Allow insecure TLS in production (legacy servers only) |
+| `MSSQL_USAGE_LOG` | `false` disables the per-call usage records on stderr (default: enabled) |
 
 The full list is in [.env.example](.env.example) and in the [environment variable docs](https://mcp-go-mssql.scopweb.com/configuracion/variables-entorno).
 
@@ -148,6 +169,18 @@ The CLI rejects writes unless an operator sets `MSSQL_CLI_ALLOW_WRITE=true`. Age
 | `read-only mode: only SELECT...` | Read-only is on | Run the SQL yourself. A whitelist does not enable writes while `READ_ONLY=true` |
 
 Connection check without starting the server: `go run test/test-connection.go`.
+
+## Usage accounting
+
+Every tool call is counted once and written to **stderr** as JSON with `component="usage"`: the tool, the elapsed time, the bytes on the wire, the bytes of text and of structured content, the rows delivered and the truncation flag when the tool exposes them, and the outcome (`success`, `tool_error`, `rpc_error`, `timeout`).
+
+The records carry no SQL, no results and no credentials. They are not affected by the MCP `logging/setLevel` request, so a harness that lowers the security log level can still count calls. Set `MSSQL_USAGE_LOG=false` to disable the stream.
+
+```json
+{"level":"INFO","msg":"tool call","component":"usage","session_id":"573403616c10c8bd","call_id":1,"tool":"query_database","method":"tools/call","status":"success","elapsed_ms":42,"response_bytes":1234,"text_bytes":1000,"structured_bytes":234,"rows":500,"row_truncated":true,"read_only":true}
+```
+
+This is what makes "bytes per task" and "calls per task" measurable instead of estimated. No tool result changes.
 
 ## Layout
 

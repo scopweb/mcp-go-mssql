@@ -81,6 +81,14 @@ Tool errors use MCP `isError=true`. Harnesses must not infer success from text.
 They must not automatically retry a modification after a timeout or transport
 failure because its database outcome can be unknown.
 
+## Usage accounting
+
+The server writes one counted record per tool call to stderr as JSON with `component="usage"`: the tool, the elapsed time, the bytes on the wire, the bytes of text and of structured content, the rows delivered and the truncation flag when the tool exposes them, and the outcome (`success`, `tool_error`, `rpc_error`, `timeout`).
+
+The records carry no SQL, no results, no object definitions and no credentials, and they are not affected by the MCP `logging/setLevel` request: a harness that lowers the security log level can still count calls. They are observability, not part of the result contract — no tool result changes. `MSSQL_USAGE_LOG=false` disables the stream.
+
+A harness that measures its own cost can read these records instead of estimating it. The server counts calls per session, not per task: grouping calls into tasks belongs to the harness. A `timeout` record means the request exceeded the server deadline; it does not prove that a modification was not applied.
+
 ## Harness obligations
 
 - Isolate process, credentials, and logs per agent/session.

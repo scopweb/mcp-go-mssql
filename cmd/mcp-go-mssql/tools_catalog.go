@@ -45,7 +45,7 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 		{
 			Name:        "explore",
 			Title:       "Explore Database",
-			Description: "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name or source definition (requires pattern).",
+			Description: "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name, by source definition (requires pattern) or by column name (requires pattern).",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
@@ -59,15 +59,23 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 					},
 					"schema": {
 						Type:        "string",
-						Description: "Schema filter for procedures (optional)",
+						Description: "Schema filter for procedures, and for a column search (exact schema name)",
+					},
+					"table": {
+						Type:        "string",
+						Description: "Table filter for a column search (literal substring match)",
 					},
 					"pattern": {
 						Type:        "string",
-						Description: "Search pattern. Required when type=search.",
+						Description: "Search term. Required when type=search.",
 					},
 					"search_in": {
 						Type:        "string",
-						Description: "Where to search: 'name' (default) or 'definition' (inside procedure/view source code)",
+						Description: "Where to search: 'name' (default), 'definition' (inside procedure/view source code), 'column' (columns whose name contains the term)",
+					},
+					"limit": {
+						Type:        "integer",
+						Description: "Maximum number of results for type=search (default 50, max 200). A truncated result is reported with truncated=true.",
 					},
 				},
 				Required: []string{},
