@@ -207,12 +207,12 @@ They are opt-in and the server never rewrites your SQL to fit a budget. Every re
 
 ## Usage accounting
 
-Every tool call is counted once and written to **stderr** as JSON with `component="usage"`: the tool, the elapsed time, the bytes on the wire, the bytes of text and of structured content, the rows delivered and the truncation flag when the tool exposes them, and the outcome (`success`, `tool_error`, `rpc_error`, `timeout`).
+Every tool call is counted once and written to **stderr** as JSON with `component="usage"`: the tool, the elapsed time, the bytes on the wire, the bytes of text and of structured content, the rows delivered, the three truncation flags and the outcome (`success`, `tool_error`, `rpc_error`, `timeout`).
 
 The records carry no SQL, no results and no credentials. They are not affected by the MCP `logging/setLevel` request, so a harness that lowers the security log level can still count calls. Set `MSSQL_USAGE_LOG=false` to disable the stream.
 
 ```json
-{"level":"INFO","msg":"tool call","component":"usage","session_id":"573403616c10c8bd","call_id":1,"tool":"query_database","method":"tools/call","status":"success","elapsed_ms":42,"response_bytes":1234,"text_bytes":1000,"structured_bytes":234,"rows":500,"row_truncated":true,"read_only":true}
+{"level":"INFO","msg":"tool call","component":"usage","session_id":"573403616c10c8bd","call_id":1,"tool":"query_database","method":"tools/call","status":"success","elapsed_ms":42,"response_bytes":1234,"text_bytes":1000,"structured_bytes":234,"rows":500,"row_truncated":true,"cells_truncated":false,"response_truncated":false,"read_only":true}
 ```
 
 This is what makes "bytes per task" and "calls per task" measurable instead of estimated. No tool result changes.

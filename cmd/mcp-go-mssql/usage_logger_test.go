@@ -28,12 +28,18 @@ func TestUsageFromResponse(t *testing.T) {
 		},
 	}
 
-	gotRows, gotTruncated, textBytes, structuredBytes, isToolError := usageFromResponse(response)
+	gotRows, gotTruncated, gotCells, gotResponse, textBytes, structuredBytes, isToolError := usageFromResponse(response)
 	if gotRows == nil || *gotRows != rows {
 		t.Errorf("rows = %v, want %d", gotRows, rows)
 	}
 	if gotTruncated == nil || *gotTruncated != truncated {
 		t.Errorf("row_truncated = %v, want %v", gotTruncated, truncated)
+	}
+	if gotCells == nil || *gotCells {
+		t.Errorf("cells_truncated = %v, want false", gotCells)
+	}
+	if gotResponse == nil || *gotResponse {
+		t.Errorf("response_truncated = %v, want false", gotResponse)
 	}
 	if textBytes != len("Query executed successfully") {
 		t.Errorf("text_bytes = %d, want %d", textBytes, len("Query executed successfully"))
@@ -55,7 +61,7 @@ func TestUsageFromResponseWithoutRowFacts(t *testing.T) {
 		Result:  CallToolResult{Content: []ContentItem{{Type: "text", Text: "Tables found"}}},
 	}
 
-	rows, truncated, _, _, _ := usageFromResponse(response)
+	rows, truncated, _, _, _, _, _ := usageFromResponse(response)
 	if rows != nil {
 		t.Errorf("rows = %v, want nil (not observable)", *rows)
 	}
@@ -159,7 +165,61 @@ func TestUsageLoggerWritesCountedRecord(t *testing.T) {
 	}
 }
 
-// TestUsageLoggerDisabledWritesNothing verifies the opt-out.
+// TestUsageLoggerCarriesTheTruncationFlags verifies that the usage record
+// carries the three truncations, so a harness can tell a complete answer from
+// a cut one.
+func TestUsageLoggerCarriesTheTruncationFlags(t *testing.T) {
+	response := &MCPResponse{
+		Result: CallToolResult{
+			Content: []ContentItem{{Type: "text", Text: "x"}},
+			StructuredContent: QueryResult{
+				ResultEnvelope: ResultEnvelope{
+					RowCount:          5,
+					Truncated:         false,
+					RowsTruncated:     false,
+					CellsTruncated:    true,
+					ResponseTruncated: true,
+				},
+			},
+		},
+	}
+
+	rows, rowTruncated, cellsTruncated, responseTruncated, _, _, _ := usageFromResponse(response)
+	if rows == nil || *rows != 5 {
+		t.Errorf("rows = %v, want 5", rows)
+	}
+	if rowTruncated == nil || *rowTruncated {
+		t.Errorf("row_truncated = %v, want false", rowTruncated)
+	}
+	if cellsTruncated == nil || !*cellsTruncated {
+		t.Errorf("cells_truncated = %v, want true", cellsTruncated)
+	}
+	if responseTruncated == nil || !*responseTruncated {
+		t.Errorf("response_truncated = %v, want true", responseTruncated)
+	}
+
+	var out bytes.Buffer
+	logger := newUsageLogger(true, &out)
+	logger.LogCall(UsageRecord{
+		Tool:              "query_database",
+		Status:            UsageStatusSuccess,
+		Rows:              rows,
+		RowTruncated:      rowTruncated,
+		CellsTruncated:    cellsTruncated,
+		ResponseTruncated: responseTruncated,
+	})
+
+	var record map[string]interface{}
+	if err := json.Unmarshal(out.Bytes(), &record); err != nil {
+		t.Fatalf("the usage record is not valid JSON: %v", err)
+	}
+	if record["cells_truncated"] != true {
+		t.Errorf("record = %v, want cells_truncated true", record)
+	}
+	if record["response_truncated"] != true {
+		t.Errorf("record = %v, want response_truncated true", record)
+	}
+}
 func TestUsageLoggerDisabledWritesNothing(t *testing.T) {
 	var out bytes.Buffer
 	logger := newUsageLogger(false, &out)

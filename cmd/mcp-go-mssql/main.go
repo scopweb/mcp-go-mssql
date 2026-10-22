@@ -350,21 +350,23 @@ func main() {
 			// Count the call once, at the transport boundary, where the
 			// bytes on the wire are already known.
 			if tool := toolNameFromParams(req.Method, req.Params); tool != "" {
-				rows, truncated, textBytes, structuredBytes, isToolError := usageFromResponse(response)
+				rows, truncated, cellsTruncated, responseTruncated, textBytes, structuredBytes, isToolError := usageFromResponse(response)
 				alias, readOnly := server.usageContext()
 				usageLogger.LogCall(UsageRecord{
-					CallID:          usageLogger.NextCallID(),
-					Tool:            tool,
-					Method:          req.Method,
-					Status:          usageStatus(response, outcome.timedOut, isToolError),
-					ElapsedMS:       time.Since(requestStart).Milliseconds(),
-					ResponseBytes:   len(responseBytes),
-					TextBytes:       textBytes,
-					StructuredBytes: structuredBytes,
-					Rows:            rows,
-					RowTruncated:    truncated,
-					Alias:           alias,
-					ReadOnly:        readOnly,
+					CallID:            usageLogger.NextCallID(),
+					Tool:              tool,
+					Method:            req.Method,
+					Status:            usageStatus(response, outcome.timedOut, isToolError),
+					ElapsedMS:         time.Since(requestStart).Milliseconds(),
+					ResponseBytes:     len(responseBytes),
+					TextBytes:         textBytes,
+					StructuredBytes:   structuredBytes,
+					Rows:              rows,
+					RowTruncated:      truncated,
+					CellsTruncated:    cellsTruncated,
+					ResponseTruncated: responseTruncated,
+					Alias:             alias,
+					ReadOnly:          readOnly,
 				})
 			}
 		}

@@ -38,9 +38,8 @@ const (
 
 // UsageRecord is one counted tool call.
 //
-// Rows and RowTruncated are pointers so "not observable" stays null instead
-// of being reported as a zero. Only query_database exposes the row count and
-// the truncation flag today; the catalog tools return text.
+// Rows, RowTruncated, CellsTruncated and ResponseTruncated are pointers so
+// "not observable" stays null instead of being reported as a zero.
 type UsageRecord struct {
 	CallID          uint64
 	Tool            string
@@ -52,8 +51,12 @@ type UsageRecord struct {
 	StructuredBytes int
 	Rows            *int
 	RowTruncated    *bool
-	Alias           string
-	ReadOnly        *bool
+	// CellsTruncated is true when a cell was shortened by the cell budget.
+	CellsTruncated *bool
+	// ResponseTruncated is true when the response budget stopped the result.
+	ResponseTruncated *bool
+	Alias             string
+	ReadOnly          *bool
 }
 
 // UsageLogger writes usage records to a writer.
@@ -134,6 +137,12 @@ func (ul *UsageLogger) LogCall(rec UsageRecord) {
 	if rec.RowTruncated != nil {
 		attrs = append(attrs, slog.Bool("row_truncated", *rec.RowTruncated))
 	}
+	if rec.CellsTruncated != nil {
+		attrs = append(attrs, slog.Bool("cells_truncated", *rec.CellsTruncated))
+	}
+	if rec.ResponseTruncated != nil {
+		attrs = append(attrs, slog.Bool("response_truncated", *rec.ResponseTruncated))
+	}
 	if rec.Alias != "" {
 		attrs = append(attrs, slog.String("alias", rec.Alias))
 	}
@@ -173,14 +182,14 @@ func toolNameFromParams(method string, params interface{}) string {
 // It returns the row count and the truncation flag when the tool exposes
 // them (query_database, through its structured result), and nil when the
 // tool does not report them.
-func usageFromResponse(response *MCPResponse) (rows *int, truncated *bool, textBytes, structuredBytes int, isToolError bool) {
+func usageFromResponse(response *MCPResponse) (rows *int, truncated *bool, cellsTruncated *bool, responseTruncated *bool, textBytes, structuredBytes int, isToolError bool) {
 	if response == nil {
-		return nil, nil, 0, 0, false
+		return nil, nil, nil, nil, 0, 0, false
 	}
 
 	result, ok := response.Result.(CallToolResult)
 	if !ok {
-		return nil, nil, 0, 0, false
+		return nil, nil, nil, nil, 0, 0, false
 	}
 
 	for _, item := range result.Content {
@@ -198,21 +207,35 @@ func usageFromResponse(response *MCPResponse) (rows *int, truncated *bool, textB
 		flag := queryResult.Truncated
 		rows = &count
 		truncated = &flag
+		cellsTruncated = &queryResult.CellsTruncated
+		responseTruncated = &queryResult.ResponseTruncated
 	}
 	if columnar, ok := result.StructuredContent.(ColumnarResult); ok {
 		count := columnar.RowCount
 		flag := columnar.Truncated
 		rows = &count
 		truncated = &flag
+		cellsTruncated = &columnar.CellsTruncated
+		responseTruncated = &columnar.ResponseTruncated
 	}
 	if envelope, ok := result.StructuredContent.(CatalogResult); ok {
 		count := envelope.RowCount
 		flag := envelope.Truncated
 		rows = &count
 		truncated = &flag
+		cellsTruncated = &envelope.CellsTruncated
+		responseTruncated = &envelope.ResponseTruncated
+	}
+	if search, ok := result.StructuredContent.(searchResult); ok {
+		count := search.Returned
+		flag := search.Truncated
+		rows = &count
+		truncated = &flag
+		cellsTruncated = &search.CellsTruncated
+		responseTruncated = &search.ResponseTruncated
 	}
 
-	return rows, truncated, textBytes, structuredBytes, result.IsError
+	return rows, truncated, cellsTruncated, responseTruncated, textBytes, structuredBytes, result.IsError
 }
 
 // usageStatus classifies a tool call.
