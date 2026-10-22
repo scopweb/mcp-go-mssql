@@ -24,6 +24,10 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 						Type:        "integer",
 						Description: "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated.",
 					},
+					"format": {
+						Type:        "string",
+						Description: "How the rows are rendered: 'map' (default, one object per row) or 'columnar' (the column names once and every row an array of values in that order).",
+					},
 				},
 				Required: []string{"query"},
 			},

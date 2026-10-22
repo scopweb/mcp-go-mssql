@@ -43,11 +43,7 @@ type QueryStats struct {
 // purpose: a result can be complete in rows and still have shortened cells,
 // or be cut by the size budget before the row cap.
 type ResultEnvelope struct {
-	// Rows holds the result-set rows. Each row is a map of column name
-	// to value, with []byte values converted to strings.
-	Rows []map[string]interface{} `json:"rows"`
-	// RowCount is the number of rows actually returned. It equals
-	// len(Rows).
+	// RowCount is the number of rows actually returned.
 	RowCount int `json:"row_count"`
 	// Truncated keeps the meaning of contract v1: the row cap was
 	// reached, so the result is not complete. It is the same value as
@@ -66,6 +62,64 @@ type ResultEnvelope struct {
 	TruncatedCells []CellTruncation `json:"truncated_cells,omitempty"`
 	// Limits reports the budgets that were applied to this result.
 	Limits AppliedLimits `json:"limits"`
+}
+
+// CatalogResult is the structured result of the catalog tools.
+type CatalogResult struct {
+	ResultEnvelope
+	// Rows holds the result-set rows. Each row is a map of column name
+	// to value, with []byte values converted to strings.
+	Rows []map[string]interface{} `json:"rows"`
+}
+
+// ColumnarResult is the result of a query when the caller asks for the
+// columnar format.
+//
+// The column names are paid once and every row is an array of values in that
+// order, so a wide table costs much less than one object per row. The
+// truncation facts are the same as in the default format.
+type ColumnarResult struct {
+	ResultEnvelope
+	// Format is always "columnar".
+	Format string `json:"format"`
+	// Columns are the names of the columns of the result set, in order.
+	Columns []string `json:"columns"`
+	// Rows holds the values of every row, in the order of Columns.
+	Rows [][]interface{} `json:"rows"`
+	// Stats holds the SET STATISTICS payload, always present.
+	Stats QueryStats `json:"stats"`
+}
+
+// columnarRows renders the rows of a result as arrays of values.
+//
+// The order comes from the result set, so the values keep the order of the
+// columns even when two of them share a name. A result with duplicated
+// column names is refused by the caller, because the map of a row cannot
+// hold them both.
+func columnarRows(rows []map[string]interface{}, columns []string) [][]interface{} {
+	rendered := make([][]interface{}, 0, len(rows))
+	for _, row := range rows {
+		values := make([]interface{}, 0, len(columns))
+		for _, column := range columns {
+			values = append(values, row[column])
+		}
+		rendered = append(rendered, values)
+	}
+	return rendered
+}
+
+// duplicateColumns returns the names that appear more than once.
+func duplicateColumns(columns []string) []string {
+	seen := make(map[string]bool, len(columns))
+	var duplicates []string
+	for _, column := range columns {
+		if seen[column] {
+			duplicates = append(duplicates, column)
+			continue
+		}
+		seen[column] = true
+	}
+	return duplicates
 }
 
 // InspectAllResult is the structured result of inspect with detail=all: the
@@ -89,8 +143,25 @@ type InspectAllResult struct {
 // MCP query_database tool. It supersedes the previous bare []map[string]interface{}
 // shape so the response can carry per-statement execution statistics
 // alongside the row data.
+// The formats a query result can be rendered in.
+const (
+	// FormatMap is the default format: one object per row, with the
+	// column name on every value.
+	FormatMap = "map"
+	// FormatColumnar is the opt-in format: the column names are paid
+	// once and every row is an array of values in that order.
+	FormatColumnar = "columnar"
+)
+
+// QueryResult is the wire-level result of executing a query via the
+// MCP query_database tool. It supersedes the previous bare []map[string]interface{}
+// shape so the response can carry per-statement execution statistics
+// alongside the row data.
 type QueryResult struct {
 	ResultEnvelope
+	// Rows holds the result-set rows. Each row is a map of column name
+	// to value, with []byte values converted to strings.
+	Rows []map[string]interface{} `json:"rows"`
 	// Stats holds the SET STATISTICS payload, always present.
 	Stats QueryStats `json:"stats"`
 }

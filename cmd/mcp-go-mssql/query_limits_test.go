@@ -241,7 +241,6 @@ func TestEstimateRowBytesGrowsWithTheRow(t *testing.T) {
 // reported independently.
 func TestResultEnvelopeFlagsAreSeparate(t *testing.T) {
 	envelope := ResultEnvelope{
-		Rows:              []map[string]interface{}{{"id": 1}},
 		RowCount:          1,
 		Truncated:         true,
 		RowsTruncated:     true,

@@ -37,6 +37,11 @@ var contractExamples = []contractExample{
 		required: []string{"rows", "truncated", "rows_truncated", "cells_truncated", "response_truncated", "truncated_cells", "limits"},
 	},
 	{
+		marker:   "example:columnar-result",
+		kind:     "columnar",
+		required: []string{"format", "columns", "rows", "row_count", "truncated", "limits"},
+	},
+	{
 		marker:   "example:search-result",
 		kind:     "search",
 		required: []string{"matches", "returned", "truncated", "limits", "next_steps"},
@@ -80,6 +85,24 @@ func TestContractExamplesMatchTheServerTypes(t *testing.T) {
 			}
 			if result.Limits.MaxObjects == 0 {
 				t.Errorf("the example %q does not report the limit of the search", example.marker)
+			}
+		case "columnar":
+			var result ColumnarResult
+			if err := json.Unmarshal([]byte(block), &result); err != nil {
+				t.Errorf("the example %q is not a valid columnar result: %v", example.marker, err)
+				continue
+			}
+			if result.Format != FormatColumnar {
+				t.Errorf("the example %q reports the format %q, want %q", example.marker, result.Format, FormatColumnar)
+			}
+			if len(result.Rows) != result.RowCount {
+				t.Errorf("the example %q reports %d rows and a count of %d", example.marker, len(result.Rows), result.RowCount)
+			}
+			for _, row := range result.Rows {
+				if len(row) != len(result.Columns) {
+					t.Errorf("the example %q has a row of %d values and %d columns", example.marker, len(row), len(result.Columns))
+					break
+				}
 			}
 		}
 

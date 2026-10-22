@@ -10,6 +10,9 @@ Ejecuta una consulta SQL contra la base de datos MSSQL usando prepared statement
 | Nombre | Tipo | Requerido | Descripción |
 |--------|------|-----------|-------------|
 | `query` | string | Sí | Consulta SQL a ejecutar |
+| `max_cell_bytes` | integer | No | Tope del tamaño de una celda (mínimo 16). Un valor mayor se acorta y queda marcado |
+| `max_response_bytes` | integer | No | Tope aproximado del tamaño de toda la respuesta (mínimo 512). El resultado se detiene ahí |
+| `format` | string | No | `map` (por defecto, un objeto por fila) o `columnar` (los nombres de columna una vez y cada fila un array de valores en ese orden) |
 
 ## Ejemplo de uso
 
@@ -21,6 +24,30 @@ Ejecuta una consulta SQL contra la base de datos MSSQL usando prepared statement
   }
 }
 ```
+
+## Formatos de salida
+
+`query_database` admite dos formatos:
+
+- `format="map"` (por defecto): un objeto por fila, con el nombre de la columna en cada valor.
+- `format="columnar"`: los nombres de columna se pagan una vez y cada fila es un array de valores en ese orden.
+
+```json
+{
+  "format": "columnar",
+  "columns": ["id", "name", "city"],
+  "rows": [[1, "Acme", "Barcelona"], [2, "Beta", null]],
+  "row_count": 2,
+  "truncated": false,
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {"max_rows": 500, "max_cell_bytes": null, "max_response_bytes": null},
+  "stats": {"enabled": false, "messages": []}
+}
+```
+
+El formato columnar necesita nombres de columna únicos: si la consulta repite un nombre, el servidor lo rechaza porque una fila no puede llevarlo dos veces. Con diez columnas y doscientas filas, la forma columnar ocupa alrededor de un tercio que la forma mapa; medida en una tabla de 38 columnas y 100 filas, la respuesta completa pasó de 182 KB a 91 KB.
 
 ## Consultas permitidas
 

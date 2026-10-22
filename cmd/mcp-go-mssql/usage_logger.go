@@ -199,7 +199,13 @@ func usageFromResponse(response *MCPResponse) (rows *int, truncated *bool, textB
 		rows = &count
 		truncated = &flag
 	}
-	if envelope, ok := result.StructuredContent.(ResultEnvelope); ok {
+	if columnar, ok := result.StructuredContent.(ColumnarResult); ok {
+		count := columnar.RowCount
+		flag := columnar.Truncated
+		rows = &count
+		truncated = &flag
+	}
+	if envelope, ok := result.StructuredContent.(CatalogResult); ok {
 		count := envelope.RowCount
 		flag := envelope.Truncated
 		rows = &count
