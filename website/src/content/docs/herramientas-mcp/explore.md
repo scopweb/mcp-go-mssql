@@ -61,46 +61,44 @@ Con filtro de nombre y esquema:
 { "name": "explore", "arguments": { "type": "procedures", "schema": "dbo", "filter": "Camio" } }
 ```
 
-### Buscar objetos por nombre
+### Buscar por nombre, por columna o dentro del código fuente
 
 ```json
-{ "name": "explore", "arguments": { "type": "search", "pattern": "PedidoCamio" } }
-```
-
-### Buscar en el código fuente de procedimientos/vistas
-
-```json
-{ "name": "explore", "arguments": { "type": "search", "pattern": "PedidoCamio", "search_in": "definition" } }
-```
-
-### Buscar qué tabla tiene una columna
-
-```json
+{ "name": "explore", "arguments": { "type": "search", "pattern": "Pedido" } }
 { "name": "explore", "arguments": { "type": "search", "pattern": "ClienteId", "search_in": "column" } }
+{ "name": "explore", "arguments": { "type": "search", "pattern": "Pedido", "search_in": "definition" } }
 ```
 
-Responde en una sola llamada a "¿qué tabla tiene esta columna?", sin listar el catálogo e inspeccionar tabla por tabla. El término se compara como **subcadena literal**: los comodines `%`, `_` y `[` se escapan, así que `100%` busca la columna `100%` y no cualquier columna que termine en `100`.
-
-Filtros opcionales y límite:
-
-```json
-{ "name": "explore", "arguments": { "type": "search", "pattern": "Cliente", "search_in": "column", "schema": "dbo", "table": "Pedido", "limit": 20 } }
-```
-
-Este modo devuelve un **objeto**, no el array plano de los demás modos:
+Los tres modos de búsqueda comparten la misma respuesta: los objetos encontrados, el motivo de la coincidencia, las claves foráneas directas de las tablas que coinciden y el siguiente paso sugerido.
 
 ```json
 {
-  "matches": [
-    { "schema_name": "dbo", "table_name": "Pedido", "column_name": "ClienteId", "data_type": "int", "max_length": null, "is_nullable": "NO" }
-  ],
+  "matches": [{
+    "object_type": "TABLE",
+    "schema": "dbo",
+    "name": "Pedido",
+    "qualified_name": "dbo.Pedido",
+    "match": {"field": "name", "kind": "exact", "term": "Pedido"},
+    "columns": [{"name": "ClienteId", "data_type": "int", "max_length": null}],
+    "foreign_keys": [{"from_columns": ["ClienteId"], "to_table": "dbo.Cliente", "to_columns": ["Id"]}]
+  }],
   "returned": 1,
   "truncated": false,
-  "limit": 50
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {"max_objects": 50, "max_foreign_key_objects": 30,
+             "max_foreign_keys_per_object": 10, "max_cell_bytes": null, "max_response_bytes": null},
+  "next_steps": [{"tool": "inspect", "arguments": {"table_name": "dbo.Pedido", "detail": "all"},
+                  "reason": "read the full structure of dbo.Pedido"}]
 }
 ```
 
-`truncated: true` significa que había más columnas que las que devuelve el límite: acota con `schema`, `table` o un término más específico en lugar de dar la lista por completa. `max_length` es `null` en los tipos que no son de texto.
+- El orden es determinista: primero el nombre exacto, luego el prefijo, luego el contenido, y el nombre como desempate.
+- `match` indica el campo (`name`, `column`, `definition`) y el tipo de coincidencia (`exact`, `prefix`, `contains`).
+- `foreign_keys` son las claves foráneas directas de las tablas que coinciden: los caminos de join del esquema.
+- `next_steps` sugiere la llamada siguiente, normalmente `inspect` con `detail=all`.
+- `truncated: true` significa que había más objetos que los que devuelve el límite: acota la búsqueda en lugar de dar la lista por completa.
 
 ## Límite de resultados
 

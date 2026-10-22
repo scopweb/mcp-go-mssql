@@ -61,46 +61,44 @@ With name and schema filter:
 { "name": "explore", "arguments": { "type": "procedures", "schema": "dbo", "filter": "Truck" } }
 ```
 
-### Search objects by name
+### Search by name, by column or inside the source code
 
 ```json
-{ "name": "explore", "arguments": { "type": "search", "pattern": "OrderTruck" } }
-```
-
-### Search inside procedure/view source code
-
-```json
-{ "name": "explore", "arguments": { "type": "search", "pattern": "OrderTruck", "search_in": "definition" } }
-```
-
-### Find which table owns a column
-
-```json
+{ "name": "explore", "arguments": { "type": "search", "pattern": "Pedido" } }
 { "name": "explore", "arguments": { "type": "search", "pattern": "CustomerId", "search_in": "column" } }
+{ "name": "explore", "arguments": { "type": "search", "pattern": "Pedido", "search_in": "definition" } }
 ```
 
-Answers "which table has this column?" in a single call, instead of listing the catalog and inspecting table by table. The term is compared as a **literal substring**: the `%`, `_` and `[` wildcards are escaped, so `100%` finds the column `100%` and not every column ending in `100`.
-
-Optional filters and limit:
-
-```json
-{ "name": "explore", "arguments": { "type": "search", "pattern": "Customer", "search_in": "column", "schema": "dbo", "table": "Order", "limit": 20 } }
-```
-
-This mode returns an **object**, not the plain array of the other modes:
+The three search modes share one answer: the matched objects, the reason of the match, the direct foreign keys of the matched tables and the suggested next step.
 
 ```json
 {
-  "matches": [
-    { "schema_name": "dbo", "table_name": "Order", "column_name": "CustomerId", "data_type": "int", "max_length": null, "is_nullable": "NO" }
-  ],
+  "matches": [{
+    "object_type": "TABLE",
+    "schema": "dbo",
+    "name": "Order",
+    "qualified_name": "dbo.Order",
+    "match": {"field": "name", "kind": "exact", "term": "Order"},
+    "columns": [{"name": "CustomerId", "data_type": "int", "max_length": null}],
+    "foreign_keys": [{"from_columns": ["CustomerId"], "to_table": "dbo.Customer", "to_columns": ["Id"]}]
+  }],
   "returned": 1,
   "truncated": false,
-  "limit": 50
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {"max_objects": 50, "max_foreign_key_objects": 30,
+             "max_foreign_keys_per_object": 10, "max_cell_bytes": null, "max_response_bytes": null},
+  "next_steps": [{"tool": "inspect", "arguments": {"table_name": "dbo.Order", "detail": "all"},
+                  "reason": "read the full structure of dbo.Order"}]
 }
 ```
 
-`truncated: true` means more columns matched than the limit returned: narrow it with `schema`, `table` or a more specific term instead of treating the list as complete. `max_length` is `null` for non-character types.
+- The order is deterministic: an exact name first, then a prefix, then a substring, and the name as the tie break.
+- `match` says which field matched (`name`, `column`, `definition`) and how (`exact`, `prefix`, `contains`).
+- `foreign_keys` are the direct foreign keys of the matched tables: the join paths of the schema.
+- `next_steps` suggests the call to continue, usually `inspect` with `detail=all`.
+- `truncated: true` means more objects matched than the limit returned: narrow the search instead of treating the list as complete.
 
 ## Row limit
 

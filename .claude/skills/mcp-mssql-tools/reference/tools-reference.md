@@ -80,23 +80,36 @@ explore(type="databases")
 
 Finds the tables that own a column. The term is a **literal substring** of the column name: wildcards are escaped, so `100%` matches the column `100%` and not every column ending in `100`. Matching follows the database collation (case-insensitive by default).
 
-This mode answers with an **object**, not the array the other modes return:
+The three search modes share one envelope: the matched objects with the reason of the match, the direct foreign keys of the matched tables and the next step to take.
 
 ```json
 {
-  "matches": [
-    {"schema_name": "dbo", "table_name": "Pedido", "column_name": "ClienteId",
-     "data_type": "int", "max_length": null, "is_nullable": "NO"}
-  ],
+  "matches": [{
+    "object_type": "TABLE",
+    "schema": "dbo",
+    "name": "Pedido",
+    "qualified_name": "dbo.Pedido",
+    "match": {"field": "column", "kind": "contains", "term": "ClienteId"},
+    "columns": [{"name": "ClienteId", "data_type": "int", "max_length": null}],
+    "foreign_keys": [{"from_columns": ["ClienteId"], "to_table": "dbo.Cliente", "to_columns": ["Id"]}]
+  }],
   "returned": 1,
   "truncated": false,
-  "limit": 50
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {"max_objects": 50, "max_foreign_key_objects": 30,
+             "max_foreign_keys_per_object": 10, "max_cell_bytes": null, "max_response_bytes": null},
+  "next_steps": [{"tool": "inspect", "arguments": {"table_name": "dbo.Pedido", "detail": "all"},
+                  "reason": "read the full structure of dbo.Pedido"}]
 }
 ```
 
-`truncated: true` means more columns matched than `limit` returned: narrow the search with `schema`, `table` or a more specific term instead of treating the list as complete. `max_length` is null for non-character types.
-
-The query reads `INFORMATION_SCHEMA.COLUMNS` only, with a deterministic order (schema, table, column position). It asks for one row more than the limit, so it detects further matches without running a second count over the catalog.
+- The ranking is deterministic: an exact name first, then a prefix, then a substring, and the name as the tie break.
+- `foreign_keys` are resolved for up to 30 matched tables, with at most 10 keys each; the columns of a composite key stay together.
+- `truncated: true` means more objects matched than `limit` returned: narrow the search with `schema`, `table` or a more specific term instead of treating the list as complete. `max_length` is null for the types that are not characters.
+- The `definition` mode returns the source of the matched modules in `definition_snippet`; with `max_cell_bytes` the source is shortened and marked.
+- The queries read catalog views of SQL Server 2005 and later only, and the order is deterministic (the kind of match, then the name).
 
 ---
 

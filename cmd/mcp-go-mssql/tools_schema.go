@@ -152,82 +152,59 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 			}
 		}
 		searchIn, _ := params.Arguments["search_in"].(string)
-		likePattern := "%" + pattern + "%"
-		if searchIn == "column" {
-			// Column discovery: which table owns this column.
-			schemaFilter, _ := params.Arguments["schema"].(string)
-			tableFilter, _ := params.Arguments["table"].(string)
-			limit, _ := params.Arguments["limit"].(float64)
+		switch searchIn {
+		case matchFieldColumn, matchFieldDefinition:
+		default:
+			searchIn = matchFieldName
+		}
 
-			label = fmt.Sprintf("Columns matching '%s'", pattern)
-			search, searchErr := s.searchColumns(ctx, schemaFilter, tableFilter, pattern, int(limit), limits)
-			if searchErr != nil {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{Type: "text", Text: fmt.Sprintf("Error in explore: %v", searchErr)},
-						},
-						IsError: true,
-					},
-				}
-			}
+		schemaFilter, _ := params.Arguments["schema"].(string)
+		tableFilter, _ := params.Arguments["table"].(string)
+		limit, _ := params.Arguments["limit"].(float64)
 
-			encoded, encodeErr := json.MarshalIndent(search, "", "  ")
-			if encodeErr != nil {
-				return &MCPResponse{
-					JSONRPC: "2.0",
-					ID:      id,
-					Result: CallToolResult{
-						Content: []ContentItem{
-							{Type: "text", Text: fmt.Sprintf("Error formatting results: %v", encodeErr)},
-						},
-						IsError: true,
-					},
-				}
-			}
-
+		label = fmt.Sprintf("Objects matching '%s' in %s", pattern, searchIn)
+		search, searchErr := s.runSearch(ctx, searchIn, pattern, schemaFilter, tableFilter, int(limit), limits)
+		if searchErr != nil {
 			return &MCPResponse{
 				JSONRPC: "2.0",
 				ID:      id,
 				Result: CallToolResult{
 					Content: []ContentItem{
-						{Type: "text", Text: fmt.Sprintf("%s:\n%s", label, string(encoded))},
+						{Type: "text", Text: fmt.Sprintf("Error in explore: %v", searchErr)},
 					},
-					StructuredContent: search,
+					IsError: true,
 				},
 			}
 		}
-		if searchIn == "definition" {
-			label = fmt.Sprintf("Objects matching '%s' in definition", pattern)
-			query := `
-				SELECT
-					o.type_desc      AS object_type,
-					SCHEMA_NAME(o.schema_id) AS schema_name,
-					o.name           AS object_name,
-					m.definition     AS definition_snippet
-				FROM sys.sql_modules m
-				JOIN sys.objects     o ON o.object_id = m.object_id
-				WHERE m.definition LIKE @p1
-				ORDER BY o.type_desc, o.name
-			`
-			err = run(query, likePattern)
-		} else {
-			label = fmt.Sprintf("Objects matching '%s' in name", pattern)
-			query := `
-				SELECT
-					o.type_desc      AS object_type,
-					SCHEMA_NAME(o.schema_id) AS schema_name,
-					o.name           AS object_name,
-					o.create_date    AS created,
-					o.modify_date    AS modified
-				FROM sys.objects o
-				WHERE o.name LIKE @p1
-				  AND o.type IN ('U','V','P','FN','IF','TF')
-				ORDER BY o.type_desc, o.name
-			`
-			err = run(query, likePattern)
+
+		encoded, encodeErr := json.MarshalIndent(search, "", "  ")
+		if encodeErr != nil {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{Type: "text", Text: fmt.Sprintf("Error formatting results: %v", encodeErr)},
+					},
+					IsError: true,
+				},
+			}
+		}
+
+		text := fmt.Sprintf("%s:\n%s", label, string(encoded))
+		if notice := truncationNotice(search.RowsTruncated, search.CellsTruncated, search.ResponseTruncated, 0); notice != "" {
+			text += "\n" + notice
+		}
+
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: CallToolResult{
+				Content: []ContentItem{
+					{Type: "text", Text: text},
+				},
+				StructuredContent: search,
+			},
 		}
 
 	case "views":
