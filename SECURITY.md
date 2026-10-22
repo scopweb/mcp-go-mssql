@@ -54,6 +54,14 @@ The following are in scope:
 - Administrative procedures limited to `sys`/`dbo` read-only forms
 - Security event logging with credential sanitization
 - CLI read-only by default (`MSSQL_CLI_ALLOW_WRITE` is operator-only)
+- Classic MCP mode read-only by default; invalid `MSSQL_READ_ONLY` values abort startup
+- Client-independent security audit logging; DSNs and raw request bodies are not logged
+- Shared production TLS validation in MCP and CLI
+- Mandatory application result budgets (1 MiB per cell, 8 MiB per result data set)
+
+Result budgets apply after the SQL driver has materialized a cell. They are not
+a hard process-memory bound: unbounded LOB values remain a resource-exhaustion
+risk. Use bounded SQL projections and process memory limits in deployments.
 
 The Go validators are defense in depth. The real write boundary is a least-privilege SQL login.
 

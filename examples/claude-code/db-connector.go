@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"os"
 	"os/user"
-	"regexp"
 	"strings"
 	"time"
+
+	"mcp-go-mssql/internal/connectionsecurity"
+	"mcp-go-mssql/internal/sqlguard"
 
 	_ "github.com/microsoft/go-mssqldb"
 	// Windows Integrated Auth is conditionally included via integrated_auth_windows.go (build tag)
@@ -35,8 +37,6 @@ type QueryResult struct {
 	Error   string                   `json:"error,omitempty"`
 	Info    string                   `json:"info,omitempty"`
 }
-
-var selectIntoPattern = regexp.MustCompile(`(?is)\bSELECT\b.*\bINTO\s+(?:\[[^\]]+\]|\w+)`)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -103,6 +103,9 @@ func loadConfig() (*DatabaseConfig, error) {
 	if config.Auth == "" {
 		config.Auth = "sql" // default to SQL authentication
 	}
+	if os.Getenv("MSSQL_CONNECTION_STRING") != "" {
+		return config, nil
+	}
 
 	if config.Server == "" {
 		return nil, fmt.Errorf("missing required environment variable: MSSQL_SERVER")
@@ -126,7 +129,15 @@ func loadConfig() (*DatabaseConfig, error) {
 	return config, nil
 }
 
-func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
+func buildCLIConnectionString(config *DatabaseConfig) (string, error) {
+	if custom := os.Getenv("MSSQL_CONNECTION_STRING"); custom != "" {
+		if !config.DevMode {
+			if err := connectionsecurity.EnforceProductionTLS("MSSQL_CONNECTION_STRING", custom); err != nil {
+				return "", err
+			}
+		}
+		return custom, nil
+	}
 	trustCert := "false"
 	encrypt := "true"
 	if config.DevMode {
@@ -139,20 +150,14 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 		}
 	}
 
-	// Check if a complete custom connection string is provided
-	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
-		connStrLower := strings.ToLower(customConnStr)
-		if !strings.Contains(connStrLower, "connection timeout") {
-			customConnStr += ";connection timeout=30"
+	for name, value := range map[string]string{
+		"MSSQL_SERVER": config.Server, "MSSQL_DATABASE": config.Database,
+		"MSSQL_USER": config.User, "MSSQL_PASSWORD": config.Password,
+		"MSSQL_PORT": config.Port, "MSSQL_ENCRYPT": encrypt,
+	} {
+		if err := connectionsecurity.ValidateDSNField(name, value); err != nil {
+			return "", err
 		}
-		if !strings.Contains(connStrLower, "command timeout") {
-			customConnStr += ";command timeout=30"
-		}
-		db, err := sql.Open("sqlserver", customConnStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open connection: %w", err)
-		}
-		return db, nil
 	}
 
 	// Build connection string depending on requested authentication mode
@@ -173,6 +178,19 @@ func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
 			config.Server, config.Port, config.Database, config.User, config.Password, encrypt, trustCert)
 	}
 
+	if !config.DevMode {
+		if err := connectionsecurity.EnforceProductionTLS("CLI connection", connStr); err != nil {
+			return "", err
+		}
+	}
+	return connStr, nil
+}
+
+func connectDatabase(config *DatabaseConfig) (*sql.DB, error) {
+	connStr, err := buildCLIConnectionString(config)
+	if err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlserver", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open connection: %w", err)
@@ -285,7 +303,7 @@ func isReadOnlyQuery(query string) bool {
 	if !strings.HasPrefix(normalized, "SELECT") && !strings.HasPrefix(normalized, "WITH") {
 		return false
 	}
-	if selectIntoPattern.MatchString(normalized) {
+	if sqlguard.HasSelectInto(query) {
 		return false
 	}
 	if idx := strings.Index(normalized, ";"); idx >= 0 && strings.TrimSpace(normalized[idx+1:]) != "" {

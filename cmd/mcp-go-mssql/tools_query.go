@@ -313,11 +313,20 @@ func (s *MCPMSSQLServer) toolExplainQuery(id interface{}, params CallToolParams)
 	// and leaving the rest unread made the next command on this connection (SHOWPLAN OFF)
 	// run against a half-consumed TDS stream - the likely cause of the server hang.
 	var planLines []string
+	planBytes := 0
+	planTruncated := false
 	for {
 		for rows.Next() {
 			var line sql.NullString
 			if err := rows.Scan(&line); err == nil && line.Valid {
-				planLines = append(planLines, line.String)
+				text, cut := shortenCell(line.String, maxCellLimitBytes)
+				if len(planLines) < maxQueryRows && planBytes+len(text)+1 <= maxResponseLimitBytes {
+					planLines = append(planLines, text)
+					planBytes += len(text) + 1
+				} else {
+					planTruncated = true
+				}
+				planTruncated = planTruncated || cut
 			}
 		}
 		if !rows.NextResultSet() {
@@ -329,6 +338,9 @@ func (s *MCPMSSQLServer) toolExplainQuery(id interface{}, params CallToolParams)
 	_ = rows.Close()
 
 	resetShowplanOrDiscard(ctx, conn)
+	if planTruncated {
+		planLines = append(planLines, "[execution plan truncated by server safety limits]")
+	}
 
 	if len(planLines) == 0 {
 		planLines = []string{"(no plan returned — query may be too simple or unsupported)"}

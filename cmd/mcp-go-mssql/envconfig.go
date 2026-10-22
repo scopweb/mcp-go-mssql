@@ -1,10 +1,23 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// configuredReadOnly defaults to read-only; writes require an explicit false.
+func configuredReadOnly(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return true, fmt.Errorf("MSSQL_READ_ONLY must be true or false")
+	}
+}
 
 // Environment loading and dynamic-alias configuration.
 

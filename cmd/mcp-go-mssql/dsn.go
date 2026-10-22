@@ -2,11 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 
-	"github.com/microsoft/go-mssqldb/msdsn"
+	"mcp-go-mssql/internal/connectionsecurity"
 )
 
 // Connection-string construction and the production TLS fail-closed check.
@@ -18,19 +17,7 @@ import (
 // extra connection parameters such as "encrypt=false". The auto-built DSN uses
 // ';' as the field separator, so these characters must not appear in values.
 func validateDSNField(name, value string) error {
-	if strings.ContainsAny(value, ";\r\n\x00") {
-		return fmt.Errorf("invalid character in %s: ';', newline and null bytes are not allowed (use MSSQL_CONNECTION_STRING with a URL-form DSN for exotic values)", name)
-	}
-	return nil
-}
-
-// insecureTLSExplicitlyAllowed reports whether the operator has explicitly
-// opted in to insecure database TLS via MSSQL_ALLOW_INSECURE_TLS=true. This is
-// the intentional, auditable escape hatch for the legacy SQL Server
-// 2000/2008/2012 case (TLS 1.0 only). Without it, insecure TLS in production
-// fails closed instead of degrading silently (M2).
-func insecureTLSExplicitlyAllowed() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("MSSQL_ALLOW_INSECURE_TLS")), "true")
+	return connectionsecurity.ValidateDSNField(name, value)
 }
 
 // productionTLSViolation returns a non-empty, human-readable reason when a
@@ -39,25 +26,7 @@ func insecureTLSExplicitlyAllowed() bool {
 // validation disabled, or an implicit encryption setting. Driver defaults vary
 // by DSN form and version, so production must never rely on an omitted value.
 func productionTLSViolation(connStr string) string {
-	// Use the driver's parser so URL escaping, quoted/braced values and
-	// keyword synonyms have exactly the same meaning at validation and dial.
-	// Preserve case: passwords and certificate paths may be case-sensitive.
-	cfg, err := msdsn.Parse(connStr)
-	if err != nil {
-		// Parser errors may contain DSN values; do not expose them.
-		return "connection string could not be validated"
-	}
-	if _, ok := cfg.Parameters[msdsn.Encrypt]; !ok {
-		return "encryption is not explicitly enabled (missing encrypt=true or encrypt=strict)"
-	}
-
-	if cfg.Encryption != msdsn.EncryptionRequired && cfg.Encryption != msdsn.EncryptionStrict {
-		return "encryption is disabled (encrypt=false)"
-	}
-	if cfg.TLSConfig == nil || cfg.TLSConfig.InsecureSkipVerify {
-		return "server certificate validation is disabled (trustservercertificate=true)"
-	}
-	return ""
+	return connectionsecurity.ProductionTLSViolation(connStr)
 }
 
 // enforceProductionTLS fails closed when a connection would use insecure TLS in
@@ -67,15 +36,7 @@ func productionTLSViolation(connStr string) string {
 // logs. In development mode this must not be called (callers gate on
 // isProduction).
 func enforceProductionTLS(label, connStr string) error {
-	violation := productionTLSViolation(connStr)
-	if violation == "" {
-		return nil
-	}
-	if insecureTLSExplicitlyAllowed() {
-		slog.Warn(fmt.Sprintf("%s: %s in production — permitted because MSSQL_ALLOW_INSECURE_TLS=true", label, violation))
-		return nil
-	}
-	return fmt.Errorf("%s: %s in production. Refusing to start. Correct the TLS settings, or set MSSQL_ALLOW_INSECURE_TLS=true to intentionally allow it (needed only for legacy SQL Server 2000/2008/2012 that negotiate TLS 1.0)", label, violation)
+	return connectionsecurity.EnforceProductionTLS(label, connStr)
 }
 
 func buildSecureConnectionString() (string, error) {

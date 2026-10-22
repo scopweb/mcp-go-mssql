@@ -28,7 +28,11 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	if err != nil {
 		return nil, nil, err
 	}
-	return withTruncationSentinel(outcome.Rows, outcome.RowsTruncated), outcome.StatsMessages, nil
+	results := withTruncationSentinel(outcome.Rows, outcome.RowsTruncated)
+	if outcome.CellsTruncated || outcome.ResponseTruncated {
+		results = append(results, map[string]interface{}{"_truncated": truncationNotice(outcome.RowsTruncated, outcome.CellsTruncated, outcome.ResponseTruncated, outcome.CellsCut)})
+	}
+	return results, outcome.StatsMessages, nil
 }
 
 // queryOutcome is the result of a query with its truncation facts.
@@ -65,6 +69,7 @@ type queryOutcome struct {
 // A cell longer than the cell budget is shortened and marked, and a row that
 // does not fit in the response budget stops the result.
 func (s *MCPMSSQLServer) executeSecureQueryWithLimits(ctx context.Context, query string, limits queryLimits, args ...interface{}) (queryOutcome, error) {
+	limits = limits.bounded()
 	outcome := queryOutcome{Limits: limits.appliedLimits()}
 	db := s.getDB()
 	if db == nil {
@@ -170,11 +175,7 @@ func (s *MCPMSSQLServer) executeSecureQueryWithLimits(ctx context.Context, query
 		row := make(map[string]interface{})
 		for i, col := range columns {
 			val := values[i]
-			if b, ok := val.([]byte); ok {
-				row[col] = string(b)
-			} else {
-				row[col] = val
-			}
+			row[col] = val // rowBudget converts bytes only after applying the cell cap.
 		}
 
 		// The optional budgets are applied here, while the rows are read.

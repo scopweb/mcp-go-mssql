@@ -345,7 +345,7 @@ type publishedSchema struct {
 
 // buildPublishedSchema returns the schema of the served catalog.
 func buildPublishedSchema(classic, dynamic []Tool) publishedSchema {
-	return publishedSchema{Contract: "1", Classic: classic, Dynamic: dynamic}
+	return publishedSchema{Contract: "2", Classic: classic, Dynamic: dynamic}
 }
 
 // renderPublishedSchema renders the published schema in a stable form.

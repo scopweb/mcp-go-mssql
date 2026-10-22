@@ -5,9 +5,47 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 )
+
+func TestQueryLimitsCannotBeDisabledOrRaised(t *testing.T) {
+	for _, value := range []interface{}{float64(0), float64(-1), 16.5, math.NaN(), math.Inf(1), float64(1 << 40), -1, json.Number("0"), json.Number("999999999999999999999")} {
+		if _, err := parseQueryLimits(map[string]interface{}{"max_cell_bytes": value}); err == nil {
+			t.Errorf("accepted %v", value)
+		}
+	}
+	if _, err := parseQueryLimits(map[string]interface{}{"max_cell_bytes": maxCellLimitBytes + 1}); err == nil {
+		t.Fatal("cell ceiling bypassed")
+	}
+	if _, err := parseQueryLimits(map[string]interface{}{"max_response_bytes": maxResponseLimitBytes + 1}); err == nil {
+		t.Fatal("response ceiling bypassed")
+	}
+}
+
+func TestDefaultBudgetTruncatesLargeBytes(t *testing.T) {
+	b := rowBudget{}
+	row := map[string]interface{}{"blob": []byte(strings.Repeat("x", maxCellLimitBytes+100))}
+	if !b.addRow(row, 0) || !b.cellsTruncated {
+		t.Fatal("default cell ceiling not applied")
+	}
+	value := row["blob"].(string)
+	if len(value) > maxCellLimitBytes+100 || !strings.Contains(value, "truncated:") {
+		t.Fatal("missing truncation marker")
+	}
+	if b.truncatedCells[0].OriginalBytes != maxCellLimitBytes+100 {
+		t.Fatal("incorrect original size")
+	}
+	for i := 1; i < 10; i++ {
+		if !b.addRow(map[string]interface{}{"v": strings.Repeat("x", maxCellLimitBytes)}, i) {
+			break
+		}
+	}
+	if !b.responseTruncated {
+		t.Fatal("default response ceiling not applied")
+	}
+}
 
 // TestParseQueryLimits verifies the optional budgets of a tool call.
 func TestParseQueryLimits(t *testing.T) {
@@ -15,8 +53,8 @@ func TestParseQueryLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no arguments must not fail: %v", err)
 	}
-	if limits.MaxCellBytes != 0 || limits.MaxResponseBytes != 0 {
-		t.Errorf("limits = %+v, want no budget", limits)
+	if limits.MaxCellBytes != maxCellLimitBytes || limits.MaxResponseBytes != maxResponseLimitBytes {
+		t.Errorf("limits = %+v, want server ceilings", limits)
 	}
 
 	limits, err = parseQueryLimits(map[string]interface{}{
@@ -45,23 +83,22 @@ func TestParseQueryLimitsRejectsBadValues(t *testing.T) {
 	}
 }
 
-// TestAppliedLimitsReportNullWithoutBudget verifies that "no budget" is
-// reported as null, never as zero.
-func TestAppliedLimitsReportNullWithoutBudget(t *testing.T) {
+// Internal callers cannot disable the server ceilings with zero-valued limits.
+func TestAppliedLimitsReportServerCeilings(t *testing.T) {
 	applied := queryLimits{}.appliedLimits()
 	if applied.MaxRows != maxQueryRows {
 		t.Errorf("max_rows = %d, want %d", applied.MaxRows, maxQueryRows)
 	}
-	if applied.MaxCellBytes != nil || applied.MaxResponseBytes != nil {
-		t.Errorf("limits = %+v, want null budgets", applied)
+	if applied.MaxCellBytes == nil || applied.MaxResponseBytes == nil {
+		t.Fatalf("limits = %+v, want mandatory budgets", applied)
 	}
 
 	encoded, err := json.Marshal(applied)
 	if err != nil {
 		t.Fatalf("cannot marshal the limits: %v", err)
 	}
-	if !strings.Contains(string(encoded), `"max_cell_bytes":null`) {
-		t.Errorf("limits = %s, want a null max_cell_bytes", encoded)
+	if !strings.Contains(string(encoded), `"max_cell_bytes":1048576`) {
+		t.Errorf("limits = %s, want the server max_cell_bytes", encoded)
 	}
 }
 
