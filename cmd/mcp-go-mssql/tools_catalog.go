@@ -16,6 +16,14 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 						Type:        "string",
 						Description: "SQL query to execute. The server validates the active read-only, whitelist and approval policy.",
 					},
+					"max_cell_bytes": {
+						Type:        "integer",
+						Description: "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked. The SQL is never rewritten.",
+					},
+					"max_response_bytes": {
+						Type:        "integer",
+						Description: "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated.",
+					},
 				},
 				Required: []string{"query"},
 			},
@@ -77,6 +85,14 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 						Type:        "integer",
 						Description: "Maximum number of results for type=search (default 50, max 200). A truncated result is reported with truncated=true.",
 					},
+					"max_cell_bytes": {
+						Type:        "integer",
+						Description: "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked.",
+					},
+					"max_response_bytes": {
+						Type:        "integer",
+						Description: "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated.",
+					},
 				},
 				Required: []string{},
 			},
@@ -105,6 +121,14 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 					"detail": {
 						Type:        "string",
 						Description: "What to retrieve: 'columns' (default), 'indexes', 'foreign_keys', 'dependencies', 'all'",
+					},
+					"max_cell_bytes": {
+						Type:        "integer",
+						Description: "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked.",
+					},
+					"max_response_bytes": {
+						Type:        "integer",
+						Description: "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated.",
 					},
 				},
 				Required: []string{"table_name"},

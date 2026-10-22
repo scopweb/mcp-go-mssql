@@ -24,13 +24,52 @@ const maxQueryRows = 500
 // ([]map[string]interface{}, []string, error). Callers that ignore the
 // stats messages can assign them to `_`.
 func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, args ...interface{}) ([]map[string]interface{}, []string, error) {
+	outcome, err := s.executeSecureQueryWithLimits(ctx, query, queryLimits{}, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return withTruncationSentinel(outcome.Rows, outcome.RowsTruncated), outcome.StatsMessages, nil
+}
+
+// queryOutcome is the result of a query with its truncation facts.
+type queryOutcome struct {
+	// Rows holds the rows that were returned, without the legacy
+	// "_truncated" sentinel row.
+	Rows []map[string]interface{}
+	// StatsMessages holds the informational messages of a SET STATISTICS
+	// wrapper, nil for a plain query.
+	StatsMessages []string
+	// RowsTruncated is true when the server stopped at the row cap.
+	RowsTruncated bool
+	// CellsTruncated is true when at least one cell was shortened.
+	CellsTruncated bool
+	// ResponseTruncated is true when the response budget was reached.
+	ResponseTruncated bool
+	// TruncatedCells details the shortened cells, up to a fixed number.
+	TruncatedCells []CellTruncation
+	// CellsCut is the number of shortened cells, even when the detail
+	// list was capped.
+	CellsCut int
+	// Limits reports the budgets that were applied.
+	Limits AppliedLimits
+}
+
+// executeSecureQueryWithLimits runs a validated, prepared query and returns
+// the rows together with the facts of the optional budgets.
+//
+// The budgets are applied in Go while the rows are read: the SQL of the
+// caller is never rewritten, no TOP is injected and no predicate is added.
+// A cell longer than the cell budget is shortened and marked, and a row that
+// does not fit in the response budget stops the result.
+func (s *MCPMSSQLServer) executeSecureQueryWithLimits(ctx context.Context, query string, limits queryLimits, args ...interface{}) (queryOutcome, error) {
+	outcome := queryOutcome{Limits: limits.appliedLimits()}
 	db := s.getDB()
 	if db == nil {
-		return nil, nil, fmt.Errorf("database not connected")
+		return outcome, fmt.Errorf("database not connected")
 	}
 
 	if err := s.validateBasicInput(query); err != nil {
-		return nil, nil, err
+		return outcome, err
 	}
 
 	// Detect a SET STATISTICS wrapper. The wrapper is the only
@@ -56,7 +95,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	// existing SELECT/prefix checks would run as normal).
 	if err := s.validateReadOnlyQuery(query); err != nil {
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
-		return nil, nil, err
+		return outcome, err
 	}
 
 	// Validate granular table permissions on the BASE statement
@@ -64,7 +103,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	// operation and the referenced tables.
 	if err := s.validateTablePermissions(permCheckQuery); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
-		return nil, nil, err
+		return outcome, err
 	}
 
 	// If a wrapper was detected, install a per-call message sink so we
@@ -84,10 +123,10 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	if err != nil {
 		if s.devMode {
 			s.secLogger.Printf("Failed to prepare statement: %v", err)
-			return nil, nil, fmt.Errorf("query preparation failed: %v", err)
+			return outcome, fmt.Errorf("query preparation failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to prepare statement: query preparation error")
-		return nil, nil, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
+		return outcome, fmt.Errorf("query preparation failed: check SQL syntax, table/column names, and permissions. Use explore tool to verify table exists")
 	}
 	defer stmt.Close()
 
@@ -95,24 +134,24 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 	if err != nil {
 		if s.devMode {
 			s.secLogger.Printf("Failed to execute query: %v", err)
-			return nil, nil, fmt.Errorf("query execution failed: %v", err)
+			return outcome, fmt.Errorf("query execution failed: %v", err)
 		}
 		s.secLogger.Printf("Failed to execute query: execution error")
-		return nil, nil, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
+		return outcome, fmt.Errorf("query execution failed: the query syntax is valid but execution was rejected by the server. Check permissions and data constraints")
 	}
 	defer rows.Close()
 
 	columns, err := rows.Columns()
 	if err != nil {
-		return nil, nil, err
+		return outcome, err
 	}
 
 	var results []map[string]interface{}
 	rowCount := 0
-	truncated := false
+	budget := rowBudget{limits: limits}
 	for rows.Next() {
 		if rowCount >= maxQueryRows {
-			truncated = true
+			outcome.RowsTruncated = true
 			break
 		}
 		values := make([]interface{}, len(columns))
@@ -122,7 +161,7 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		}
 
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, nil, err
+			return outcome, err
 		}
 
 		row := make(map[string]interface{})
@@ -134,18 +173,25 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 				row[col] = val
 			}
 		}
+
+		// The optional budgets are applied here, while the rows are read.
+		// A row that does not fit in the response budget stops the result.
+		if !budget.addRow(row, rowCount) {
+			outcome.ResponseTruncated = true
+			break
+		}
 		results = append(results, row)
 		rowCount++
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("reading query results: %w", err)
+		return outcome, fmt.Errorf("reading query results: %w", err)
 	}
 
-	if truncated {
-		results = append(results, map[string]interface{}{
-			"_truncated": fmt.Sprintf("Results limited to %d rows. Use WHERE or TOP to narrow the query.", maxQueryRows),
-		})
-	}
+	outcome.Rows = results
+	outcome.CellsTruncated = budget.cellsTruncated
+	outcome.ResponseTruncated = outcome.ResponseTruncated || budget.responseTruncated
+	outcome.TruncatedCells = budget.truncatedCells
+	outcome.CellsCut = budget.cellsCut
 
 	var statsMsgs []string
 	if wrapper != nil && sink != nil {
@@ -155,5 +201,6 @@ func (s *MCPMSSQLServer) executeSecureQuery(ctx context.Context, query string, a
 		statsMsgs = sink.linesSnapshot()
 	}
 
-	return results, statsMsgs, nil
+	outcome.StatsMessages = statsMsgs
+	return outcome, nil
 }

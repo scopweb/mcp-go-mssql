@@ -199,6 +199,12 @@ func usageFromResponse(response *MCPResponse) (rows *int, truncated *bool, textB
 		rows = &count
 		truncated = &flag
 	}
+	if envelope, ok := result.StructuredContent.(ResultEnvelope); ok {
+		count := envelope.RowCount
+		flag := envelope.Truncated
+		rows = &count
+		truncated = &flag
+	}
 
 	return rows, truncated, textBytes, structuredBytes, result.IsError
 }

@@ -28,7 +28,17 @@ type columnSearchResult struct {
 	Matches   []map[string]interface{} `json:"matches"`
 	Returned  int                      `json:"returned"`
 	Truncated bool                     `json:"truncated"`
-	Limit     int                      `json:"limit"`
+	// RowsTruncated is the explicit name of Truncated: more columns
+	// matched than the limit returned.
+	RowsTruncated bool `json:"rows_truncated"`
+	// CellsTruncated is true when a cell was shortened by the cell budget.
+	CellsTruncated bool `json:"cells_truncated"`
+	// ResponseTruncated is true when the response budget was reached.
+	ResponseTruncated bool `json:"response_truncated"`
+	// Limits reports the budgets that were applied.
+	Limits AppliedLimits `json:"limits"`
+	// Limit is the maximum number of matches of this search.
+	Limit int `json:"limit"`
 }
 
 // escapeLikePattern escapes the LIKE metacharacters of a literal substring.
@@ -103,17 +113,18 @@ func buildColumnSearchQuery(schema, table, pattern string, limit int) (string, [
 //
 // It returns the matches, whether more results exist than the limit, and the
 // limit that was applied.
-func (s *MCPMSSQLServer) searchColumns(ctx context.Context, schema, table, pattern string, limit int) (columnSearchResult, error) {
+func (s *MCPMSSQLServer) searchColumns(ctx context.Context, schema, table, pattern string, limit int, limits queryLimits) (columnSearchResult, error) {
 	result := columnSearchResult{Limit: clampColumnSearchLimit(limit)}
 
 	query, args := buildColumnSearchQuery(schema, table, pattern, result.Limit)
-	rows, _, err := s.executeSecureQuery(ctx, query, args...)
+	outcome, err := s.executeSecureQueryWithLimits(ctx, query, limits, args...)
 	if err != nil {
 		return columnSearchResult{}, err
 	}
 
 	// The query asked for one row more than the limit: that extra row is the
 	// signal that the result is partial, and it is dropped from the payload.
+	rows := outcome.Rows
 	if len(rows) > result.Limit {
 		result.Truncated = true
 		rows = rows[:result.Limit]
@@ -121,5 +132,11 @@ func (s *MCPMSSQLServer) searchColumns(ctx context.Context, schema, table, patte
 
 	result.Matches = rows
 	result.Returned = len(rows)
+	result.RowsTruncated = result.Truncated
+	result.CellsTruncated = outcome.CellsTruncated
+	result.ResponseTruncated = outcome.ResponseTruncated
+	result.Limits = outcome.Limits
+	// For this search the row cap is the limit of the search itself.
+	result.Limits.MaxRows = result.Limit
 	return result, nil
 }

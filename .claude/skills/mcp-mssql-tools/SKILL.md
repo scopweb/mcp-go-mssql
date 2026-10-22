@@ -16,10 +16,10 @@ description: >
 
 | Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
 | --- | --- | --- | --- | --- | --- | --- |
-| `query_database` | `query:string` | `query` | classic | no | yes | no |
+| `query_database` | `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
 | `get_database_info` | — | — | classic | yes | no | yes |
-| `explore` | `filter:string`, `limit:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
-| `inspect` | `detail:string`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
+| `explore` | `filter:string`, `limit:integer`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
+| `inspect` | `detail:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
 | `execute_procedure` | `parameters:string`, `procedure_name:string` | `procedure_name` | classic | no | yes | no |
 | `explain_query` | `query:string` | `query` | classic | yes | no | yes |
 | `dynamic_available` | — | — | dynamic-only | yes | no | yes |
@@ -60,6 +60,25 @@ The server dispatches the canonical names above. A conversation may use other na
 - Tool errors arrive with `isError=true` and explanatory text. Never read the text of an error response as data.
 - **Never retry automatically a modification whose outcome is unknown** (timeout or transport failure): the write may already have been applied.
 - `get_database_info` returns plain text, not a result object.
+
+### Optional budgets
+
+`query_database`, `explore` and `inspect` accept two optional budgets:
+
+- `max_cell_bytes` (minimum 16): the cap of a single cell. A longer value is shortened, keeps its beginning and is marked.
+- `max_response_bytes` (minimum 512): an approximate cap for the whole result. The result stops there.
+
+They are **opt-in**: without them a result is exactly as before. The server never rewrites your SQL to fit a budget: no `TOP` is injected and no predicate is added.
+
+Every result reports the three truncations separately, so you always know what you got:
+
+| Flag | Meaning |
+|------|---------|
+| `rows_truncated` | the row cap was reached (the v1 `truncated` flag means the same) |
+| `cells_truncated` | at least one cell was shortened |
+| `response_truncated` | the size budget was reached and the result stops there |
+
+`limits` reports the budgets that were applied (`max_rows` is always the server cap; the other two are `null` when there is no budget). The catalog tools also add a `[truncated: ...]` notice at the end of their text.
 
 ## Access mode — read-only is absolute
 

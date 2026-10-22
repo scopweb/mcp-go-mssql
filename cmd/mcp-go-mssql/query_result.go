@@ -35,22 +35,62 @@ type QueryStats struct {
 	Parsed map[string]int `json:"parsed,omitempty"`
 }
 
+// ResultEnvelope carries the rows of a result and the facts of its
+// truncation.
+//
+// Every tool that returns rows uses it, so a client reads the truncation
+// flags the same way everywhere. The three truncations are separate on
+// purpose: a result can be complete in rows and still have shortened cells,
+// or be cut by the size budget before the row cap.
+type ResultEnvelope struct {
+	// Rows holds the result-set rows. Each row is a map of column name
+	// to value, with []byte values converted to strings.
+	Rows []map[string]interface{} `json:"rows"`
+	// RowCount is the number of rows actually returned. It equals
+	// len(Rows).
+	RowCount int `json:"row_count"`
+	// Truncated keeps the meaning of contract v1: the row cap was
+	// reached, so the result is not complete. It is the same value as
+	// RowsTruncated and stays for clients that only know this flag.
+	Truncated bool `json:"truncated"`
+	// RowsTruncated is the explicit name of Truncated.
+	RowsTruncated bool `json:"rows_truncated"`
+	// CellsTruncated is true when at least one cell was shortened by the
+	// cell budget.
+	CellsTruncated bool `json:"cells_truncated"`
+	// ResponseTruncated is true when the response budget was reached and
+	// the result stops there.
+	ResponseTruncated bool `json:"response_truncated"`
+	// TruncatedCells details the shortened cells. The list is capped, so
+	// CellsTruncated is the authoritative signal that some cell was cut.
+	TruncatedCells []CellTruncation `json:"truncated_cells,omitempty"`
+	// Limits reports the budgets that were applied to this result.
+	Limits AppliedLimits `json:"limits"`
+}
+
+// InspectAllResult is the structured result of inspect with detail=all: the
+// four sections of the table plus the facts of the truncation, in the same
+// envelope the other tools use.
+type InspectAllResult struct {
+	ResultEnvelope
+	// Columns holds the columns of the table.
+	Columns []map[string]interface{} `json:"columns"`
+	// Indexes holds the indexes of the table, one row per index.
+	Indexes []map[string]interface{} `json:"indexes"`
+	// ForeignKeys holds the foreign keys of the table.
+	ForeignKeys []map[string]interface{} `json:"foreign_keys"`
+	// Dependencies holds the objects that reference the table.
+	Dependencies []map[string]interface{} `json:"dependencies"`
+	// CellsCut is the number of shortened cells of every section.
+	CellsCut int `json:"cells_cut"`
+}
+
 // QueryResult is the wire-level result of executing a query via the
 // MCP query_database tool. It supersedes the previous bare []map[string]interface{}
 // shape so the response can carry per-statement execution statistics
 // alongside the row data.
 type QueryResult struct {
-	// Rows holds the result-set rows. Each row is a map of column name
-	// to value, with []byte values converted to strings.
-	Rows []map[string]interface{} `json:"rows"`
-	// RowCount is the number of rows actually returned (excluding any
-	// sentinel rows). It equals len(Rows) minus the truncation
-	// sentinel, when present.
-	RowCount int `json:"row_count"`
-	// Truncated is true when the result was cut off at the configured
-	// row limit (maxQueryRows). The previous _truncated row sentinel
-	// has been removed; clients should check this flag instead.
-	Truncated bool `json:"truncated"`
+	ResultEnvelope
 	// Stats holds the SET STATISTICS payload, always present.
 	Stats QueryStats `json:"stats"`
 }

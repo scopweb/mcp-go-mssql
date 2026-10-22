@@ -77,6 +77,37 @@ includes serialized JSON text for older MCP clients. The structured shape is:
 complete result. A client must preserve this flag when presenting output to an
 agent.
 
+### Response budgets
+
+`query_database`, `explore` and `inspect` accept two optional budgets:
+
+- `max_cell_bytes` (minimum 16): the cap of a single cell. A longer value is
+  shortened, keeps its beginning and is marked.
+- `max_response_bytes` (minimum 512): an approximate cap for the whole result.
+  The result stops there.
+
+They are opt-in: without them a result is exactly as before. The budgets are
+applied by the server while the rows are read; **the SQL of the caller is never
+rewritten**, no `TOP` is injected and no predicate is added.
+
+The result reports the three truncations separately, so a client always knows
+what it received:
+
+- `rows_truncated`: the row cap was reached. The v1 flag `truncated` keeps this
+  exact meaning.
+- `cells_truncated`: at least one cell was shortened. `truncated_cells` lists
+  the affected cells with their original size; the list is capped, so the flag
+  is the authoritative signal.
+- `response_truncated`: the size budget was reached and the result stops there.
+
+`limits` reports the budgets that were applied. `max_rows` is always the server
+cap; the other two are `null` when the caller did not ask for a budget.
+
+These fields are additive: nothing was removed and `truncated` was not
+reinterpreted, so the contract stays at version 1. The catalog tools keep their
+text shape and add a `[truncated: ...]` notice when the answer is not complete;
+they also return the same fields in `structuredContent`.
+
 Tool errors use MCP `isError=true`. Harnesses must not infer success from text.
 They must not automatically retry a modification after a timeout or transport
 failure because its database outcome can be unknown.
