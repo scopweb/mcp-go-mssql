@@ -1,10 +1,6 @@
 package main
 
-// Tests for the column discovery query.
-//
-// The query is built by a pure function, so the whole contract of the new
-// search mode can be verified without a database: what is parameterized, how
-// the filters are applied and how the limit is bounded.
+// Tests for the query that finds the columns of the catalog.
 
 import (
 	"strings"
@@ -28,22 +24,6 @@ func TestEscapeLikePattern(t *testing.T) {
 	}
 }
 
-// TestClampColumnSearchLimit verifies the default and the maximum.
-func TestClampColumnSearchLimit(t *testing.T) {
-	if got := clampColumnSearchLimit(0); got != defaultColumnSearchLimit {
-		t.Errorf("limit = %d, want the default %d", got, defaultColumnSearchLimit)
-	}
-	if got := clampColumnSearchLimit(-5); got != defaultColumnSearchLimit {
-		t.Errorf("limit = %d, want the default %d", got, defaultColumnSearchLimit)
-	}
-	if got := clampColumnSearchLimit(10); got != 10 {
-		t.Errorf("limit = %d, want 10", got)
-	}
-	if got := clampColumnSearchLimit(maxColumnSearchLimit + 1); got != maxColumnSearchLimit {
-		t.Errorf("limit = %d, want the maximum %d", got, maxColumnSearchLimit)
-	}
-}
-
 // TestBuildColumnSearchQueryParameterizesEverything verifies that no user
 // input reaches the query text.
 func TestBuildColumnSearchQueryParameterizesEverything(t *testing.T) {
@@ -53,16 +33,16 @@ func TestBuildColumnSearchQueryParameterizesEverything(t *testing.T) {
 		t.Error("the search term must be a parameter, not query text")
 	}
 	if !strings.Contains(query, "@p1") || !strings.Contains(query, "@p2") {
-		t.Error("the limit and the pattern must be parameters")
+		t.Error("the limit and the term must be parameters")
 	}
 	if len(args) != 2 {
-		t.Fatalf("args = %v, want the limit and the pattern", args)
+		t.Fatalf("args = %v, want the limit and the term", args)
 	}
 	if args[0] != 51 {
 		t.Errorf("limit argument = %v, want 51 (one row more to detect more results)", args[0])
 	}
 	if args[1] != "%ClienteId%" {
-		t.Errorf("pattern argument = %v, want %%ClienteId%%", args[1])
+		t.Errorf("term argument = %v, want %%ClienteId%%", args[1])
 	}
 }
 
@@ -71,7 +51,7 @@ func TestBuildColumnSearchQueryWithFilters(t *testing.T) {
 	query, args := buildColumnSearchQuery("dbo", "Pedido", "Cliente", 20)
 
 	if len(args) != 4 {
-		t.Fatalf("args = %v, want limit, pattern, schema and table", args)
+		t.Fatalf("args = %v, want limit, term, schema and table", args)
 	}
 	if args[2] != "dbo" {
 		t.Errorf("schema argument = %v, want dbo", args[2])
@@ -110,31 +90,5 @@ func TestBuildColumnSearchQueryIsCatalogOnly(t *testing.T) {
 		if strings.Contains(strings.ToUpper(query), forbidden) {
 			t.Errorf("the column search must not contain %s", forbidden)
 		}
-	}
-}
-
-// TestColumnSearchResultShape verifies the payload the agent receives.
-func TestColumnSearchResultShape(t *testing.T) {
-	result := columnSearchResult{
-		Matches: []map[string]interface{}{
-			{
-				"schema_name": "dbo",
-				"table_name":  "Pedido",
-				"column_name": "ClienteId",
-				"data_type":   "int",
-				"max_length":  nil,
-				"is_nullable": "NO",
-			},
-		},
-		Returned:  1,
-		Truncated: false,
-		Limit:     50,
-	}
-
-	if result.Returned != len(result.Matches) {
-		t.Errorf("returned = %d, want %d", result.Returned, len(result.Matches))
-	}
-	if result.Truncated {
-		t.Error("a complete result must not be reported as truncated")
 	}
 }

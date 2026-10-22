@@ -37,8 +37,7 @@ Six tools are served in classic mode (one database). The five `dynamic_*` / `con
 | Goal | Tool | Key param |
 |------|------|-----------|
 | List tables, views, procedures, databases | `explore` | `type` |
-| Find objects by name or inside their source code | `explore` | `type=search`, `pattern` |
-| Find the table that owns a column | `explore` | `type=search`, `search_in=column`, `pattern` |
+| Find objects by name, by column or inside their source code | `explore` | `type=search`, `pattern` |
 | See column types, indexes, FKs, dependencies | `inspect` | `table_name`, `detail` |
 | Check connection status and access mode | `get_database_info` | — |
 | Run any SQL (SELECT, INSERT, UPDATE, DELETE, DDL) | `query_database` | `query` |
@@ -91,37 +90,54 @@ Every result reports the three truncations separately, so you always know what y
 ## Workflow
 
 1. **`get_database_info`** — confirm the connection and the access mode.
-2. **Search before listing.** If you know a name or a term, use `explore type=search`. Use `search_in=column` when you know the **column** but not the table; use `search_in=definition` when the logic may live inside a view or procedure. Listing the whole catalog first burns context.
+2. **Search before listing.** If you know a name or a term, use `explore type=search`. Use `search_in=column` when you know the **column** but not the table; use `search_in=definition` when the logic may live inside a view or procedure. Listing the whole catalog first burns context. The search tells you the foreign keys of the matched tables, so you rarely have to guess a join.
 3. **`inspect`** — `detail=columns` (the default) for the structure you need; `detail=indexes`, `detail=foreign_keys` or `detail=dependencies` when the question is about those. `detail=all` runs four catalog queries, so use it only when you really need everything.
 4. **`query_database`** — query with knowledge, not guesses.
 
 > Never guess table or column names. Always explore/inspect first.
 
-## Find a table by column name
+## Find an object or a table by column name
 
-`explore` with `type=search` and `search_in=column` answers "which table owns this column?" in one call, instead of listing the catalog and calling `inspect` once per table.
+`explore` with `type=search` answers "which table owns this column?" or "which object is this?" in one call, instead of listing the catalog and calling `inspect` once per table.
 
 ```
-explore(type="search", search_in="column", pattern="ClienteId")
+explore(type="search", pattern="Pedido")                              # by object name
+explore(type="search", search_in="column", pattern="ClienteId")       # by column name
+explore(type="search", search_in="definition", pattern="Pedido")      # inside the source
 ```
 
-The term is a **literal substring** of the column name (wildcards are not interpreted). Optional filters: `schema` (exact) and `table` (literal substring). `limit` caps the results (default 50, max 200).
+The term is a **literal substring** (wildcards are not interpreted). Optional filters: `schema` (exact) and `table` (literal substring). `limit` caps the objects returned (default 50, max 200).
 
-The answer is an object, not the plain array the other modes return:
+All three modes answer with the same envelope:
 
 ```json
 {
-  "matches": [
-    {"schema_name": "dbo", "table_name": "Pedido", "column_name": "ClienteId",
-     "data_type": "int", "max_length": null, "is_nullable": "NO"}
-  ],
+  "matches": [{
+    "object_type": "TABLE",
+    "schema": "dbo",
+    "name": "Pedido",
+    "qualified_name": "dbo.Pedido",
+    "match": {"field": "name", "kind": "exact", "term": "Pedido"},
+    "columns": [{"name": "ClienteId", "data_type": "int", "max_length": null}],
+    "foreign_keys": [{"from_columns": ["ClienteId"], "to_table": "dbo.Cliente", "to_columns": ["Id"]}]
+  }],
   "returned": 1,
   "truncated": false,
-  "limit": 50
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {"max_objects": 50, "max_foreign_key_objects": 30,
+             "max_foreign_keys_per_object": 10, "max_cell_bytes": null, "max_response_bytes": null},
+  "next_steps": [{"tool": "inspect", "arguments": {"table_name": "dbo.Pedido", "detail": "all"},
+                  "reason": "read the full structure of dbo.Pedido"}]
 }
 ```
 
-**`truncated: true` means more columns matched than the limit returned.** Narrow it with `schema`, `table` or a more specific term instead of assuming the list is complete. Then inspect only the candidates you need.
+- **Ranking**: an exact name first, then a prefix, then a substring, and the name as the tie break. The order is deterministic.
+- **`match`** says why the object matched: `field` is `name`, `column` or `definition`; `kind` is `exact`, `prefix` or `contains`.
+- **`foreign_keys`** are the direct foreign keys of the matched tables (up to 30 tables, 10 keys each). They are the join paths of the schema, so you rarely need to guess them.
+- **`next_steps`** suggests the call to continue, usually `inspect` with `detail=all`.
+- **`truncated`** is true when more objects matched than the limit returned. Narrow it with `schema`, `table` or a more specific term instead of assuming the list is complete.
 
 ## Reuse existing logic before writing SQL
 

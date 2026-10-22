@@ -120,6 +120,108 @@ The records carry no SQL, no results, no object definitions and no credentials, 
 
 A harness that measures its own cost can read these records instead of estimating it. The server counts calls per session, not per task: grouping calls into tasks belongs to the harness. A `timeout` record means the request exceeded the server deadline; it does not prove that a modification was not applied.
 
+## Examples
+
+Real shapes, with neutral names. The CI unmarshals them into the types of the
+server, so they cannot become fiction: when a result field changes, the
+example has to change with it or the build fails.
+
+### A query that fits in the budget
+
+<!-- example:query-result -->
+```json
+{
+  "rows": [
+    {"id": 1, "name": "Acme", "active": true}
+  ],
+  "row_count": 1,
+  "truncated": false,
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {
+    "max_rows": 500,
+    "max_cell_bytes": null,
+    "max_response_bytes": null
+  },
+  "stats": {
+    "enabled": false,
+    "messages": []
+  }
+}
+```
+
+### A result that was cut
+
+<!-- example:truncated-result -->
+```json
+{
+  "rows": [
+    {"id": 1, "notes": "the first bytes of the value [truncated: 1048576 bytes total]"}
+  ],
+  "row_count": 1,
+  "truncated": false,
+  "rows_truncated": false,
+  "cells_truncated": true,
+  "response_truncated": false,
+  "truncated_cells": [
+    {"row": 0, "column": "notes", "original_bytes": 1048576}
+  ],
+  "limits": {
+    "max_rows": 500,
+    "max_cell_bytes": 4096,
+    "max_response_bytes": null
+  },
+  "stats": {
+    "enabled": false,
+    "messages": []
+  }
+}
+```
+
+### A search
+
+<!-- example:search-result -->
+```json
+{
+  "matches": [
+    {
+      "object_type": "TABLE",
+      "schema": "dbo",
+      "name": "Order",
+      "qualified_name": "dbo.Order",
+      "match": {"field": "name", "kind": "exact", "term": "Order"},
+      "foreign_keys": [
+        {
+          "from_columns": ["CustomerId"],
+          "to_table": "dbo.Customer",
+          "to_columns": ["Id"]
+        }
+      ]
+    }
+  ],
+  "returned": 1,
+  "truncated": false,
+  "rows_truncated": false,
+  "cells_truncated": false,
+  "response_truncated": false,
+  "limits": {
+    "max_objects": 50,
+    "max_foreign_key_objects": 30,
+    "max_foreign_keys_per_object": 10,
+    "max_cell_bytes": null,
+    "max_response_bytes": null
+  },
+  "next_steps": [
+    {
+      "tool": "inspect",
+      "arguments": {"table_name": "dbo.Order", "detail": "all"},
+      "reason": "read the full structure of dbo.Order"
+    }
+  ]
+}
+```
+
 ## Harness obligations
 
 - Isolate process, credentials, and logs per agent/session.

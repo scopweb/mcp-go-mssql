@@ -15,6 +15,7 @@ package main
 // and commit the result together with the code change.
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -323,6 +324,102 @@ func upsertDocBlock(content, block, anchor string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("anchor line %q not found", anchor)
+}
+
+// publishedSchemaPath is the machine readable schema of the served catalog.
+//
+// It is published so an agent (or a client) can read what the server serves
+// without starting it, and so the CI can prove that the published schema
+// and the binary agree.
+var publishedSchemaPath = filepath.Join("docs", "mcp-tools.json")
+
+// publishedSchema is the published shape of the catalog.
+type publishedSchema struct {
+	// Contract is the version of the agent contract the schema belongs to.
+	Contract string `json:"contract"`
+	// Classic is the catalog served in classic mode.
+	Classic []Tool `json:"classic"`
+	// Dynamic is the catalog served in dynamic mode.
+	Dynamic []Tool `json:"dynamic"`
+}
+
+// buildPublishedSchema returns the schema of the served catalog.
+func buildPublishedSchema(classic, dynamic []Tool) publishedSchema {
+	return publishedSchema{Contract: "1", Classic: classic, Dynamic: dynamic}
+}
+
+// renderPublishedSchema renders the published schema in a stable form.
+func renderPublishedSchema(schema publishedSchema) (string, error) {
+	encoded, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(encoded) + "\n", nil
+}
+
+// TestPublishedToolSchemaMatchesTheServedCatalog verifies that the published
+// schema of tools/list is the one the server serves.
+func TestPublishedToolSchemaMatchesTheServedCatalog(t *testing.T) {
+	classic := servedTools(t, false)
+	dynamic := servedTools(t, true)
+	schema := buildPublishedSchema(classic, dynamic)
+
+	path := filepath.Join(repoRoot(), publishedSchemaPath)
+
+	if *updateDocBlocks {
+		rendered, err := renderPublishedSchema(schema)
+		if err != nil {
+			t.Fatalf("cannot render the published schema: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(rendered), 0o644); err != nil {
+			t.Fatalf("cannot write the published schema: %v", err)
+		}
+		return
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("cannot read the published schema: %v", err)
+	}
+
+	var published publishedSchema
+	if err := json.Unmarshal(content, &published); err != nil {
+		t.Fatalf("the published schema is not valid JSON: %v", err)
+	}
+
+	if published.Contract != schema.Contract {
+		t.Errorf("published contract = %q, want %q", published.Contract, schema.Contract)
+	}
+	if !equalToolLists(published.Classic, classic) {
+		t.Errorf("the published classic catalog does not match the served one:\n  published %s\n  served    %s",
+			toolNames(published.Classic), toolNames(classic))
+	}
+	if !equalToolLists(published.Dynamic, dynamic) {
+		t.Errorf("the published dynamic catalog does not match the served one:\n  published %s\n  served    %s",
+			toolNames(published.Dynamic), toolNames(dynamic))
+	}
+}
+
+// equalToolLists compares two catalogs by their serialized form.
+func equalToolLists(left, right []Tool) bool {
+	leftJSON, err := json.Marshal(left)
+	if err != nil {
+		return false
+	}
+	rightJSON, err := json.Marshal(right)
+	if err != nil {
+		return false
+	}
+	return string(leftJSON) == string(rightJSON)
+}
+
+// toolNames lists the names of a catalog.
+func toolNames(tools []Tool) string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // TestToolCatalogDocumentation verifies that every agent-facing document

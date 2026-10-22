@@ -1,0 +1,479 @@
+{
+  "contract": "1",
+  "classic": [
+    {
+      "name": "query_database",
+      "title": "Query Database",
+      "description": "Execute a SQL query subject to the active database policy",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max_cell_bytes": {
+            "type": "integer",
+            "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked. The SQL is never rewritten."
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated."
+          },
+          "query": {
+            "type": "string",
+            "description": "SQL query to execute. The server validates the active read-only, whitelist and approval policy."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_database_info",
+      "title": "Get Database Info",
+      "description": "Get database connection status and basic information",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "explore",
+      "title": "Explore Database",
+      "description": "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name, by source definition (requires pattern) or by column name (requires pattern).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Name filter for tables/procedures (LIKE match, e.g. 'Pedido')"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results for type=search (default 50, max 200). A truncated result is reported with truncated=true."
+          },
+          "max_cell_bytes": {
+            "type": "integer",
+            "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked."
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Search term. Required when type=search."
+          },
+          "schema": {
+            "type": "string",
+            "description": "Schema filter for procedures, and for a column search (exact schema name)"
+          },
+          "search_in": {
+            "type": "string",
+            "description": "Where to search: 'name' (default), 'definition' (inside procedure/view source code), 'column' (columns whose name contains the term)"
+          },
+          "table": {
+            "type": "string",
+            "description": "Table filter for a column search (literal substring match)"
+          },
+          "type": {
+            "type": "string",
+            "description": "What to explore: 'tables' (default), 'views', 'databases', 'procedures', 'search'"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "inspect",
+      "title": "Inspect Table",
+      "description": "Inspect a table's structure. detail=columns (default) returns column info, detail=indexes returns indexes, detail=foreign_keys returns FK relationships, detail=dependencies returns objects (views, procedures, functions) that reference this table, detail=all returns everything in one call.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "What to retrieve: 'columns' (default), 'indexes', 'foreign_keys', 'dependencies', 'all'"
+          },
+          "max_cell_bytes": {
+            "type": "integer",
+            "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked."
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated."
+          },
+          "schema": {
+            "type": "string",
+            "description": "Schema name (optional, defaults to 'dbo')"
+          },
+          "table_name": {
+            "type": "string",
+            "description": "Name of the table (can include schema: 'dbo.TableName')"
+          }
+        },
+        "required": [
+          "table_name"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "execute_procedure",
+      "title": "Execute Procedure",
+      "description": "Execute a whitelisted stored procedure (requires MSSQL_WHITELIST_PROCEDURES env var)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "parameters": {
+            "type": "string",
+            "description": "JSON object with parameter names and values (optional)"
+          },
+          "procedure_name": {
+            "type": "string",
+            "description": "Name of the stored procedure to execute"
+          }
+        },
+        "required": [
+          "procedure_name"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "explain_query",
+      "title": "Explain Query",
+      "description": "Show the estimated execution plan for a SQL query without executing it. Useful for performance analysis and query optimization. Only SELECT queries are accepted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "SELECT query to analyze (must be a read-only query)"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ],
+  "dynamic": [
+    {
+      "name": "query_database",
+      "title": "Query Database",
+      "description": "Execute a SQL query subject to the active database policy",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max_cell_bytes": {
+            "type": "integer",
+            "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked. The SQL is never rewritten."
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated."
+          },
+          "query": {
+            "type": "string",
+            "description": "SQL query to execute. The server validates the active read-only, whitelist and approval policy."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_database_info",
+      "title": "Get Database Info",
+      "description": "Get database connection status and basic information",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "explore",
+      "title": "Explore Database",
+      "description": "Explore database objects. type=tables (default) lists tables/views, type=views lists views with metadata (check_option, is_updatable, definition preview), type=databases lists all databases, type=procedures lists stored procedures, type=search searches objects by name, by source definition (requires pattern) or by column name (requires pattern).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Name filter for tables/procedures (LIKE match, e.g. 'Pedido')"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results for type=search (default 50, max 200). A truncated result is reported with truncated=true."
+          },
+          "max_cell_bytes": {
+            "type": "integer",
+            "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked."
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Search term. Required when type=search."
+          },
+          "schema": {
+            "type": "string",
+            "description": "Schema filter for procedures, and for a column search (exact schema name)"
+          },
+          "search_in": {
+            "type": "string",
+            "description": "Where to search: 'name' (default), 'definition' (inside procedure/view source code), 'column' (columns whose name contains the term)"
+          },
+          "table": {
+            "type": "string",
+            "description": "Table filter for a column search (literal substring match)"
+          },
+          "type": {
+            "type": "string",
+            "description": "What to explore: 'tables' (default), 'views', 'databases', 'procedures', 'search'"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "inspect",
+      "title": "Inspect Table",
+      "description": "Inspect a table's structure. detail=columns (default) returns column info, detail=indexes returns indexes, detail=foreign_keys returns FK relationships, detail=dependencies returns objects (views, procedures, functions) that reference this table, detail=all returns everything in one call.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "What to retrieve: 'columns' (default), 'indexes', 'foreign_keys', 'dependencies', 'all'"
+          },
+          "max_cell_bytes": {
+            "type": "integer",
+            "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked."
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated."
+          },
+          "schema": {
+            "type": "string",
+            "description": "Schema name (optional, defaults to 'dbo')"
+          },
+          "table_name": {
+            "type": "string",
+            "description": "Name of the table (can include schema: 'dbo.TableName')"
+          }
+        },
+        "required": [
+          "table_name"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "execute_procedure",
+      "title": "Execute Procedure",
+      "description": "Execute a whitelisted stored procedure (requires MSSQL_WHITELIST_PROCEDURES env var)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "parameters": {
+            "type": "string",
+            "description": "JSON object with parameter names and values (optional)"
+          },
+          "procedure_name": {
+            "type": "string",
+            "description": "Name of the stored procedure to execute"
+          }
+        },
+        "required": [
+          "procedure_name"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "explain_query",
+      "title": "Explain Query",
+      "description": "Show the estimated execution plan for a SQL query without executing it. Useful for performance analysis and query optimization. Only SELECT queries are accepted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "SELECT query to analyze (must be a read-only query)"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dynamic_available",
+      "title": "List Dynamic Connections",
+      "description": "List all preconfigured dynamic database connections (aliases defined via MSSQL_DYNAMIC_\u003cALIAS\u003e_* environment variables). Does not expose credentials. Use dynamic_connect to activate one.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dynamic_connect",
+      "title": "Connect to Dynamic Alias",
+      "description": "Switch the active database connection to one of the preconfigured dynamic aliases (e.g. 'CRM', 'IDENTITY', 'GDP'). The security posture (read-only vs full access) is determined by the alias configuration or global safe defaults. After connecting, use get_database_info to verify the active alias and its effective permissions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "alias": {
+            "type": "string",
+            "description": "The alias name of the preconfigured connection (case-insensitive, e.g. 'CRM' or 'crm')"
+          }
+        },
+        "required": [
+          "alias"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dynamic_disconnect",
+      "title": "Disconnect Dynamic Connection",
+      "description": "Close the currently active dynamic connection and return to disconnected state. Does not affect other aliases.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dynamic_list",
+      "title": "List Active Dynamic Connections",
+      "description": "Show currently loaded dynamic aliases and which one (if any) is the active connection for subsequent query_database calls.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "confirm_operation",
+      "title": "Confirm Dangerous Operation",
+      "description": "Explicitly confirm a potentially destructive operation (INSERT/UPDATE/DELETE/DROP/etc.) on a writable dynamic alias. This is a required security step. You must call this tool with a clear description of what you intend to do before the actual modification query will be allowed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Clear description of the operation you want to perform (e.g. 'DELETE all rows from temp_ai where created \u003c 2025-01-01')"
+          }
+        },
+        "required": [
+          "description"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    }
+  ]
+}
