@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Security review fixes (2026-10-22):** lexically recognize quoted `SELECT INTO` targets in MCP and CLI; validate the actual `INSERT` destination even without `INTO`; reject ambiguous target forms. Add offline regressions for both authorization bypasses.
+- **Audit logging cannot be disabled by the client.** `logging/setLevel` now affects diagnostics only. DSNs and raw request payloads are no longer logged; credential-bearing messages are redacted in full, including passwords containing spaces or delimiters.
+- **CLI shares the MCP production TLS policy.** Custom DSNs are validated without appending ADO fields to URLs, and interpolated fields reject DSN separators. Legacy TLS still requires the explicit production opt-in.
+- **Require Go 1.27.3** to address GO-2026-6809 (CVE-2026-111943). Rebuild deployed binaries with the patched toolchain.
+- **Mandatory application result budgets:** default/maximum 1 MiB per cell and 8 MiB per result data set; invalid numeric limits are rejected. Byte LOBs are shortened before conversion to strings. This bounds retained application results, but does not bound the driver's initial LOB allocation; use bounded SQL projections and process memory limits for that remaining risk.
+
 - **Dependency refresh (2026-10-14):** require Go 1.27.2 (fixes GO-2026-6607), upgrade `go-mssqldb` to 1.11.2, `decimal` to 1.5.0, `x/crypto` to 0.58.0 and `x/text` to 0.43.0. Upgrade documentation dependencies to Astro 7.3.8, Starlight 0.42.6 and Sharp 0.35.5; pin the vulnerable nested CSS parser to 7.1.6 with a scoped override.
 - **Validate production TLS using the driver's DSN parser.** Quoted/braced and URL-encoded values, boolean synonyms and `encrypt=optional` can no longer bypass the check. DSNs are parsed without lowercasing credentials or certificate paths, and parse errors returned by the guard do not expose DSN values.
 - **`READ_ONLY=true` is absolute.** A table whitelist can no longer enable `INSERT`/`UPDATE`/`DELETE`/DDL/`MERGE`/`SELECT INTO` or `execute_procedure` while read-only is on. Whitelist writes require an explicitly writable context (`MSSQL_READ_ONLY=false` or `MSSQL_DYNAMIC_<ALIAS>_READ_ONLY=false`) plus a non-empty whitelist. Dynamic writable aliases without a whitelist still permit no modifications.
@@ -27,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Confirmation is bound to the exact statement.** Dynamic writable modifications require `confirm_operation` for the alias, operation, tables, and SHA-256 of the exact SQL; a pending request is not treated as approval, and an approval is one-shot.
 
 ### Changed
+
+- **Agent contract v2 migration:** classic mode defaults to read-only when `MSSQL_READ_ONLY` is absent or empty; invalid boolean values abort startup. Operators intentionally allowing classic writes must explicitly set `false`. Result budget arguments may lower, but never disable or exceed, the server ceilings. `limits` now reports numeric defaults instead of `null`; clients must honor all three truncation flags. CLI users with insecure production DSNs must fix TLS or explicitly opt into the documented legacy exception. No field names or tool names changed.
 
 - **`explore` with `type=search` answers with an object instead of an array.** The search modes used to return a plain array of rows (and the column mode a smaller object). They now return the unified envelope described above, in the text and in `structuredContent`. Clients that read `explore` results as a bare array have to read the `matches` field instead. The other `explore` modes (`tables`, `views`, `procedures`, `databases`) keep their array shape.
 - **The `explore` catalog no longer filters on `sys.objects.type`.** That column is a `char(2)` code in SQL Server 2012 to 2019 and a `tinyint` in 2022, so comparing it with text failed with error 245 on some versions. The filter now uses `type_desc`, which is accepted in both spellings, and the object type is mapped to a stable name in Go.

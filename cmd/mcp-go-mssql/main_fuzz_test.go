@@ -105,7 +105,8 @@ func FuzzExtractOperation(f *testing.F) {
 	f.Fuzz(func(t *testing.T, query string) {
 		op := server.extractOperation(query)
 		validOps := map[string]bool{
-			"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": true,
+			"SELECT_INTO": true,
+			"SELECT":      true, "INSERT": true, "UPDATE": true, "DELETE": true,
 			"DROP": true, "CREATE": true, "ALTER": true, "TRUNCATE": true, "MERGE": true,
 		}
 		if !validOps[op] {

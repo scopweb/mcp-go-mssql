@@ -2,6 +2,9 @@ package main
 
 // tools/list catalog. The set of tools depends on classic vs dynamic mode.
 
+const cellBudgetDescription = "Cell size budget in bytes (16..1048576; default and server ceiling 1048576). Longer values are shortened and marked. The SQL is never rewritten."
+const responseBudgetDescription = "Approximate result budget in bytes (512..8388608; default and server ceiling 8388608). The result stops there and is marked as truncated."
+
 // listTools returns the tools/list catalog for the active server mode.
 func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 	tools := []Tool{
@@ -18,11 +21,11 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 					},
 					"max_cell_bytes": {
 						Type:        "integer",
-						Description: "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked. The SQL is never rewritten.",
+						Description: cellBudgetDescription,
 					},
 					"max_response_bytes": {
 						Type:        "integer",
-						Description: "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated.",
+						Description: responseBudgetDescription,
 					},
 					"format": {
 						Type:        "string",
@@ -91,11 +94,11 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 					},
 					"max_cell_bytes": {
 						Type:        "integer",
-						Description: "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked.",
+						Description: cellBudgetDescription,
 					},
 					"max_response_bytes": {
 						Type:        "integer",
-						Description: "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated.",
+						Description: responseBudgetDescription,
 					},
 				},
 				Required: []string{},
@@ -128,11 +131,11 @@ func (s *MCPMSSQLServer) listTools(id interface{}) *MCPResponse {
 					},
 					"max_cell_bytes": {
 						Type:        "integer",
-						Description: "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked.",
+						Description: cellBudgetDescription,
 					},
 					"max_response_bytes": {
 						Type:        "integer",
-						Description: "Optional approximate cap for the size of the whole result (minimum 512). The result stops there and is marked as truncated.",
+						Description: responseBudgetDescription,
 					},
 				},
 				Required: []string{"table_name"},

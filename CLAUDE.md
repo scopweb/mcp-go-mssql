@@ -111,9 +111,9 @@ The server reads database connection from these environment variables. See `.env
 - `DEVELOPER_MODE`: Controls error verbosity and certificate validation
   - `"true"`: Development mode with detailed errors and relaxed TLS certificate validation
   - `"false"`: Production mode with generic errors and strict certificate validation
-- `MSSQL_READ_ONLY`: Enable absolute read-only mode (security feature)
-  - `"true"`: Only reads and explicitly allowlisted administrative introspection; no whitelist can enable writes or procedure execution
-  - `"false"`: Writes still require `MSSQL_WHITELIST_TABLES`; an empty whitelist permits no modifications in dynamic mode
+- `MSSQL_READ_ONLY`: Absolute read-only mode (security feature). Default is read-only when unset or empty. Invalid values abort startup
+  - `"true"` or unset: Only reads and explicitly allowlisted administrative introspection; no whitelist can enable writes or procedure execution
+  - `"false"`: Explicit opt-in for writes. Writes still require `MSSQL_WHITELIST_TABLES`; an empty whitelist permits no modifications in dynamic mode
 - `MSSQL_ENCRYPT`: Override TLS encryption setting (only effective when `DEVELOPER_MODE=true`)
   - `"false"`: Disable encryption — **required for SQL Server 2008/2012** which don't support TLS 1.2
   - `"true"`: Force encryption even in dev mode

@@ -1,6 +1,6 @@
 module mcp-go-mssql
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/golang-sql/sqlexp v0.1.0 // informational messages (SET STATISTICS)

@@ -50,8 +50,13 @@ func main() {
 	}
 
 	// Cache configuration once at startup (avoid os.Getenv on every request)
+	readOnly, err := configuredReadOnly(os.Getenv("MSSQL_READ_ONLY"))
+	if err != nil {
+		secLogger.Printf("Invalid security configuration: %v", err)
+		os.Exit(1)
+	}
 	cfg := serverConfig{
-		readOnly:        strings.ToLower(os.Getenv("MSSQL_READ_ONLY")) == "true",
+		readOnly:        readOnly,
 		whitelistTables: parseWhitelistTables(os.Getenv("MSSQL_WHITELIST_TABLES")),
 		whitelistProcs:  os.Getenv("MSSQL_WHITELIST_PROCEDURES"),
 	}
@@ -63,10 +68,10 @@ func main() {
 	if isDynamicMode() && !cfg.readOnly {
 		secLogger.Printf("*** FATAL SECURITY MISCONFIGURATION DETECTED ***")
 		secLogger.Printf("DYNAMIC multi-connection mode is active (MSSQL_DYNAMIC_MODE or MSSQL_DYNAMIC_* vars present)")
-		secLogger.Printf("BUT top-level MSSQL_READ_ONLY is false or unset (full access mode).")
+		secLogger.Printf("BUT top-level MSSQL_READ_ONLY is explicitly false (full access mode).")
 		secLogger.Printf("This would expose ALL dynamic databases (including production ones) to unrestricted write operations via query_database after dynamic_connect.")
 		secLogger.Printf("SAFETY ACTION: Forcing READ-ONLY mode globally for this session. Dynamic aliases will inherit safe defaults.")
-		secLogger.Printf("Recommendation: Remove MSSQL_READ_ONLY=false from the .env used with dynamic connections. Per-alias control (MSSQL_DYNAMIC_<ALIAS>_READ_ONLY) will be supported in a future secure implementation.")
+		secLogger.Printf("Recommendation: Remove global MSSQL_READ_ONLY=false and use explicit per-alias READ_ONLY settings with table whitelists.")
 		cfg.readOnly = true
 		cfg.whitelistTables = nil // start strict; per-alias can relax later
 	}
@@ -122,7 +127,7 @@ func main() {
 
 		customConnStr := os.Getenv("MSSQL_CONNECTION_STRING")
 		if customConnStr != "" {
-			secLogger.Printf("Using custom connection string: %s", secLogger.sanitizeForLogging(customConnStr))
+			secLogger.Printf("Using custom connection string (value omitted)")
 		} else {
 			auth := strings.ToLower(authMode)
 			if auth == "" {
@@ -325,12 +330,8 @@ func main() {
 			continue
 		}
 
-		// Log only the JSON-RPC method at Info level. The full request body can
-		// contain PII embedded in SQL literals (e.g. WHERE dni = '...') that
-		// sanitizeForLogging does not scrub, so keep the body at Debug (M6),
-		// gated by the dynamic level set via logging/setLevel.
+		// Never log request payloads: SQL literals may contain credentials or PII.
 		secLogger.Printf("Processing request: method=%s", req.Method)
-		secLogger.Debugf("Request body: %s", secLogger.sanitizeForLogging(line))
 
 		// Bounded: a handler that never returns must not stall the loop (see handler_deadline.go)
 		requestStart := time.Now()

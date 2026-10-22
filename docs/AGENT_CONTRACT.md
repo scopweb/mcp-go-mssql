@@ -1,8 +1,9 @@
-# Agent Contract v1
+# Agent Contract v2
 
 This document defines the stable behavior expected from MCP clients, agent
 harnesses, and this server. It is intentionally separate from the MCP protocol
-version. The current contract version is `1`.
+version. The current contract version is `2`. Version 2 keeps the result field
+names but makes classic mode read-only by default and enforces result budgets.
 
 ## Session model
 
@@ -42,6 +43,8 @@ in depth and never replaces least-privilege grants in SQL Server.
   whitelisted.
 - Dynamic aliases are read-only by default. A writable dynamic alias without a
   whitelist permits no modifications.
+- Classic mode is also read-only by default. An absent/empty `MSSQL_READ_ONLY`
+  means true; invalid values abort startup. Writes require explicit false.
 - Stored procedures must be called with `execute_procedure`; a table whitelist
   never authorizes `EXEC` through `query_database`.
 - Writable dynamic modifications require an approval bound to the alias,
@@ -104,7 +107,9 @@ whole answer went from 182 KB to 91 KB.
 - `max_response_bytes` (minimum 512): an approximate cap for the whole result.
   The result stops there.
 
-They are opt-in: without them a result is exactly as before. The budgets are
+Mandatory defaults and ceilings are 1048576 bytes per cell and 8388608 bytes
+per result. Callers may only lower them; zero, negative, fractional and
+above-ceiling arguments are rejected. The budgets are
 applied by the server while the rows are read; **the SQL of the caller is never
 rewritten**, no `TOP` is injected and no predicate is added.
 
@@ -119,12 +124,17 @@ what it received:
 - `response_truncated`: the size budget was reached and the result stops there.
 
 `limits` reports the budgets that were applied. `max_rows` is always the server
-cap; the other two are `null` when the caller did not ask for a budget.
+cap; the other two report the effective mandatory defaults or lower caller budgets.
 
-These fields are additive: nothing was removed and `truncated` was not
-reinterpreted, so the contract stays at version 1. The catalog tools keep their
+No fields were removed and `truncated` was not reinterpreted. Contract v2 changes
+the defaults, so clients must check all truncation flags. The catalog tools keep their
 text shape and add a `[truncated: ...]` notice when the answer is not complete;
 they also return the same fields in `structuredContent`.
+
+The budgets bound retained result data, not the driver's peak allocation.
+go-mssqldb materializes cells before application truncation. Unbounded LOBs
+remain a resource-exhaustion risk; use bounded SQL projections and deployment
+memory limits. JSON markers, formatting and the MCP envelope add overhead.
 
 Tool errors use MCP `isError=true`. Harnesses must not infer success from text.
 They must not automatically retry a modification after a timeout or transport
@@ -134,7 +144,7 @@ failure because its database outcome can be unknown.
 
 The server writes one counted record per tool call to stderr as JSON with `component="usage"`: the tool, the elapsed time, the bytes on the wire, the bytes of text and of structured content, the rows delivered, the three truncation flags when the tool exposes them, and the outcome (`success`, `tool_error`, `rpc_error`, `timeout`).
 
-The records carry no SQL, no results, no object definitions and no credentials, and they are not affected by the MCP `logging/setLevel` request: a harness that lowers the security log level can still count calls. They are observability, not part of the result contract — no tool result changes. `MSSQL_USAGE_LOG=false` disables the stream.
+The records carry no SQL, no results, no object definitions and no credentials, and they are not affected by the MCP `logging/setLevel` request. Security audit events are likewise independent; only diagnostics use the client's logging level. They are observability, not part of the result contract. `MSSQL_USAGE_LOG=false` disables the usage stream.
 
 A harness that measures its own cost can read these records instead of estimating it. The server counts calls per session, not per task: grouping calls into tasks belongs to the harness. A `timeout` record means the request exceeded the server deadline; it does not prove that a modification was not applied.
 
@@ -159,8 +169,8 @@ example has to change with it or the build fails.
   "response_truncated": false,
   "limits": {
     "max_rows": 500,
-    "max_cell_bytes": null,
-    "max_response_bytes": null
+    "max_cell_bytes": 1048576,
+    "max_response_bytes": 8388608
   },
   "stats": {
     "enabled": false,
@@ -188,7 +198,7 @@ example has to change with it or the build fails.
   "limits": {
     "max_rows": 500,
     "max_cell_bytes": 4096,
-    "max_response_bytes": null
+    "max_response_bytes": 8388608
   },
   "stats": {
     "enabled": false,
@@ -215,8 +225,8 @@ example has to change with it or the build fails.
   "response_truncated": false,
   "limits": {
     "max_rows": 500,
-    "max_cell_bytes": null,
-    "max_response_bytes": null
+    "max_cell_bytes": 1048576,
+    "max_response_bytes": 8388608
   },
   "stats": {
     "enabled": false,
@@ -255,8 +265,8 @@ example has to change with it or the build fails.
     "max_objects": 50,
     "max_foreign_key_objects": 30,
     "max_foreign_keys_per_object": 10,
-    "max_cell_bytes": null,
-    "max_response_bytes": null
+    "max_cell_bytes": 1048576,
+    "max_response_bytes": 8388608
   },
   "next_steps": [
     {

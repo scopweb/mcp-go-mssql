@@ -4,8 +4,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
 
 // Table whitelist and modification confirmation. Regex is defense in depth, not the security boundary.
@@ -264,7 +267,7 @@ func (s *MCPMSSQLServer) extractAllQualifiedTablesFromQuery(query string) []stri
 // extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
 func (s *MCPMSSQLServer) extractOperation(query string) string {
 	queryUpper := stripLeadingComments(stripSQLComments(query))
-	if isSelectInto(queryUpper) {
+	if isSelectInto(query) {
 		return "SELECT_INTO"
 	}
 
@@ -333,6 +336,33 @@ func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
 	// the schema-qualified names used for the actual whitelist decision (M4).
 	tablesInQuery := s.extractAllTablesFromQuery(query)
 	qualifiedTables := s.extractAllQualifiedTablesFromQuery(query)
+	// A source table is never evidence that the write destination was checked.
+	// INSERT may omit INTO; quoted SELECT INTO targets also escape legacy regexes.
+	if operation == "INSERT" || operation == "SELECT_INTO" {
+		target, err := sqlguard.WriteTarget(query, operation)
+		if err != nil {
+			return fmt.Errorf("permission denied: %w", err)
+		}
+		allowed := false
+		for _, entry := range whitelist {
+			if normalizeObjectName(entry) == normalizeObjectName(target) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("permission denied: write target '%s' is not whitelisted", target)
+		}
+		qualifiedTarget := normalizeObjectName(target)
+		if !slices.Contains(qualifiedTables, qualifiedTarget) {
+			qualifiedTables = append(qualifiedTables, qualifiedTarget)
+		}
+		parts := splitObjectParts(target)
+		bareTarget := strings.ToLower(parts[len(parts)-1])
+		if !slices.Contains(tablesInQuery, bareTarget) {
+			tablesInQuery = append(tablesInQuery, bareTarget)
+		}
+	}
 
 	// === CONFIRMATION REQUIREMENT FOR WRITABLE DYNAMIC ALIASES ===
 	// We only enforce explicit confirmation when using dynamic mode with a writable alias.

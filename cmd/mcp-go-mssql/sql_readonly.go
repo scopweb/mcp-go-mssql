@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
 
 // Read-only SQL guard: stacked batches, dangerous keywords, and safe admin procedures.
@@ -26,8 +28,6 @@ var dangerousKeywordPatterns = map[string]*regexp.Regexp{
 	"BULK":     regexp.MustCompile(`(?i)\bBULK\b`),
 	"BCP":      regexp.MustCompile(`(?i)\bBCP\b`),
 }
-
-var selectIntoPattern = regexp.MustCompile(`(?is)\bSELECT\b.*\bINTO\s+(?:\[[^\]]+\]|\w+)`)
 
 // readOnlyDangerousSPs is the single source of truth for system procedures
 // that must always be blocked in read-only contexts, even when we allow
@@ -343,7 +343,7 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 }
 
 func isSelectInto(query string) bool {
-	return selectIntoPattern.MatchString(stripLeadingComments(stripSQLComments(query)))
+	return sqlguard.HasSelectInto(query)
 }
 
 // isSafeReadOnlyAdminProcedure reports whether the query is an invocation

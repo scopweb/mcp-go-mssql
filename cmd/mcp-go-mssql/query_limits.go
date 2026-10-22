@@ -4,8 +4,7 @@ package main
 //
 // A result set can be bounded on three axes: rows (the long standing cap of
 // maxQueryRows), the size of each cell and the approximate size of the whole
-// response. The cell and response budgets are opt-in: without them a result
-// keeps exactly the behaviour of agent contract v1.
+// response. Server ceilings always apply; callers may request smaller budgets.
 //
 // The budgets are applied in Go, after the rows are read. The SQL of the
 // caller is never rewritten: no TOP is injected and no predicate is added.
@@ -13,6 +12,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +25,8 @@ import (
 const (
 	minCellLimitBytes     = 16
 	minResponseLimitBytes = 512
+	maxCellLimitBytes     = 1 << 20
+	maxResponseLimitBytes = 8 << 20
 )
 
 // maxTruncatedCellsListed caps the detail list of shortened cells, so the
@@ -35,10 +37,9 @@ const maxTruncatedCellsListed = 50
 type AppliedLimits struct {
 	// MaxRows is the row cap of the server. It is always applied.
 	MaxRows int `json:"max_rows"`
-	// MaxCellBytes is the cap of a single cell, or null when there is none.
+	// MaxCellBytes is the effective cell cap (always set for executed results).
 	MaxCellBytes *int `json:"max_cell_bytes"`
-	// MaxResponseBytes is the approximate cap of the whole result, or null
-	// when there is none.
+	// MaxResponseBytes is the effective approximate result cap.
 	MaxResponseBytes *int `json:"max_response_bytes"`
 }
 
@@ -55,8 +56,20 @@ type queryLimits struct {
 	MaxResponseBytes int
 }
 
+// bounded also protects internal callers that construct zero-valued limits.
+func (l queryLimits) bounded() queryLimits {
+	if l.MaxCellBytes <= 0 || l.MaxCellBytes > maxCellLimitBytes {
+		l.MaxCellBytes = maxCellLimitBytes
+	}
+	if l.MaxResponseBytes <= 0 || l.MaxResponseBytes > maxResponseLimitBytes {
+		l.MaxResponseBytes = maxResponseLimitBytes
+	}
+	return l
+}
+
 // appliedLimits returns the budgets to report to the caller.
 func (l queryLimits) appliedLimits() AppliedLimits {
+	l = l.bounded()
 	applied := AppliedLimits{MaxRows: maxQueryRows}
 	if l.MaxCellBytes > 0 {
 		limit := l.MaxCellBytes
@@ -75,25 +88,29 @@ func (l queryLimits) appliedLimits() AppliedLimits {
 // an explicit error: a caller that asks for an impossible budget has to learn
 // the limit instead of receiving an empty result.
 func parseQueryLimits(arguments map[string]interface{}) (queryLimits, error) {
-	limits := queryLimits{}
+	limits := queryLimits{}.bounded()
 
 	cellBytes, err := limitArgument(arguments, "max_cell_bytes")
 	if err != nil {
 		return limits, err
 	}
-	if cellBytes > 0 && cellBytes < minCellLimitBytes {
-		return limits, fmt.Errorf("max_cell_bytes must be at least %d", minCellLimitBytes)
+	if cellBytes > 0 && (cellBytes < minCellLimitBytes || cellBytes > maxCellLimitBytes) {
+		return limits, fmt.Errorf("max_cell_bytes must be between %d and %d", minCellLimitBytes, maxCellLimitBytes)
 	}
-	limits.MaxCellBytes = cellBytes
+	if cellBytes > 0 {
+		limits.MaxCellBytes = cellBytes
+	}
 
 	responseBytes, err := limitArgument(arguments, "max_response_bytes")
 	if err != nil {
 		return limits, err
 	}
-	if responseBytes > 0 && responseBytes < minResponseLimitBytes {
-		return limits, fmt.Errorf("max_response_bytes must be at least %d", minResponseLimitBytes)
+	if responseBytes > 0 && (responseBytes < minResponseLimitBytes || responseBytes > maxResponseLimitBytes) {
+		return limits, fmt.Errorf("max_response_bytes must be between %d and %d", minResponseLimitBytes, maxResponseLimitBytes)
 	}
-	limits.MaxResponseBytes = responseBytes
+	if responseBytes > 0 {
+		limits.MaxResponseBytes = responseBytes
+	}
 
 	return limits, nil
 }
@@ -106,12 +123,18 @@ func limitArgument(arguments map[string]interface{}, name string) (int, error) {
 	}
 	switch typed := raw.(type) {
 	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed != math.Trunc(typed) || typed <= 0 || typed > maxResponseLimitBytes {
+			return 0, fmt.Errorf("%s must be a positive integer within the server ceiling", name)
+		}
 		return int(typed), nil
 	case int:
+		if typed <= 0 || typed > maxResponseLimitBytes {
+			return 0, fmt.Errorf("%s must be a positive integer within the server ceiling", name)
+		}
 		return typed, nil
 	case json.Number:
 		parsed, err := typed.Int64()
-		if err != nil {
+		if err != nil || parsed <= 0 || parsed > maxResponseLimitBytes {
 			return 0, fmt.Errorf("%s must be an integer", name)
 		}
 		return int(parsed), nil
@@ -171,6 +194,11 @@ func escapedJSONLen(value string) int {
 		case '\n', '\r', '\t':
 			// The escape is two characters.
 			size++
+		case '<', '>', '&':
+			// encoding/json escapes HTML characters by default.
+			size += 5
+		case '\u2028', '\u2029':
+			size += 3 // three UTF-8 bytes become six JSON bytes
 		case utf8.RuneError:
 			// An invalid byte is encoded by encoding/json as the six
 			// character escape sequence, so it costs five more bytes.
@@ -216,7 +244,7 @@ func estimateCellBytes(value interface{}) int {
 func estimateRowBytes(row map[string]interface{}) int {
 	size := 2 // the braces
 	for name, value := range row {
-		size += len(name) + 3 // "name":
+		size += escapedJSONLen(name) + 1 // escaped key and colon
 		size += estimateCellBytes(value)
 		size++ // the comma
 	}
@@ -240,6 +268,7 @@ type rowBudget struct {
 // response is reported as truncated. The rows are never rewritten by the
 // server, only the values that are too long are shortened.
 func (b *rowBudget) addRow(row map[string]interface{}, rowIndex int) bool {
+	b.limits = b.limits.bounded()
 	if b.limits.MaxCellBytes > 0 {
 		// The columns are sorted so the detail of a truncation does not
 		// depend on the order of the map.
@@ -250,22 +279,36 @@ func (b *rowBudget) addRow(row map[string]interface{}, rowIndex int) bool {
 		sort.Strings(columns)
 
 		for _, column := range columns {
-			text, ok := row[column].(string)
-			if !ok {
-				continue
-			}
-			shortened, cut := shortenCell(text, b.limits.MaxCellBytes)
-			if !cut {
+			var shortened string
+			var originalBytes int
+			var cut bool
+			switch value := row[column].(type) {
+			case string:
+				originalBytes = len(value)
+				shortened, cut = shortenCell(value, b.limits.MaxCellBytes)
+			case []byte:
+				originalBytes = len(value)
+				if originalBytes > b.limits.MaxCellBytes {
+					// Do not copy a complete LOB into a second full-sized string.
+					shortened = trimToRuneBoundary(string(value[:b.limits.MaxCellBytes+1]), b.limits.MaxCellBytes) + cellMarker(originalBytes)
+					cut = true
+				} else {
+					shortened = string(value)
+				}
+			default:
 				continue
 			}
 			row[column] = shortened
+			if !cut {
+				continue
+			}
 			b.cellsTruncated = true
 			b.cellsCut++
 			if len(b.truncatedCells) < maxTruncatedCellsListed {
 				b.truncatedCells = append(b.truncatedCells, CellTruncation{
 					Row:           rowIndex,
 					Column:        column,
-					OriginalBytes: len(text),
+					OriginalBytes: originalBytes,
 				})
 			}
 		}

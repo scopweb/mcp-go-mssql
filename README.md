@@ -2,7 +2,7 @@
 
 Secure MCP server and CLI in Go for Microsoft SQL Server. It gives Claude Desktop, Claude Code, and other MCP clients a hardened stdio bridge to the database.
 
-[![Go Version](https://img.shields.io/badge/Go-1.27.2+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.27.3+-00ADD8?logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Full documentation: [mcp-go-mssql.scopweb.com](https://mcp-go-mssql.scopweb.com)
@@ -47,7 +47,7 @@ Download the [latest release](https://github.com/scopweb/mcp-go-mssql/releases/l
 go build -ldflags "-w -s" -o mcp-go-mssql ./cmd/mcp-go-mssql
 ```
 
-Requires Go 1.27.2+ (also used by CI via `go.mod`).
+Requires Go 1.27.3+ (also used by CI via `go.mod`).
 
 ## Claude Desktop
 
@@ -73,6 +73,8 @@ Point `command` at the binary. Do not commit real credentials.
 ```
 
 With `MSSQL_READ_ONLY=true` the agent can only read and run explicitly allowed administrative introspection. No whitelist can enable writes in that mode. For controlled writes, set `MSSQL_READ_ONLY=false` and an explicit `MSSQL_WHITELIST_TABLES` list.
+
+Classic mode also defaults to read-only when `MSSQL_READ_ONLY` is absent or empty. Invalid values abort startup; only an explicit `false` enables writes. This safe default and the mandatory result budgets are changes in agent contract v2.
 
 | Variable | Description |
 |----------|-------------|
@@ -158,6 +160,8 @@ go run examples/claude-code/db-connector.go query "SELECT TOP 10 * FROM MyTable"
 
 The CLI rejects writes unless an operator sets `MSSQL_CLI_ALLOW_WRITE=true`. Agents should use the MCP server and its whitelist policy.
 
+The CLI uses the same production TLS validation as the MCP server, including custom DSNs and the explicit legacy opt-in.
+
 ## Troubleshooting
 
 | Error | Cause | Fix |
@@ -181,7 +185,7 @@ Connection check without starting the server: `go run test/test-connection.go`.
 {"format": "columnar", "columns": ["id", "name"], "rows": [[1, "Acme"], [2, "Beta"]],
  "row_count": 2, "truncated": false, "rows_truncated": false,
  "cells_truncated": false, "response_truncated": false,
- "limits": {"max_rows": 500, "max_cell_bytes": null, "max_response_bytes": null},
+ "limits": {"max_rows": 500, "max_cell_bytes": 1048576, "max_response_bytes": 8388608},
  "stats": {"enabled": false, "messages": []}}
 ```
 
@@ -191,17 +195,19 @@ The columnar format needs unique column names: a result that repeats a column na
 
 `query_database`, `explore` and `inspect` accept two optional budgets:
 
-- `max_cell_bytes` (minimum 16): the cap of a single cell. A longer value is shortened, keeps its beginning and is marked. Without it a `nvarchar(max)`, `xml` or `varbinary` cell is returned whole — a single 1 MiB cell can reach 6 MB of JSON.
-- `max_response_bytes` (minimum 512): an approximate cap for the whole result. The result stops there.
+- `max_cell_bytes` (16..1048576): the cap of a single cell. Default and server ceiling: **1 MiB**. A longer value is shortened, keeps its beginning and is marked.
+- `max_response_bytes` (512..8388608): an approximate cap for the result data. Default and server ceiling: **8 MiB**. The result stops there.
 
-They are opt-in and the server never rewrites your SQL to fit a budget. Every result reports `rows_truncated`, `cells_truncated` and `response_truncated` separately, plus a `limits` object with the budgets that were applied.
+Callers may lower these budgets, but cannot disable or raise them. The server never rewrites your SQL to fit a budget. Every result reports `rows_truncated`, `cells_truncated` and `response_truncated` separately, plus a `limits` object with the budgets that were applied. The marker and MCP envelope add overhead to these data budgets.
+
+These caps bound retained application results, not the driver's peak memory: go-mssqldb materializes individual cells before they can be shortened. For large LOBs, explicitly select bounded projections (for example `CAST(SUBSTRING(value, 1, 4000) AS nvarchar(4000))`) and enforce process memory limits in the deployment. Unbounded LOB materialization remains a resource-exhaustion risk.
 
 ```json
 {"rows":[{"id":1,"notes":"<prefix> [truncated: 1048576 bytes total]"}],
  "row_count":1,"truncated":false,"rows_truncated":false,
  "cells_truncated":true,"response_truncated":false,
  "truncated_cells":[{"row":0,"column":"notes","original_bytes":1048576}],
- "limits":{"max_rows":500,"max_cell_bytes":4096,"max_response_bytes":null},
+ "limits":{"max_rows":500,"max_cell_bytes":4096,"max_response_bytes":8388608},
  "stats":{"enabled":false,"messages":[]}}
 ```
 
@@ -209,7 +215,7 @@ They are opt-in and the server never rewrites your SQL to fit a budget. Every re
 
 Every tool call is counted once and written to **stderr** as JSON with `component="usage"`: the tool, the elapsed time, the bytes on the wire, the bytes of text and of structured content, the rows delivered, the three truncation flags and the outcome (`success`, `tool_error`, `rpc_error`, `timeout`).
 
-The records carry no SQL, no results and no credentials. They are not affected by the MCP `logging/setLevel` request, so a harness that lowers the security log level can still count calls. Set `MSSQL_USAGE_LOG=false` to disable the stream.
+The records carry no SQL, no results and no credentials. They are not affected by the MCP `logging/setLevel` request. Security audit events are also independent of that request; only diagnostics follow the client's logging level. Set `MSSQL_USAGE_LOG=false` to disable the usage stream.
 
 ```json
 {"level":"INFO","msg":"tool call","component":"usage","session_id":"573403616c10c8bd","call_id":1,"tool":"query_database","method":"tools/call","status":"success","elapsed_ms":42,"response_bytes":1234,"text_bytes":1000,"structured_bytes":234,"rows":500,"row_truncated":true,"cells_truncated":false,"response_truncated":false,"read_only":true}

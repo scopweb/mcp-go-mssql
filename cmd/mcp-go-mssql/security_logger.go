@@ -2,44 +2,49 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"regexp"
 )
 
 // SecurityLogger writes structured security events to stderr.
-// Secrets are redacted before they are logged. The level starts at Info and
-// can be changed at runtime by the MCP logging/setLevel request.
+// Audit events cannot be disabled by MCP logging/setLevel. That setting only
+// controls diagnostics. Credential-shaped messages are redacted in full.
 type SecurityLogger struct {
-	logger   *slog.Logger
-	levelVar *slog.LevelVar // dynamic level controlled by MCP logging/setLevel
+	logger      *slog.Logger
+	diagnostics *slog.Logger
+	levelVar    *slog.LevelVar // dynamic level controlled by MCP logging/setLevel
 }
 
 // NewSecurityLogger returns a JSON logger on stderr at Info level.
 func NewSecurityLogger() *SecurityLogger {
+	return newSecurityLogger(os.Stderr)
+}
+
+func newSecurityLogger(w io.Writer) *SecurityLogger {
 	lvl := &slog.LevelVar{}
 	lvl.Set(slog.LevelInfo)
-	handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{
 		Level: lvl,
 	})
 	return &SecurityLogger{
-		logger:   slog.New(handler).With(slog.String("component", "security")),
-		levelVar: lvl,
+		logger:      slog.New(slog.NewJSONHandler(w, nil)).With(slog.String("component", "security")),
+		diagnostics: slog.New(handler).With(slog.String("component", "diagnostics")),
+		levelVar:    lvl,
 	}
 }
 
 // Printf logs a formatted message at Info.
 // It keeps a printf-style API over slog for existing call sites.
 func (sl *SecurityLogger) Printf(format string, args ...interface{}) {
-	sl.logger.Info(fmt.Sprintf(format, args...))
+	sl.logger.Info(sl.sanitizeForLogging(fmt.Sprintf(format, args...)))
 }
 
-// Debugf logs at Debug level. Used for verbose payloads (e.g. the full request
-// body / query text) that may contain PII embedded in SQL literals and should
-// not be emitted at the default Info level. Gated by the dynamic level set via
-// the MCP logging/setLevel request.
+// Debugf logs diagnostic metadata at the client's requested level. Callers
+// must never pass raw SQL, request bodies or result data.
 func (sl *SecurityLogger) Debugf(format string, args ...interface{}) {
-	sl.logger.Debug(fmt.Sprintf(format, args...))
+	sl.diagnostics.Debug(sl.sanitizeForLogging(fmt.Sprintf(format, args...)))
 }
 
 // LogConnectionAttempt records whether a database connection succeeded.
@@ -50,19 +55,19 @@ func (sl *SecurityLogger) LogConnectionAttempt(success bool) {
 	)
 }
 
-// sensitivePatterns redacts credential-shaped substrings before logging.
+// sensitivePatterns identifies messages that must be redacted in full.
 var sensitivePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(password|pwd|secret|key|token)=[^;\s]*`),
-	regexp.MustCompile(`(?i)(password|pwd)\s*=\s*[^;\s]*`),
-	regexp.MustCompile(`(?i)(://[^:/\s]+:)[^@/\s]+@`),
+	regexp.MustCompile(`(?i)\b(password|pwd|secret|key|token)\s*=`),
+	regexp.MustCompile(`(?i)://[^\s]*@`),
 }
 
-// sanitizeForLogging replaces credential-shaped substrings with ***.
+// sanitizeForLogging redacts credential-bearing messages without trying to
+// guess the end of a quoted/braced/URL-encoded credential.
 func (sl *SecurityLogger) sanitizeForLogging(input string) string {
-	result := input
 	for _, pattern := range sensitivePatterns {
-		result = pattern.ReplaceAllString(result, "${1}=***")
+		if pattern.MatchString(input) {
+			return "*** [credential-bearing message redacted]"
+		}
 	}
-
-	return result
+	return input
 }
