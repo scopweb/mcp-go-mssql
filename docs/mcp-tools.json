@@ -8,6 +8,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "format": {
+            "type": "string",
+            "description": "How the rows are rendered: 'map' (default, one object per row) or 'columnar' (the column names once and every row an array of values in that order)."
+          },
           "max_cell_bytes": {
             "type": "integer",
             "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked. The SQL is never rewritten."
@@ -199,6 +203,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "format": {
+            "type": "string",
+            "description": "How the rows are rendered: 'map' (default, one object per row) or 'columnar' (the column names once and every row an array of values in that order)."
+          },
           "max_cell_bytes": {
             "type": "integer",
             "description": "Optional cap for the size of a single cell (minimum 16). A longer value is shortened and marked. The SQL is never rewritten."

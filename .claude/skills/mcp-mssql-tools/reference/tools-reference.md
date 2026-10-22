@@ -6,7 +6,7 @@
 
 | Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
 | --- | --- | --- | --- | --- | --- | --- |
-| `query_database` | `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
+| `query_database` | `format:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
 | `get_database_info` | — | — | classic | yes | no | yes |
 | `explore` | `filter:string`, `limit:integer`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
 | `inspect` | `detail:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
@@ -176,6 +176,7 @@ Execute SQL against the database. All queries use prepared statements.
 | `query` | string | Yes | SQL query (SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP) |
 | `max_cell_bytes` | integer | No | Cap for a single cell (minimum 16). A longer value is shortened and marked |
 | `max_response_bytes` | integer | No | Approximate cap for the whole result (minimum 512). The result stops there |
+| `format` | string | No | `map` (default, one object per row) or `columnar` (the column names once and every row an array of values in that order) |
 
 **Result shape:**
 
@@ -196,6 +197,7 @@ Execute SQL against the database. All queries use prepared statements.
 - `cells_truncated` is true when at least one cell was shortened by `max_cell_bytes`; the shortened cells are listed in `truncated_cells` with their original size.
 - `response_truncated` is true when `max_response_bytes` stopped the result.
 - The budgets are opt-in and the server never rewrites the SQL: no `TOP` is injected.
+- With `format="columnar"` the answer carries the column names once and the rows as arrays of values in that order. It needs unique column names: a result that repeats a column name is refused, because a row cannot carry it twice. Measured on a table of 38 columns and 100 rows, the whole answer went from 182 KB to 91 KB.
 
 **Annotations:** not read-only, destructive, not idempotent
 

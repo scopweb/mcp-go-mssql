@@ -107,22 +107,58 @@ func (s *MCPMSSQLServer) toolQueryDatabase(id interface{}, params CallToolParams
 		}
 	}
 
-	result := QueryResult{
-		ResultEnvelope: ResultEnvelope{
-			Rows:              results,
-			RowCount:          len(results),
-			Truncated:         outcome.RowsTruncated,
-			RowsTruncated:     outcome.RowsTruncated,
-			CellsTruncated:    outcome.CellsTruncated,
-			ResponseTruncated: outcome.ResponseTruncated,
-			TruncatedCells:    outcome.TruncatedCells,
-			Limits:            outcome.Limits,
-		},
-		Stats: stats,
+	envelope := ResultEnvelope{
+		RowCount:          len(results),
+		Truncated:         outcome.RowsTruncated,
+		RowsTruncated:     outcome.RowsTruncated,
+		CellsTruncated:    outcome.CellsTruncated,
+		ResponseTruncated: outcome.ResponseTruncated,
+		TruncatedCells:    outcome.TruncatedCells,
+		Limits:            outcome.Limits,
+	}
+
+	// The format is opt-in: the default keeps the shape of contract v1 and
+	// the columnar format is only used when the caller asks for it.
+	format, _ := params.Arguments["format"].(string)
+	if format == "" {
+		format = FormatMap
+	}
+
+	var structured interface{}
+	switch format {
+	case FormatColumnar:
+		if duplicates := duplicateColumns(outcome.Columns); len(duplicates) > 0 {
+			return &MCPResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result: CallToolResult{
+					Content: []ContentItem{
+						{
+							Type: "text",
+							Text: fmt.Sprintf("Query Error: the columnar format needs unique column names, but the result repeats %s. Use the default format.", strings.Join(duplicates, ", ")),
+						},
+					},
+					IsError: true,
+				},
+			}
+		}
+		structured = ColumnarResult{
+			ResultEnvelope: envelope,
+			Format:         FormatColumnar,
+			Columns:        outcome.Columns,
+			Rows:           columnarRows(results, outcome.Columns),
+			Stats:          stats,
+		}
+	default:
+		structured = QueryResult{
+			ResultEnvelope: envelope,
+			Rows:           results,
+			Stats:          stats,
+		}
 	}
 
 	// Format result as JSON
-	resultBytes, err := json.MarshalIndent(result, "", "  ")
+	resultBytes, err := json.MarshalIndent(structured, "", "  ")
 	if err != nil {
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -149,7 +185,7 @@ func (s *MCPMSSQLServer) toolQueryDatabase(id interface{}, params CallToolParams
 					Text: fmt.Sprintf("Query executed successfully. Results:\n%s", string(resultBytes)),
 				},
 			},
-			StructuredContent: result,
+			StructuredContent: structured,
 		},
 	}
 }

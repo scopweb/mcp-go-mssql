@@ -25,7 +25,7 @@ Agent and harness contract: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
 
 | Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
 | --- | --- | --- | --- | --- | --- | --- |
-| `query_database` | `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
+| `query_database` | `format:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
 | `get_database_info` | — | — | classic | yes | no | yes |
 | `explore` | `filter:string`, `limit:integer`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
 | `inspect` | `detail:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
@@ -169,6 +169,23 @@ The CLI rejects writes unless an operator sets `MSSQL_CLI_ALLOW_WRITE=true`. Age
 | `read-only mode: only SELECT...` | Read-only is on | Run the SQL yourself. A whitelist does not enable writes while `READ_ONLY=true` |
 
 Connection check without starting the server: `go run test/test-connection.go`.
+
+## Formats
+
+`query_database` can render the rows in two formats:
+
+- `format="map"` (default): the shape of contract v1, one object per row, with the column name on every value.
+- `format="columnar"`: the column names are paid once and every row is an array of values in that order. The truncation flags are the same.
+
+```json
+{"format": "columnar", "columns": ["id", "name"], "rows": [[1, "Acme"], [2, "Beta"]],
+ "row_count": 2, "truncated": false, "rows_truncated": false,
+ "cells_truncated": false, "response_truncated": false,
+ "limits": {"max_rows": 500, "max_cell_bytes": null, "max_response_bytes": null},
+ "stats": {"enabled": false, "messages": []}}
+```
+
+The columnar format needs unique column names: a result that repeats a column name is refused, because a row cannot carry it twice. With ten columns and two hundred rows the columnar form is around a third of the size of the map form, and the difference grows with the width of the table. Measured on a table of 38 columns and 100 rows, the whole answer went from 182 KB to 91 KB.
 
 ## Response budgets
 

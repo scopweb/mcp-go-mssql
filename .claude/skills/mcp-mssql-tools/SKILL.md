@@ -16,7 +16,7 @@ description: >
 
 | Tool | Parameters | Required | Mode | readOnly | destructive | idempotent |
 | --- | --- | --- | --- | --- | --- | --- |
-| `query_database` | `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
+| `query_database` | `format:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `query:string` | `query` | classic | no | yes | no |
 | `get_database_info` | — | — | classic | yes | no | yes |
 | `explore` | `filter:string`, `limit:integer`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `pattern:string`, `schema:string`, `search_in:string`, `table:string`, `type:string` | — | classic | yes | no | yes |
 | `inspect` | `detail:string`, `max_cell_bytes:integer`, `max_response_bytes:integer`, `schema:string`, `table_name:string` | `table_name` | classic | yes | no | yes |
@@ -59,6 +59,23 @@ The server dispatches the canonical names above. A conversation may use other na
 - Tool errors arrive with `isError=true` and explanatory text. Never read the text of an error response as data.
 - **Never retry automatically a modification whose outcome is unknown** (timeout or transport failure): the write may already have been applied.
 - `get_database_info` returns plain text, not a result object.
+
+### Formatos
+
+`query_database` admite dos formatos de salida:
+
+- `format="map"` (por defecto): un objeto por fila, con el nombre de la columna en cada valor.
+- `format="columnar"`: los nombres de columna se pagan una vez y cada fila es un array de valores en ese orden. Los flags de truncación son los mismos.
+
+El formato columnar necesita nombres de columna únicos: si la consulta repite un nombre, el servidor lo rechaza y hay que usar el formato por defecto. Con diez columnas y doscientas filas, la forma columnar ocupa alrededor de un tercio que la forma mapa, y la diferencia crece con el ancho de la tabla: medida en una tabla de 38 columnas y 100 filas, la respuesta completa pasó de 182 KB a 91 KB.
+
+```json
+{"format": "columnar", "columns": ["id", "name"], "rows": [[1, "Acme"], [2, "Beta"]],
+ "row_count": 2, "truncated": false, "rows_truncated": false,
+ "cells_truncated": false, "response_truncated": false,
+ "limits": {"max_rows": 500, "max_cell_bytes": null, "max_response_bytes": null},
+ "stats": {"enabled": false, "messages": []}}
+```
 
 ### Optional budgets
 

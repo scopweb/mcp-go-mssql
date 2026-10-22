@@ -280,15 +280,17 @@ func (s *MCPMSSQLServer) toolExplore(id interface{}, params CallToolParams) *MCP
 		}
 	}
 
-	envelope := ResultEnvelope{
-		Rows:              outcome.Rows,
-		RowCount:          len(outcome.Rows),
-		Truncated:         outcome.RowsTruncated,
-		RowsTruncated:     outcome.RowsTruncated,
-		CellsTruncated:    outcome.CellsTruncated,
-		ResponseTruncated: outcome.ResponseTruncated,
-		TruncatedCells:    outcome.TruncatedCells,
-		Limits:            outcome.Limits,
+	envelope := CatalogResult{
+		ResultEnvelope: ResultEnvelope{
+			RowCount:          len(outcome.Rows),
+			Truncated:         outcome.RowsTruncated,
+			RowsTruncated:     outcome.RowsTruncated,
+			CellsTruncated:    outcome.CellsTruncated,
+			ResponseTruncated: outcome.ResponseTruncated,
+			TruncatedCells:    outcome.TruncatedCells,
+			Limits:            outcome.Limits,
+		},
+		Rows: outcome.Rows,
 	}
 
 	// The text keeps the shape it has always had, plus an explicit notice
@@ -614,15 +616,17 @@ func (s *MCPMSSQLServer) toolInspect(id interface{}, params CallToolParams) *MCP
 		}
 	}
 
-	envelope := ResultEnvelope{
-		Rows:              outcome.Rows,
-		RowCount:          len(outcome.Rows),
-		Truncated:         outcome.RowsTruncated,
-		RowsTruncated:     outcome.RowsTruncated,
-		CellsTruncated:    outcome.CellsTruncated,
-		ResponseTruncated: outcome.ResponseTruncated,
-		TruncatedCells:    outcome.TruncatedCells,
-		Limits:            outcome.Limits,
+	envelope := CatalogResult{
+		ResultEnvelope: ResultEnvelope{
+			RowCount:          len(outcome.Rows),
+			Truncated:         outcome.RowsTruncated,
+			RowsTruncated:     outcome.RowsTruncated,
+			CellsTruncated:    outcome.CellsTruncated,
+			ResponseTruncated: outcome.ResponseTruncated,
+			TruncatedCells:    outcome.TruncatedCells,
+			Limits:            outcome.Limits,
+		},
+		Rows: outcome.Rows,
 	}
 
 	// The text keeps the shape it has always had, plus an explicit notice

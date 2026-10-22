@@ -36,6 +36,9 @@ type queryOutcome struct {
 	// Rows holds the rows that were returned, without the legacy
 	// "_truncated" sentinel row.
 	Rows []map[string]interface{}
+	// Columns are the names of the columns of the result set, in the
+	// order the server returned them.
+	Columns []string
 	// StatsMessages holds the informational messages of a SET STATISTICS
 	// wrapper, nil for a plain query.
 	StatsMessages []string
@@ -188,6 +191,7 @@ func (s *MCPMSSQLServer) executeSecureQueryWithLimits(ctx context.Context, query
 	}
 
 	outcome.Rows = results
+	outcome.Columns = columns
 	outcome.CellsTruncated = budget.cellsTruncated
 	outcome.ResponseTruncated = outcome.ResponseTruncated || budget.responseTruncated
 	outcome.TruncatedCells = budget.truncatedCells
