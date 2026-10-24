@@ -5,7 +5,6 @@ package sqlguard
 import (
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 type token struct {
@@ -16,73 +15,11 @@ type token struct {
 }
 
 func lex(query string) ([]token, error) {
-	r := []rune(query)
-	var out []token
-	for i := 0; i < len(r); {
-		switch {
-		case unicode.IsSpace(r[i]):
-			i++
-		case i+1 < len(r) && r[i] == '-' && r[i+1] == '-':
-			for i < len(r) && r[i] != '\n' {
-				i++
-			}
-		case i+1 < len(r) && r[i] == '/' && r[i+1] == '*':
-			i += 2
-			depth := 1
-			for i < len(r) && depth > 0 {
-				if i+1 < len(r) && r[i] == '/' && r[i+1] == '*' {
-					depth++
-					i += 2
-				} else if i+1 < len(r) && r[i] == '*' && r[i+1] == '/' {
-					depth--
-					i += 2
-				} else {
-					i++
-				}
-			}
-			if depth != 0 {
-				return nil, fmt.Errorf("unterminated SQL comment")
-			}
-		case r[i] == '\'' || r[i] == '"' || r[i] == '[':
-			open := r[i]
-			close := open
-			if open == '[' {
-				close = ']'
-			}
-			i++
-			var b strings.Builder
-			closed := false
-			for i < len(r) {
-				if r[i] == close {
-					if i+1 < len(r) && r[i+1] == close {
-						b.WriteRune(close)
-						i += 2
-						continue
-					}
-					i++
-					closed = true
-					break
-				}
-				b.WriteRune(r[i])
-				i++
-			}
-			if !closed {
-				return nil, fmt.Errorf("unterminated SQL quote")
-			}
-			out = append(out, token{text: b.String(), ident: open != '\''})
-		case unicode.IsLetter(r[i]) || r[i] == '_' || r[i] == '#' || r[i] == '@':
-			start := i
-			i++
-			for i < len(r) && (unicode.IsLetter(r[i]) || unicode.IsDigit(r[i]) || strings.ContainsRune("_$#@", r[i])) {
-				i++
-			}
-			out = append(out, token{text: string(r[start:i]), word: true, ident: true})
-		default:
-			out = append(out, token{text: string(r[i]), symbol: true})
-			i++
-		}
+	out, err := scanQuery(query)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	return out.tokens, nil
 }
 
 func keyword(t token, want string) bool { return t.word && strings.EqualFold(t.text, want) }

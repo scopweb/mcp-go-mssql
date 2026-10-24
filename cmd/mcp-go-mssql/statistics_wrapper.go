@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"mcp-go-mssql/internal/sqlguard"
 )
 
 // statisticsWrapper is the parsed form of a query that is a SET STATISTICS
@@ -117,7 +119,10 @@ func parseStatisticsWrapper(query string) (*statisticsWrapper, error) {
 	// tokens separated by "; -- off\n"; the comment is "pending".)
 	pendingComment := false
 
-	segments := splitOnStatementSeparators(trimmed)
+	segments, splitErr := splitOnStatementSeparators(trimmed)
+	if splitErr != nil {
+		return nil, ErrNotAWrapper
+	}
 	for _, seg := range segments {
 		text := strings.TrimSpace(seg.text)
 		if text == "" {
@@ -297,96 +302,16 @@ type sqlSegment struct {
 // zero-length segments (so an empty statement like ";" between two others
 // is detectable) and preserves whitespace/comment content for the caller
 // to classify.
-func splitOnStatementSeparators(query string) []sqlSegment {
-	const (
-		stNormal = iota
-		stString
-		stBracket
-		stLineComment
-		stBlockComment
-	)
-	state := stNormal
-	runes := []rune(query)
-	n := len(runes)
-	var segs []sqlSegment
-	segStart := 0
-	// We track the original text of each segment separately so we can
-	// detect comment-only segments after the comment-stripping pass.
-	flush := func(lo, hi int) {
-		original := string(runes[lo:hi])
-		stripped := stripSQLComments(original)
-		segs = append(segs, sqlSegment{text: stripped, wasComment: originalHasComment(original, stripped)})
+func splitOnStatementSeparators(query string) ([]sqlSegment, error) {
+	parts, err := sqlguard.SplitStatements(query)
+	if err != nil {
+		return nil, err
 	}
-	for i := 0; i < n; i++ {
-		c := runes[i]
-		switch state {
-		case stNormal:
-			switch {
-			case c == '\'':
-				state = stString
-			case c == '[':
-				state = stBracket
-			case c == '-' && i+1 < n && runes[i+1] == '-':
-				state = stLineComment
-				i++
-			case c == '/' && i+1 < n && runes[i+1] == '*':
-				state = stBlockComment
-				i++
-			case c == ';':
-				flush(segStart, i)
-				segStart = i + 1
-			}
-		case stString:
-			if c == '\'' {
-				if i+1 < n && runes[i+1] == '\'' {
-					i++
-				} else {
-					state = stNormal
-				}
-			}
-		case stBracket:
-			if c == ']' {
-				if i+1 < n && runes[i+1] == ']' {
-					i++
-				} else {
-					state = stNormal
-				}
-			}
-		case stLineComment:
-			if c == '\n' {
-				state = stNormal
-			}
-		case stBlockComment:
-			if c == '*' && i+1 < n && runes[i+1] == '/' {
-				state = stNormal
-				i++
-			}
-		}
+	segs := make([]sqlSegment, len(parts))
+	for i, part := range parts {
+		segs[i] = sqlSegment{text: part.Text, wasComment: part.WasComment}
 	}
-	flush(segStart, n)
-	return segs
-}
-
-// originalHasComment reports whether the segment was a comment-only
-// segment. The stripped version is the original with comments replaced
-// by spaces; if the original had at least one non-whitespace, non-comment
-// character, then the original and stripped would differ in the count
-// of those characters. We detect a comment-only segment by checking
-// whether the original was non-empty but contains no non-whitespace,
-// non-comment content.
-//
-// In practice the simplest check: if the original text and the stripped
-// text differ in any rune, then comments were present.
-func originalHasComment(original, stripped string) bool {
-	if len(original) != len(stripped) {
-		return true
-	}
-	for i := 0; i < len(original); i++ {
-		if original[i] != stripped[i] {
-			return true
-		}
-	}
-	return false
+	return segs, nil
 }
 
 // stripSQLComments removes line and block SQL comments from s, preserving
@@ -397,70 +322,9 @@ func originalHasComment(original, stripped string) bool {
 // caller can distinguish "empty (was whitespace)" from "empty (was
 // comment)".
 func stripSQLComments(s string) string {
-	const (
-		stNormal = iota
-		stString
-		stBracket
-		stLineComment
-		stBlockComment
-	)
-	state := stNormal
-	runes := []rune(s)
-	n := len(runes)
-	out := make([]rune, n)
-	copy(out, runes)
-	for i := 0; i < n; i++ {
-		c := out[i]
-		switch state {
-		case stNormal:
-			switch {
-			case c == '\'':
-				state = stString
-			case c == '[':
-				state = stBracket
-			case c == '-' && i+1 < n && out[i+1] == '-':
-				state = stLineComment
-				out[i] = ' '
-				out[i+1] = ' '
-				i++
-			case c == '/' && i+1 < n && out[i+1] == '*':
-				state = stBlockComment
-				out[i] = ' '
-				out[i+1] = ' '
-				i++
-			}
-		case stString:
-			if c == '\'' {
-				if i+1 < n && out[i+1] == '\'' {
-					i++
-				} else {
-					state = stNormal
-				}
-			}
-		case stBracket:
-			if c == ']' {
-				if i+1 < n && out[i+1] == ']' {
-					i++
-				} else {
-					state = stNormal
-				}
-			}
-		case stLineComment:
-			if c == '\n' {
-				state = stNormal
-			} else {
-				out[i] = ' '
-			}
-		case stBlockComment:
-			if c == '*' && i+1 < n && out[i+1] == '/' {
-				state = stNormal
-				out[i] = ' '
-				out[i+1] = ' '
-				i++
-			} else if c != '\n' {
-				out[i] = ' '
-			}
-		}
+	masked, err := sqlguard.MaskComments(s)
+	if err != nil {
+		return strings.Repeat(" ", len([]rune(s)))
 	}
-	return string(out)
+	return masked
 }

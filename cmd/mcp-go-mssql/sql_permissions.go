@@ -266,37 +266,45 @@ func (s *MCPMSSQLServer) extractAllQualifiedTablesFromQuery(query string) []stri
 
 // extractOperation determines the primary SQL operation (INSERT, UPDATE, DELETE, etc.)
 func (s *MCPMSSQLServer) extractOperation(query string) string {
-	queryUpper := stripLeadingComments(stripSQLComments(query))
 	if isSelectInto(query) {
 		return "SELECT_INTO"
 	}
+	a, err := sqlguard.Analyze(query)
+	if err != nil {
+		return "INVALID"
+	}
+	if len(a.TopLevel) == 0 {
+		return "SELECT"
+	}
 
 	modifyOps := []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"}
+	first := a.TopLevel[0]
 	for _, op := range modifyOps {
-		if strings.HasPrefix(queryUpper, op) {
+		if first == op {
 			return op
 		}
 	}
 
-	// If WITH is found, check if there's a modify operation after the CTE.
-	// Whole-word match: a substring search flagged any CTE touching a column such as
-	// DataUltimUpdate / IDUsuariUltimUpdate as UPDATE (false positive that blocked plain
-	// SELECTs in read-only mode). A keyword inside a string literal still matches, which
-	// errs on the safe side.
-	if strings.HasPrefix(queryUpper, "WITH") {
-		if m := cteModifyKeywordRe.FindString(queryUpper); m != "" {
-			return strings.ToUpper(m)
+	// A modifying word inside a CTE is still a modification. Literals, comments,
+	// and delimited identifiers are not words, so they cannot impersonate one.
+	if first == "WITH" {
+		for _, w := range a.Words {
+			for _, op := range modifyOps {
+				if w == op {
+					return op
+				}
+			}
 		}
 	}
 
-	return "SELECT" // Default to SELECT for read operations
+	return "SELECT"
 }
-
-// cteModifyKeywordRe detects a modifying statement after a CTE as a WHOLE WORD.
-var cteModifyKeywordRe = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|MERGE)\b`)
 
 // validateTablePermissions validates that all tables in a modify operation are whitelisted
 func (s *MCPMSSQLServer) validateTablePermissions(query string) error {
+	if _, err := sqlguard.Analyze(query); err != nil {
+		return fmt.Errorf("permission denied: unterminated SQL literal, identifier, or comment")
+	}
 	// Use effective config (respects active dynamic alias posture)
 	effective := s.getEffectiveConfig()
 	if !effective.readOnly && len(effective.whitelistTables) == 0 {

@@ -299,74 +299,25 @@ func executeQuery(db *sql.DB, query string) {
 }
 
 func isReadOnlyQuery(query string) bool {
-	normalized := strings.ToUpper(strings.TrimSpace(stripCLIComments(query)))
-	if !strings.HasPrefix(normalized, "SELECT") && !strings.HasPrefix(normalized, "WITH") {
+	a, err := sqlguard.Analyze(query)
+	if err != nil || a.GO || a.Statements > 1 || len(a.TopLevel) == 0 {
+		return false
+	}
+	if a.TopLevel[0] != "SELECT" && a.TopLevel[0] != "WITH" {
 		return false
 	}
 	if sqlguard.HasSelectInto(query) {
 		return false
 	}
-	if idx := strings.Index(normalized, ";"); idx >= 0 && strings.TrimSpace(normalized[idx+1:]) != "" {
-		return false
-	}
-	padded := " " + strings.Join(strings.Fields(normalized), " ") + " "
-	for _, kw := range []string{
-		" INSERT ", " UPDATE ", " DELETE ", " DROP ", " CREATE ", " ALTER ",
-		" TRUNCATE ", " MERGE ", " EXEC ", " EXECUTE ", " GRANT ", " REVOKE ",
-		" DENY ", " DBCC ", " BACKUP ", " RESTORE ", " BULK ",
-	} {
-		if strings.Contains(padded, kw) {
+	for _, w := range a.Words {
+		switch w {
+		case "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
+			"TRUNCATE", "MERGE", "EXEC", "EXECUTE", "GRANT", "REVOKE",
+			"DENY", "DBCC", "BACKUP", "RESTORE", "BULK":
 			return false
 		}
 	}
 	return true
-}
-
-func stripCLIComments(query string) string {
-	var b strings.Builder
-	runes := []rune(query)
-	state := 0
-	for i := 0; i < len(runes); i++ {
-		c := runes[i]
-		switch state {
-		case 0:
-			if c == '\'' {
-				state = 1
-				b.WriteRune(c)
-			} else if c == '-' && i+1 < len(runes) && runes[i+1] == '-' {
-				state = 2
-				i++
-				b.WriteByte(' ')
-			} else if c == '/' && i+1 < len(runes) && runes[i+1] == '*' {
-				state = 3
-				i++
-				b.WriteByte(' ')
-			} else {
-				b.WriteRune(c)
-			}
-		case 1:
-			b.WriteRune(c)
-			if c == '\'' {
-				if i+1 < len(runes) && runes[i+1] == '\'' {
-					i++
-					b.WriteRune('\'')
-				} else {
-					state = 0
-				}
-			}
-		case 2:
-			if c == '\n' {
-				state = 0
-				b.WriteRune(c)
-			}
-		case 3:
-			if c == '*' && i+1 < len(runes) && runes[i+1] == '/' {
-				state = 0
-				i++
-			}
-		}
-	}
-	return b.String()
 }
 
 func executeSelectQuery(db *sql.DB, ctx context.Context, query string, result *QueryResult) {
