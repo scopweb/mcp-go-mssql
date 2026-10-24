@@ -12,21 +12,9 @@ import (
 
 // Read-only SQL guard: stacked batches, dangerous keywords, and safe admin procedures.
 
-// Pre-compiled word-boundary patterns for read-only keyword detection
-var dangerousKeywordPatterns = map[string]*regexp.Regexp{
-	"INSERT":   regexp.MustCompile(`(?i)\bINSERT\b`),
-	"UPDATE":   regexp.MustCompile(`(?i)\bUPDATE\b`),
-	"DELETE":   regexp.MustCompile(`(?i)\bDELETE\b`),
-	"DROP":     regexp.MustCompile(`(?i)\bDROP\b`),
-	"CREATE":   regexp.MustCompile(`(?i)\bCREATE\b`),
-	"ALTER":    regexp.MustCompile(`(?i)\bALTER\b`),
-	"TRUNCATE": regexp.MustCompile(`(?i)\bTRUNCATE\b`),
-	"MERGE":    regexp.MustCompile(`(?i)\bMERGE\b`),
-	"EXEC":     regexp.MustCompile(`(?i)\bEXEC\b`),
-	"EXECUTE":  regexp.MustCompile(`(?i)\bEXECUTE\b`),
-	"CALL":     regexp.MustCompile(`(?i)\bCALL\b`),
-	"BULK":     regexp.MustCompile(`(?i)\bBULK\b`),
-	"BCP":      regexp.MustCompile(`(?i)\bBCP\b`),
+var forbiddenReadWords = []string{
+	"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE",
+	"MERGE", "EXEC", "EXECUTE", "CALL", "BULK", "BCP",
 }
 
 // readOnlyDangerousSPs is the single source of truth for system procedures
@@ -113,100 +101,45 @@ func stripLeadingComments(query string) string {
 // "SELECT 1; DELETE FROM prod" would be classified as a harmless SELECT by the
 // prefix-based operation detector while SQL Server happily executes the whole
 // batch.
-func hasMultipleStatements(query string) bool {
-	if hasKeywordStackedStatements(query) || hasGOBatchSeparator(query) {
-		return true
+type restrictedClass int
+
+const (
+	classSingle restrictedClass = iota
+	classMultiple
+	classGO
+	classLexical
+)
+
+func classifyRestricted(query string) (sqlguard.Analysis, restrictedClass) {
+	a, err := sqlguard.Analyze(query)
+	if err != nil {
+		return sqlguard.Analysis{}, classLexical
 	}
-	const (
-		stNormal = iota
-		stString
-		stBracket
-		stLineComment
-		stBlockComment
-	)
-	state := stNormal
-	runes := []rune(query)
-	n := len(runes)
-	for i := 0; i < n; i++ {
-		c := runes[i]
-		switch state {
-		case stNormal:
-			switch {
-			case c == '\'':
-				state = stString
-			case c == '[':
-				state = stBracket
-			case c == '-' && i+1 < n && runes[i+1] == '-':
-				state = stLineComment
-				i++
-			case c == '/' && i+1 < n && runes[i+1] == '*':
-				state = stBlockComment
-				i++
-			case c == ';':
-				// A separator counts only if non-whitespace, non-comment
-				// content follows it.
-				if hasExecutableRemainder(runes[i+1:]) {
-					return true
-				}
-			}
-		case stString:
-			if c == '\'' {
-				// Handle escaped '' inside a string literal.
-				if i+1 < n && runes[i+1] == '\'' {
-					i++
-				} else {
-					state = stNormal
-				}
-			}
-		case stBracket:
-			if c == ']' {
-				if i+1 < n && runes[i+1] == ']' {
-					i++
-				} else {
-					state = stNormal
-				}
-			}
-		case stLineComment:
-			if c == '\n' {
-				state = stNormal
-			}
-		case stBlockComment:
-			if c == '*' && i+1 < n && runes[i+1] == '/' {
-				state = stNormal
-				i++
-			}
-		}
+	if a.GO {
+		return a, classGO
 	}
-	return false
+	if a.Statements > 1 || stackedWords(a.TopLevel) {
+		return a, classMultiple
+	}
+	return a, classSingle
 }
 
-// hasExecutableRemainder reports whether the given tail contains any
-// executable SQL after stripping leading whitespace and comments. Used to
-// allow a harmless trailing semicolon while still catching real stacked
-// statements.
-func hasExecutableRemainder(tail []rune) bool {
-	s := strings.TrimSpace(string(tail))
-	for s != "" {
-		switch {
-		case strings.HasPrefix(s, "--"):
-			if idx := strings.IndexByte(s, '\n'); idx != -1 {
-				s = strings.TrimSpace(s[idx+1:])
-			} else {
-				return false
-			}
-		case strings.HasPrefix(s, "/*"):
-			if idx := strings.Index(s, "*/"); idx != -1 {
-				s = strings.TrimSpace(s[idx+2:])
-			} else {
-				return false
-			}
-		case strings.HasPrefix(s, ";"):
-			s = strings.TrimSpace(s[1:])
-		default:
-			return true
-		}
+func restrictedBatchError(class restrictedClass) error {
+	switch class {
+	case classLexical:
+		return fmt.Errorf("read-only mode: unterminated SQL literal, identifier, or comment")
+	case classGO:
+		return fmt.Errorf("read-only mode: GO batch separators are not supported")
+	case classMultiple:
+		return fmt.Errorf("read-only mode: multiple SQL statements are not allowed in a single request")
+	default:
+		return nil
 	}
-	return false
+}
+
+func hasMultipleStatements(query string) bool {
+	_, class := classifyRestricted(query)
+	return class != classSingle
 }
 
 func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
@@ -233,8 +166,10 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	// whitelist) context. Stacked statements are the primary way to smuggle a
 	// modification past the prefix-based operation detector, e.g.
 	// "SELECT 1; DELETE FROM prod". A single trailing semicolon is still fine.
-	if hasMultipleStatements(query) {
-		return fmt.Errorf("read-only mode: multiple SQL statements are not allowed in a single request")
+	// A lexical error is never treated as a single statement.
+	analysis, class := classifyRestricted(query)
+	if err := restrictedBatchError(class); err != nil {
+		return err
 	}
 
 	if isSelectInto(query) && effective.readOnly {
@@ -245,101 +180,104 @@ func (s *MCPMSSQLServer) validateReadOnlyQuery(query string) error {
 	// never overrides READ_ONLY=true, which is intentionally absolute.
 	whitelist := effective.whitelistTables
 	if !effective.readOnly && len(whitelist) > 0 {
-		// Whitelist is configured - let validateTablePermissions() handle modification permissions
-		// We still need to block dangerous operations though
-		normalizedQuery := stripLeadingComments(query)
-		_ = normalizedQuery // used for future pattern matching if needed
-
 		// Procedures have a separate allowlist and must never be reached via
 		// query_database merely because a table whitelist exists.
-		if strings.HasPrefix(strings.ToUpper(stripLeadingComments(query)), "EXEC") {
+		if len(analysis.TopLevel) > 0 && (analysis.TopLevel[0] == "EXEC" || analysis.TopLevel[0] == "EXECUTE") {
 			return fmt.Errorf("read-only mode: execute_procedure must be used for stored procedures")
 		}
 
-		// Block dangerous system procedures even with whitelist
-		queryUpper := strings.ToUpper(query)
-		for _, sp := range readOnlyDangerousSPs {
-			if strings.Contains(queryUpper, sp) {
-				return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
-			}
+		if sp := forbiddenProcedure(analysis.Words); sp != "" {
+			return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
 		}
 
 		// Allow query to proceed to validateTablePermissions() for whitelist check
 		return nil
 	}
 
-	// No whitelist configured - enforce strict read-only mode
-	normalizedQuery := stripLeadingComments(query)
-
-	// Special case (new for admin introspection support):
+	// No whitelist configured - enforce strict read-only mode.
 	// Allow EXEC/EXECUTE of a small set of known read-only system procedures
-	// used for schema discovery and database administration.
-	// This is deliberately narrow and does not relax the general ban on EXEC.
+	// used for schema discovery. This does not relax the general ban on EXEC.
 	if isSafeReadOnlyAdminProcedure(query) {
-		queryUpper := strings.ToUpper(query)
-		for _, sp := range readOnlyDangerousSPs {
-			if strings.Contains(queryUpper, sp) {
-				return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
-			}
+		if sp := forbiddenProcedure(analysis.Words); sp != "" {
+			return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
 		}
 		return nil
 	}
 
-	// List of allowed read-only operations (traditional path)
 	allowedPrefixes := []string{
 		"SELECT",
-		"WITH", // Common Table Expressions that start with WITH
+		"WITH",
 		"SHOW",
 		"DESCRIBE",
 		"DESC",
 		"EXPLAIN",
 	}
-
-	// Check if query starts with an allowed prefix
+	started := ""
+	if len(analysis.TopLevel) > 0 {
+		started = analysis.TopLevel[0]
+	}
 	for _, prefix := range allowedPrefixes {
-		if strings.HasPrefix(normalizedQuery, prefix) {
-			// Additional check: ensure no dangerous keywords are present (using word boundaries)
-			for keyword, pattern := range dangerousKeywordPatterns {
-				if pattern.MatchString(query) {
-					return fmt.Errorf("read-only mode: query contains forbidden operation '%s'", keyword)
-				}
-			}
-
-			// Check for dangerous SPs (single source of truth)
-			queryUpper := strings.ToUpper(query)
-			for _, sp := range readOnlyDangerousSPs {
-				if strings.Contains(queryUpper, sp) {
-					return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
-				}
-			}
-
-			// Safe read-only system procedures (legacy path for SELECT queries that mention SP_ names)
-			safeSPs := []string{
-				"SP_HELP", "SP_HELPTEXT", "SP_HELPINDEX", "SP_HELPCONSTRAINT",
-				"SP_COLUMNS", "SP_TABLES", "SP_STORED_PROCEDURES",
-				"SP_FKEYS", "SP_PKEYS", "SP_STATISTICS",
-				"SP_DATABASES", "SP_HELPDB",
-			}
-
-			// If query contains SP_ or XP_, verify it's in the safe list
-			if strings.Contains(queryUpper, "SP_") || strings.Contains(queryUpper, "XP_") {
-				isSafe := false
-				for _, safeSP := range safeSPs {
-					if strings.Contains(queryUpper, safeSP) {
-						isSafe = true
-						break
-					}
-				}
-				if !isSafe {
-					return fmt.Errorf("read-only mode: system procedure not in allowed list")
-				}
-			}
-
-			return nil // Query is allowed
+		if started != prefix {
+			continue
 		}
+		if word := firstForbiddenWord(analysis.Words); word != "" {
+			return fmt.Errorf("read-only mode: query contains forbidden operation '%s'", word)
+		}
+		if sp := forbiddenProcedure(analysis.Words); sp != "" {
+			return fmt.Errorf("read-only mode: query contains forbidden procedure '%s'", sp)
+		}
+		if unsafeSystemProc(analysis.Words) {
+			return fmt.Errorf("read-only mode: system procedure not in allowed list")
+		}
+		return nil
 	}
 
 	return fmt.Errorf("read-only mode: only SELECT and read operations are allowed")
+}
+
+func firstForbiddenWord(words []string) string {
+	for _, w := range words {
+		for _, bad := range forbiddenReadWords {
+			if w == bad {
+				return bad
+			}
+		}
+	}
+	return ""
+}
+
+func forbiddenProcedure(words []string) string {
+	for _, sp := range readOnlyDangerousSPs {
+		if sqlguard.ExecutableContains(words, sp) {
+			return sp
+		}
+	}
+	return ""
+}
+
+func unsafeSystemProc(words []string) bool {
+	safeSPs := []string{
+		"SP_HELP", "SP_HELPTEXT", "SP_HELPINDEX", "SP_HELPCONSTRAINT",
+		"SP_COLUMNS", "SP_TABLES", "SP_STORED_PROCEDURES",
+		"SP_FKEYS", "SP_PKEYS", "SP_STATISTICS",
+		"SP_DATABASES", "SP_HELPDB",
+	}
+	for _, w := range words {
+		if !strings.Contains(w, "SP_") && !strings.Contains(w, "XP_") {
+			continue
+		}
+		safe := false
+		for _, name := range safeSPs {
+			if strings.Contains(w, name) {
+				safe = true
+				break
+			}
+		}
+		if !safe {
+			return true
+		}
+	}
+	return false
 }
 
 func isSelectInto(query string) bool {

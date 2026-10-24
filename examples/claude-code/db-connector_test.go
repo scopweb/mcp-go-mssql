@@ -17,6 +17,11 @@ func TestIsReadOnlyQuery(t *testing.T) {
 		{"SELECT 1\nDELETE FROM users", false},
 		{"DELETE FROM users", false},
 		{"EXEC dbo.proc", false},
+		{";WITH c AS (SELECT 1 AS n) SELECT n FROM c", true},
+		{"SELECT 'DELETE' AS operation", true},
+		{"SELECT 'primera\nGO\núltima' AS value", true},
+		{"SELECT 1\nGO\nSELECT 2", false},
+		{"SELECT 'unterminated", false},
 	}
 	for _, test := range tests {
 		if got := isReadOnlyQuery(test.query); got != test.want {

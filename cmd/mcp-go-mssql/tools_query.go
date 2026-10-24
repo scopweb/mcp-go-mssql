@@ -190,6 +190,22 @@ func (s *MCPMSSQLServer) toolQueryDatabase(id interface{}, params CallToolParams
 	}
 }
 
+// explainQueryPolicy rejects batches, GO scripts, and lexical failures before
+// explain_query classifies the operation. The messages do not include the SQL.
+func explainQueryPolicy(query string) error {
+	_, class := classifyRestricted(query)
+	switch class {
+	case classLexical:
+		return fmt.Errorf("unterminated SQL literal, identifier, or comment")
+	case classGO:
+		return fmt.Errorf("GO batch separators are not supported")
+	case classMultiple:
+		return fmt.Errorf("explain_query does not allow multiple SQL statements in a single request")
+	default:
+		return nil
+	}
+}
+
 // toolExplainQuery handles the explain_query tool.
 func (s *MCPMSSQLServer) toolExplainQuery(id interface{}, params CallToolParams) *MCPResponse {
 	if s.getDB() == nil {
@@ -231,12 +247,12 @@ func (s *MCPMSSQLServer) toolExplainQuery(id interface{}, params CallToolParams)
 			},
 		}
 	}
-	if hasMultipleStatements(query) {
+	if err := explainQueryPolicy(query); err != nil {
 		return &MCPResponse{
 			JSONRPC: "2.0",
 			ID:      id,
 			Result: CallToolResult{
-				Content: []ContentItem{{Type: "text", Text: "Error: explain_query does not allow multiple SQL statements in a single request"}},
+				Content: []ContentItem{{Type: "text", Text: "Error: " + err.Error()}},
 				IsError: true,
 			},
 		}
