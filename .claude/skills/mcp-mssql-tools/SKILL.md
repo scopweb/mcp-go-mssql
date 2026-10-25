@@ -102,6 +102,7 @@ Every result reports the three truncations separately, so you always know what y
 - A whitelist only limits modifications in an explicitly writable context (`MSSQL_READ_ONLY=false`, or a dynamic alias with `_READ_ONLY=false`). A writable alias with no whitelist permits no modifications at all.
 - Dynamic aliases are read-only by default and each keeps its own posture.
 - Modifications on a writable dynamic alias require `confirm_operation` first (bound to the alias and the exact statement, 90-second expiry, single use).
+- **The server announces the policy itself.** The `initialize` result states the posture of the instance in its instructions, and a blocked write comes back with a `WRITE POLICY` note. Trust it: the server is the enforcement point. The posture of a dynamic alias is reported by `dynamic_available` and `dynamic_connect`.
 - **If a modification is blocked by read-only mode:** do not try to bypass it (no `execute_procedure`, no alternative tool, no re-framed statement, no `SET` trick) and do not suggest elevating permissions unless the user explicitly asks. Instead, present the complete, ready-to-run SQL in a ```sql block, briefly state that the connection is read-only, and let the user run it in SSMS, sqlcmd or Azure Data Studio.
 
 ## Workflow

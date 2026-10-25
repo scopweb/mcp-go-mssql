@@ -103,7 +103,7 @@ func (s *MCPMSSQLServer) executeSecureQueryWithLimits(ctx context.Context, query
 	// existing SELECT/prefix checks would run as normal).
 	if err := s.validateReadOnlyQuery(query); err != nil {
 		s.secLogger.Printf("Read-only violation blocked: %s", err)
-		return outcome, err
+		return outcome, s.withPolicyHint(err)
 	}
 
 	// Validate granular table permissions on the BASE statement
@@ -111,7 +111,7 @@ func (s *MCPMSSQLServer) executeSecureQueryWithLimits(ctx context.Context, query
 	// operation and the referenced tables.
 	if err := s.validateTablePermissions(permCheckQuery); err != nil {
 		s.secLogger.Printf("Permission violation blocked: %s", err)
-		return outcome, err
+		return outcome, s.withPolicyHint(err)
 	}
 
 	// If a wrapper was detected, install a per-call message sink so we

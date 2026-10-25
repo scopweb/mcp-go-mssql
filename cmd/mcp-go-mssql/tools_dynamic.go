@@ -134,6 +134,12 @@ func (s *MCPMSSQLServer) toolDynamicConnect(id interface{}, params CallToolParam
 
 	msg := fmt.Sprintf("Successfully connected to dynamic alias '%s'.\n\nEffective security posture for this connection:\n- Read-only mode: %s\n- Whitelisted tables for modification: %v\n\nAll subsequent queries will be validated against this alias's security rules.", alias, roStatus, effective.whitelistTables)
 
+	if effective.readOnly {
+		msg += "\n\nWrites are rejected on this alias. Do not retry a rejected write, rephrase it or look for another tool to run it through. If the task needs a change, produce the final SQL and tell the user to run it in their own client."
+	} else {
+		msg += "\n\nA write on this alias needs an explicit confirm_operation call first."
+	}
+
 	return &MCPResponse{
 		JSONRPC: "2.0",
 		ID:      id,

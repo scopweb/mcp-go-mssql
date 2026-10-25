@@ -232,6 +232,8 @@ query_database(query="CREATE TABLE temp_ai (id INT IDENTITY PRIMARY KEY, clave N
 2. DO NOT suggest elevating permissions (changing `MSSQL_READ_ONLY`, widening whitelists) unless the user explicitly asks.
 3. Instead, present the complete, ready-to-run SQL in a ```sql code block and briefly state the connection is read-only, so the user can execute it manually (SSMS, sqlcmd, Azure Data Studio, etc.).
 
+**The server announces the policy itself:** the `initialize` result states the posture of the instance in its instructions, and a blocked write comes back with a `WRITE POLICY` note that carries the rule and the alternative. A rejection is final: do not retry it, rephrase it or route it through another tool.
+
 ---
 
 ## 5. `execute_procedure`

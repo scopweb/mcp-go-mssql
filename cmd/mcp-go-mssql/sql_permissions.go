@@ -102,8 +102,16 @@ func (s *MCPMSSQLServer) requireConfirmationForModification(operation string, ta
 		ExpiresAt:   time.Now().Add(90 * time.Second), // 90 seconds to confirm
 	}
 
-	return fmt.Errorf("CONFIRMATION REQUIRED: This is a modification operation (%s) on a writable dynamic alias.\n\nYou must first call the 'confirm_operation' tool with this exact description:\n\"%s\"\n\nOnly after receiving confirmation will the operation be allowed.", operation, desc) //nolint:staticcheck // multi-line user-facing message; capitalization + punctuation are intentional
+	return &confirmationError{msg: fmt.Sprintf("CONFIRMATION REQUIRED: This is a modification operation (%s) on a writable dynamic alias.\n\nYou must first call the 'confirm_operation' tool with this exact description:\n\"%s\"\n\nOnly after receiving confirmation will the operation be allowed.", operation, desc)}
 }
+
+// confirmationError is the rejection that asks the agent to call
+// confirm_operation before a modification on a writable dynamic alias. It
+// carries its own instruction, so the generic write-policy hint is not
+// appended to it.
+type confirmationError struct{ msg string }
+
+func (e *confirmationError) Error() string { return e.msg } //nolint:staticcheck // multi-line user-facing message; capitalization + punctuation are intentional
 
 // isOperationConfirmed checks if there is a valid pending confirmation that matches the current operation.
 func (s *MCPMSSQLServer) isOperationConfirmed(operation string, tables []string, alias, query string) bool {

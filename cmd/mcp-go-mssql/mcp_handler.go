@@ -53,7 +53,7 @@ func (s *MCPMSSQLServer) handleRequest(req MCPRequest) *MCPResponse {
 					Title:   "MSSQL Database Connector",
 					Version: "1.0.0",
 				},
-				Instructions: "This server provides secure access to a Microsoft SQL Server database. Use get_database_info to check connection status, explore/inspect for schema, query_database / execute_procedure for operations (subject to read-only + whitelist policy). When configured for dynamic multi-DB mode (MSSQL_DYNAMIC_* variables + no classic MSSQL_SERVER), the dynamic_available / dynamic_connect / dynamic_list / confirm_operation tools become available. All modifications are governed by the active security posture.",
+				Instructions: s.buildInstructions(),
 			},
 		}
 

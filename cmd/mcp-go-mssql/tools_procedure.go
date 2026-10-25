@@ -175,7 +175,7 @@ func (s *MCPMSSQLServer) toolExecuteProcedure(id interface{}, params CallToolPar
 			JSONRPC: "2.0",
 			ID:      id,
 			Result: CallToolResult{
-				Content: []ContentItem{{Type: "text", Text: "Error: execute_procedure is blocked because READ_ONLY=true. Stored procedures may modify data."}},
+				Content: []ContentItem{{Type: "text", Text: "Error: execute_procedure is blocked because READ_ONLY=true. Stored procedures may modify data.\n\n" + s.policyHint()}},
 				IsError: true,
 			},
 		}

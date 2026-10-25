@@ -176,6 +176,12 @@ func (s *MCPMSSQLServer) toolGetDatabaseInfo(id interface{}, params CallToolPara
 				info.WriteString("Access Mode: Full access\n")
 			}
 		}
+
+		// Tell the agent what to do when a write is not possible, so it does
+		// not keep trying variants of the same statement.
+		if s.getEffectiveConfig().readOnly {
+			info.WriteString("Write policy: writes are rejected by the server policy, not by SQL Server. If the user needs a change, give them the final SQL to run in their own client.\n")
+		}
 	}
 
 	return &MCPResponse{

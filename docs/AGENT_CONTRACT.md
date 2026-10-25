@@ -59,6 +59,31 @@ The direct CLI is read-only by default. `MSSQL_CLI_ALLOW_WRITE=true` is an
 operator-only escape hatch and does not provide MCP whitelist or confirmation
 semantics; agents should use the MCP server instead.
 
+## Write policy announcements
+
+The server states the write policy instead of leaving the agent to discover it
+by failing a write.
+
+- `initialize` carries the posture of the instance in its `instructions`:
+  read-only, whitelist-restricted or writable. In dynamic mode it states that
+  the posture is per alias and that `dynamic_available` and `dynamic_connect`
+  report it.
+- A write rejected by the policy carries a `WRITE POLICY` note with the rule
+  and the alternative. The agent must not retry it, rephrase it or route it
+  through another tool, and must give the user the final SQL to run in their
+  own client.
+- `dynamic_connect` and `get_database_info` repeat the posture of the active
+  connection.
+
+The tool descriptions are unchanged on purpose. Tool schemas are resent on
+every request, so prose there would be billed on every turn. The channels
+above are paid once per session, on a connection change, or on a rejection,
+which is when the agent needs the rule.
+
+The annotations of the catalog describe the tool surface, not the posture of
+the running instance: `query_database` and `execute_procedure` stay published
+as destructive, because they can modify data in a writable configuration.
+
 ## Tool results
 
 `query_database` returns its stable result in `structuredContent` and also
