@@ -3,7 +3,7 @@ title: Security Overview
 description: "Overview of MCP-Go-MSSQL security features: mandatory TLS encryption, read-only mode, table whitelisting, and SQL injection protection."
 ---
 
-MCP-Go-MSSQL implements multiple security layers to protect databases in production environments.
+MCP-Go-MSSQL adds security layers in front of SQL Server. They do not replace a least-privilege login: they are an extra layer you can turn on quickly, without changing that user.
 
 ## Security features
 
@@ -20,8 +20,8 @@ MCP-Go-MSSQL implements multiple security layers to protect databases in product
 - **Multi-table validation** — detects unauthorized access via JOINs/subqueries
 
 ### Access control
-- **Read-only mode** — blocks INSERT/UPDATE/DELETE
-- **Table whitelist** — granular control over modifiable tables
+- **Read-only mode** — with `MSSQL_READ_ONLY=true` there are no writes. A whitelist cannot enable them
+- **Table whitelist** — applies only when `READ_ONLY=false`. A writable alias with no whitelist cannot modify anything
 - **Role-based configuration** — different configs for different environments
 
 ### Authentication

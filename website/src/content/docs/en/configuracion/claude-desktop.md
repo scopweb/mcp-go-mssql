@@ -58,7 +58,7 @@ Edit the Claude Desktop configuration file and add the MCP server:
     "env": {
       "MSSQL_SERVER": "localhost",
       "MSSQL_DATABASE": "DevDB",
-      "MSSQL_USER": "sa",
+      "MSSQL_USER": "dev_user",
       "MSSQL_PASSWORD": "dev_password",
       "DEVELOPER_MODE": "true",
       "MSSQL_READ_ONLY": "false"

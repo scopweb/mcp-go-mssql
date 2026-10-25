@@ -11,7 +11,7 @@ export default defineConfig({
 				es: 'MCP-Go-MSSQL',
 				en: 'MCP-Go-MSSQL',
 			},
-			description: 'Servidor MCP seguro en Go para conectar Claude Desktop y Claude Code con Microsoft SQL Server',
+			description: 'Servidor MCP seguro en Go para Microsoft SQL Server. Claude Desktop, Claude Code y OpenCode.',
 			logo: {
 				src: './src/assets/scopweb.png',
 				alt: 'scopweb',
@@ -57,11 +57,13 @@ export default defineConfig({
 						{ label: 'explore', slug: 'herramientas-mcp/explore' },
 						{ label: 'inspect', slug: 'herramientas-mcp/inspect' },
 						{ label: 'execute_procedure', slug: 'herramientas-mcp/execute-procedure' },
+						{ label: 'explain_query', slug: 'herramientas-mcp/explain-query' },
+						{ label: 'statistics', slug: 'herramientas-mcp/statistics' },
 					],
 				},
 				{
-					label: 'CLI de Claude Code',
-					translations: { en: 'Claude Code CLI' },
+					label: 'CLI',
+					translations: { en: 'CLI' },
 					items: [
 						{ label: 'Resumen', translations: { en: 'Overview' }, slug: 'cli/resumen' },
 						{ label: 'Comandos', translations: { en: 'Commands' }, slug: 'cli/comandos' },
@@ -86,6 +88,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Variables de entorno', translations: { en: 'Environment Variables' }, slug: 'configuracion/variables-entorno' },
 						{ label: 'Claude Desktop', slug: 'configuracion/claude-desktop' },
+						{ label: 'OpenCode', slug: 'configuracion/opencode' },
 						{ label: 'Modos de autenticación', translations: { en: 'Authentication Modes' }, slug: 'configuracion/autenticacion' },
 						{ label: 'Autenticación Windows (SSPI)', translations: { en: 'Windows Auth (SSPI)' }, slug: 'configuracion/autenticacion-windows' },
 						{ label: 'Connection strings', slug: 'configuracion/connection-strings' },

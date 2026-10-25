@@ -3,7 +3,7 @@ title: Resumen de seguridad
 description: "Visión general de las protecciones de seguridad de MCP-Go-MSSQL: cifrado TLS obligatorio, modo solo lectura, whitelist de tablas y prevención de inyección SQL."
 ---
 
-MCP-Go-MSSQL implementa múltiples capas de seguridad para proteger bases de datos en entornos de producción.
+MCP-Go-MSSQL añade capas de seguridad delante de SQL Server. No sustituyen un login con mínimos privilegios: son un extra fácil de activar, sin cambiar ese usuario.
 
 ## Características de seguridad
 
@@ -20,8 +20,8 @@ MCP-Go-MSSQL implementa múltiples capas de seguridad para proteger bases de dat
 - **Validación multi-tabla** — detecta acceso no autorizado via JOINs/subqueries
 
 ### Control de acceso
-- **Modo solo lectura** — bloquea INSERT/UPDATE/DELETE
-- **Whitelist de tablas** — control granular sobre tablas modificables
+- **Modo solo lectura** — con `MSSQL_READ_ONLY=true` no hay escrituras. La whitelist no las habilita
+- **Whitelist de tablas** — solo aplica si `READ_ONLY=false`. Sin whitelist, un alias escribible no modifica nada
 - **Configuración por roles** — diferentes configs para diferentes entornos
 
 ### Autenticación

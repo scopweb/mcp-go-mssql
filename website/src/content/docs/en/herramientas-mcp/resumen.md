@@ -3,7 +3,7 @@ title: MCP Tools
 description: Overview of the 6 base tools available in the MCP server
 ---
 
-The MCP-Go-MSSQL server exposes **6 base tools** that Claude Desktop can use to interact with Microsoft SQL Server databases securely. In dynamic mode, **5 additional tools** are exposed (11 in total).
+The server exposes **6 base tools**. Dynamic mode adds **5** (11 in total). They work with Claude Desktop, Claude Code, OpenCode, and any stdio MCP client.
 
 ## Tool list
 

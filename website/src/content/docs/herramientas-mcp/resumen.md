@@ -3,7 +3,7 @@ title: Herramientas MCP
 description: Resumen de las 6 herramientas base disponibles en el servidor MCP
 ---
 
-El servidor MCP-Go-MSSQL expone **6 herramientas base** que Claude Desktop puede utilizar para interactuar con bases de datos Microsoft SQL Server de forma segura. En modo dinámico se exponen **5 herramientas adicionales** (11 en total).
+El servidor expone **6 herramientas base**. En modo dinámico añade **5** (11 en total). Sirven a Claude Desktop, Claude Code, OpenCode y cualquier cliente MCP por stdio.
 
 ## Lista de herramientas
 

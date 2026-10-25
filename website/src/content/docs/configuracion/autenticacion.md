@@ -25,7 +25,7 @@ MSSQL_AUTH=integrated
 # MSSQL_AUTH=windows
 ```
 
-Consulta [Autenticación Windows (SSPI)](/seguridad/autenticacion-windows/) para detalles de configuración.
+Consulta [Autenticación Windows (SSPI)](/configuracion/autenticacion-windows/) para detalles de configuración.
 
 ## Azure Active Directory
 

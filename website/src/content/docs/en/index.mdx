@@ -5,7 +5,7 @@ template: splash
 hero:
   image:
     file: ../../../assets/scopweb.png
-  tagline: Microsoft SQL Server inside Claude. Enterprise-grade security.
+  tagline: Microsoft SQL Server for MCP agents. Secure by default.
   actions:
     - text: Get Started
       link: /en/inicio/bienvenida/
@@ -21,13 +21,13 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <CardGrid stagger>
   <Card title="Secure by default" icon="shield">
-    Mandatory TLS, exclusive prepared statements, read-only mode with table whitelisting, and SQL injection protection. Your production database stays protected.
+    Mandatory TLS, prepared statements, and absolute read-only mode. This does not replace a least-privilege login: it is an extra layer, without changing that user.
   </Card>
-  <Card title="9 MCP tools" icon="puzzle">
-    Queries, schema exploration, stored procedures, foreign keys, and more. Everything needed to operate your database from AI.
+  <Card title="6 base tools" icon="puzzle">
+    Queries, schema, estimated plans, and procedures. Dynamic mode adds 5 more tools.
   </Card>
-  <Card title="Granular AI control" icon="star">
-    The AI can read all data, but can only modify tables you explicitly authorize through the whitelist. Built for production environments.
+  <Card title="Writes only if you ask" icon="star">
+    While read-only is on, no whitelist can enable writes. To write: READ_ONLY=false and an explicit whitelist.
   </Card>
   <Card title="Dynamic connections" icon="setting">
     A single MCP server can securely access multiple related databases of one application, each with independent security policies per alias.

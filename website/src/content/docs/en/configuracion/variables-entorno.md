@@ -20,7 +20,7 @@ All credentials and configuration options are managed through environment variab
 |----------|---------|-------------|
 | `MSSQL_PORT` | `1433` | SQL Server port |
 | `DEVELOPER_MODE` | `false` | `true` for development (relaxed TLS, detailed errors) |
-| `MSSQL_READ_ONLY` | `false` | Blocks write operations |
+| `MSSQL_READ_ONLY` | `true` | Absent or `true` = absolute read-only. Only explicit `false` enables writes; an invalid value aborts startup. A whitelist cannot enable writes |
 | `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification **only when `MSSQL_READ_ONLY=false`**. With `READ_ONLY=true` the whitelist does not grant writes. **Schema-qualified matching**: a bare name is assumed to be in `dbo` (`temp_ai` matches `temp_ai`/`dbo.temp_ai`, but not `otro_schema.temp_ai`); qualify non-`dbo` objects explicitly (e.g. `app.temp_ai`) |
 | `MSSQL_WHITELIST_PROCEDURES` | _(empty)_ | Comma-separated list of stored procedures the `execute_procedure` tool may run. If unset, `execute_procedure` is disabled entirely |
 | `MSSQL_MAX_QUERY_SIZE` | `1048576` | Maximum SQL input size in characters |

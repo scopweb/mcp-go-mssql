@@ -43,8 +43,8 @@ Get-Content .env | ForEach-Object {
 |----------|---------|-------------|
 | `MSSQL_PORT` | `1433` | SQL Server port |
 | `DEVELOPER_MODE` | `false` | `true` for development, `false` for production |
-| `MSSQL_READ_ONLY` | `false` | Read-only mode |
-| `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification in read-only mode |
+| `MSSQL_READ_ONLY` | `false` | `true` = absolute read-only. A whitelist cannot enable writes |
+| `MSSQL_WHITELIST_TABLES` | _(empty)_ | Tables allowed for modification only when `READ_ONLY=false` |
 | `MSSQL_AUTH` | `sql` | Authentication mode (`sql`, `integrated`/`windows`; `azure` is not implemented — use `MSSQL_CONNECTION_STRING`) |
 | `MSSQL_CONNECTION_STRING` | _(empty)_ | Custom connection string (overrides other variables) |
 

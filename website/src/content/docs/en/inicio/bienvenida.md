@@ -1,60 +1,33 @@
 ---
 title: Welcome
-description: What is MCP-Go-MSSQL and why you need it
+description: What MCP-Go-MSSQL is and how to use it
 ---
 
-**MCP-Go-MSSQL** is a secure bridge between Claude and your Microsoft SQL Server database. Written in Go, it lets you query, analyze, and operate on data directly from the conversation, without leaving Claude Desktop or Claude Code.
+**MCP-Go-MSSQL** is an MCP server and a CLI in Go for Microsoft SQL Server. It serves Claude Desktop, Claude Code, OpenCode, and any stdio MCP client.
 
-## Why this project exists
+## What it solves
 
-AI assistants are incredibly useful for working with data, but connecting them to a production database is scary. One mistake and you could lose critical data. MCP-Go-MSSQL solves that problem: it gives Claude full read access and a controlled write space, so you can leverage AI without risking anything.
+Connecting an agent to a production database is risky. This server adds a layer you can turn on quickly: absolute read-only mode, a whitelist only when writes are enabled, prepared statements, and TLS that fails closed in production.
+
+That layer **does not replace** a least-privilege SQL login. You do not have to change that user to turn it on.
 
 ## Two ways to use it
 
-1. **MCP Server** (`main.go`) — Integrates with Claude Desktop through the MCP protocol. Configure it once and Claude will have database tools available in every conversation.
+1. **MCP server** (`cmd/mcp-go-mssql`) — tools inside the conversation.
+2. **CLI** (`examples/claude-code/db-connector.go`) — terminal. Writes stay off unless an operator sets `MSSQL_CLI_ALLOW_WRITE=true`.
 
-2. **Claude Code CLI** (`examples/claude-code/db-connector.go`) — Direct command-line access. Ideal for development, scripts, and automation.
+## What the agent can do
 
-Both share the same security layers: TLS, prepared statements, read-only mode, and whitelist.
-
-## What you can do
-
-- **Explore** your database structure: tables, columns, indexes, foreign keys
-- **Query** data with full SQL: JOINs, CTEs, window functions
-- **Analyze** production information with no risk of accidental modification
-- **Operate** on authorized temporary tables so the AI can process and transform data
-- **Execute** stored procedures in a controlled manner
-
-## Security built in
-
-It's not an add-on module you enable separately. Security is embedded in every layer:
-
-- **TLS encryption** mandatory in production
-- **Exclusive prepared statements** — SQL injection is impossible
-- **Read-only mode** that blocks any unauthorized writes
-- **Table whitelist** for granular write permissions where you decide
-- **Multi-table validation** that detects unauthorized access via JOINs and subqueries
-- **Secure logging** that never records credentials or sensitive data
+- Explore tables, columns, indexes, and foreign keys
+- Run read queries
+- Show an estimated plan (`explain_query`) and execution statistics
+- Write only to whitelisted tables, and only when `MSSQL_READ_ONLY=false`
+- Run procedures listed in `MSSQL_WHITELIST_PROCEDURES`
 
 ## Requirements
 
-- **Go 1.26+** ([download](https://go.dev/dl/))
-- **Microsoft SQL Server** with TLS support (2012 or later recommended)
-- Network access to the SQL Server port (1433 by default)
+- Go 1.27.2+ ([download](https://go.dev/dl/))
+- A reachable Microsoft SQL Server (port 1433 by default)
+- Valid TLS in production. SQL Server 2008/2012 (TLS 1.0) needs an explicit opt-in
 
-## Project structure
-
-```
-mcp-go-mssql/
-├── main.go                    # MCP server for Claude Desktop
-├── claude-code/
-│   └── db-connector.go        # CLI for Claude Code
-├── test/
-│   └── security/              # Security test suite
-├── scripts/                   # Build and utility scripts
-└── website/                   # This documentation
-```
-
-## Next step
-
-Continue to [Installation](/en/inicio/instalacion/) to get the server running in minutes.
+Continue to [Installation](/en/inicio/instalacion/).

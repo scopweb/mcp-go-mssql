@@ -240,16 +240,7 @@ Con esta configuración cargas **un solo servidor MCP** y puedes trabajar de for
 
 ---
 
-## ¿Necesitas Ayuda para tu Caso Concreto?
-
-Si me dices:
-- Cuántas bases de datos tiene tu aplicación
-- Cuáles de ellas realmente necesitan escritura
-- Qué tipo de operaciones quieres que haga la IA (insertar en tablas temporales, actualizar estados, generar reportes, etc.)
-
-Puedo darte la configuración `.env` exacta y los permisos recomendados en SQL Server.
-
----
+El login de SQL Server sigue siendo el control real. Esta configuración no lo sustituye.
 
 **Herramienta de Confirmación**
 

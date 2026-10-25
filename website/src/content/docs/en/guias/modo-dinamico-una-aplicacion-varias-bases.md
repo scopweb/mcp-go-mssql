@@ -240,19 +240,12 @@ With this setup you load **only one MCP server** and can safely work with all re
 
 ---
 
-## Need Help With Your Specific Case?
+The SQL Server login is still the control you can rely on. This configuration does not replace it.
 
-If you tell me:
-- How many databases your application has
-- Which ones really need write access
-- What kind of operations you want the AI to perform (insert into temp tables, update statuses, generate reports, etc.)
-
-I can give you the exact `.env` configuration and the recommended SQL Server permissions.
-
----
+When an alias has `READ_ONLY=false`, the agent must call `confirm_operation` with a clear description before the modification is allowed.
 
 **Related**:
-- [FAQ: Dynamic Connections](../guias/faq-conexiones-dinamicas.md) (Spanish)
-- [Environment Variables](../configuracion/variables-entorno.md)
-- [Read-Only Mode and Whitelist](../seguridad/modo-solo-lectura.md) (Spanish)
-- [Table Whitelist](../seguridad/whitelist-tablas.md) (Spanish)
+- [Dynamic connections FAQ](./faq-conexiones-dinamicas.md)
+- [Environment variables](../configuracion/variables-entorno.md)
+- [Read-only mode](../seguridad/modo-solo-lectura.md)
+- [Table whitelist](../seguridad/whitelist-tablas.md)
