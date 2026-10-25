@@ -223,7 +223,7 @@ query_database(query="CREATE TABLE temp_ai (id INT IDENTITY PRIMARY KEY, clave N
 **Security constraints:**
 - Read-only mode blocks INSERT/UPDATE/DELETE/CREATE/DROP and every other modification, `EXEC` and `execute_procedure`. There is no whitelist exception while read-only is active.
 - A whitelist only limits modifications in an explicitly writable context (`MSSQL_READ_ONLY=false` or a dynamic alias with `_READ_ONLY=false`); a writable alias without a whitelist permits no modifications.
-- Multi-statement batches are rejected in read-only/whitelist contexts (only `SET STATISTICS TIME/IO` diagnostic wrappers are allowed)
+- Multi-statement batches are rejected in read-only/whitelist contexts, with or without `;` (only `SET STATISTICS TIME/IO` diagnostic wrappers are allowed). A leading `;`, or `;` / `GO` / a dangerous word inside a literal, comment, double-quoted identifier, or `@variable`, does not make a single statement a batch. A real second statement, a real `GO`, and an unclosed literal or comment stay rejected.
 - All queries executed as prepared statements
 - Results are capped at 500 rows; the `truncated` flag marks a partial result that must be presented as partial
 

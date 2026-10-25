@@ -178,7 +178,7 @@ For complete parameter reference, examples, and usage patterns see [tools-refere
 ## Security Awareness
 
 - **Prepared statements:** every query is parameterized, so SQL injection is blocked at the server level.
-- **Stacked statements:** multi-statement batches are rejected in read-only/whitelist contexts; the only allowed multi-statement form is the `SET STATISTICS TIME/IO` diagnostic wrapper around one read-only statement.
+- **Stacked statements:** multi-statement batches are rejected in read-only/whitelist contexts, with or without `;`. The only allowed multi-statement form is the `SET STATISTICS TIME/IO` diagnostic wrapper around one read-only statement. A single statement is not a batch because it starts with `;`, or because `;`, `GO`, or a dangerous word appears inside a literal, a comment, a double-quoted identifier, or an `@variable`. A real second statement, a real `GO`, and an unclosed literal or comment are still rejected: do not rephrase them to slip past.
 - **Errors:** production mode returns generic messages; `DEVELOPER_MODE=true` adds detail and relaxes certificate validation. Never enable it in production.
 - **Isolation:** run one server process per agent or session. The selected dynamic alias is process state, not an isolation boundary.
 
