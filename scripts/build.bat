@@ -29,7 +29,7 @@ if %errorlevel% neq 0 (
 
 REM Build production version
 echo Building production executable...
-go build -ldflags "-w -s" -o build/mcp-go-mssql.exe ./cmd/mcp-go-mssql
+go build -ldflags "-w -s" -o build/mcp-go-mssql-secure.exe ./cmd/mcp-go-mssql
 if %errorlevel% neq 0 (
     echo Error: Build failed
     pause
@@ -38,10 +38,10 @@ if %errorlevel% neq 0 (
 
 echo.
 echo ✓ Build successful!
-echo ✓ Executable: build/mcp-go-mssql.exe
+echo ✓ Executable: build/mcp-go-mssql-secure.exe
 echo.
 echo To use with Claude Desktop:
-echo 1. Copy build/mcp-go-mssql.exe to your desired location
+echo 1. Copy build/mcp-go-mssql-secure.exe to your desired location
 echo 2. Update your Claude Desktop config with the full path
 echo 3. Configure environment variables in the config
 echo.
