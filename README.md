@@ -91,7 +91,35 @@ Classic mode also defaults to read-only when `MSSQL_READ_ONLY` is absent or empt
 | `MSSQL_ALLOW_INSECURE_TLS` | Allow insecure TLS in production (legacy servers only) |
 | `MSSQL_USAGE_LOG` | `false` disables the per-call usage records on stderr (default: enabled) |
 
-The full list is in [.env.example](.env.example) and in the [environment variable docs](https://mcp-go-mssql.scopweb.com/configuracion/variables-entorno).
+Configuration templates are in [.env.example](.env.example). The full reference, including vault credentials, is in the [environment variable docs](https://mcp-go-mssql.scopweb.com/configuracion/variables-entorno).
+
+## Credentials from a private vault
+
+The MCP server can resolve SQL passwords or complete connection strings from the corporate vault API (`GET /api/secrets/{environment}`, `X-Api-Key`). This is a specific API contract, not a generic HashiCorp Vault client. The standalone CLI does not use it.
+
+Put the following in the `.env` **next to the executable that your MCP client actually launches**, or supply it through the host environment. Replace the example API key locally; never commit it.
+
+```dotenv
+MSSQL_VAULT_URL=https://vault.example.com/vault/
+MSSQL_VAULT_API_KEY=<application-api-key>
+MSSQL_VAULT_ENVIRONMENT=prod
+MSSQL_DYNAMIC_MODE=true
+MSSQL_READ_ONLY=true
+MSSQL_DYNAMIC_APP_MAIN_SERVER=sql01.example.com
+MSSQL_DYNAMIC_APP_MAIN_DATABASE=AppDB
+MSSQL_DYNAMIC_APP_MAIN_USER=ai_reader
+MSSQL_DYNAMIC_APP_MAIN_READ_ONLY=true
+MSSQL_DYNAMIC_APP_MAIN_PASSWORD_VAULT_SECRET=MainSqlPassword
+```
+
+Create `MainSqlPassword` in that vault application and environment. Remove the corresponding local `_PASSWORD` value. To store a full DSN instead, use `MSSQL_DYNAMIC_APP_MAIN_CONNECTION_STRING_VAULT_SECRET=MainSqlConnection`. Classic equivalents are `MSSQL_PASSWORD_VAULT_SECRET` and `MSSQL_CONNECTION_STRING_VAULT_SECRET`.
+
+- Trusted **HTTPS is mandatory**, also in developer mode. A reverse proxy may serve the API under `/vault/`; the configured prefix is preserved. SQL TLS exceptions do not relax vault HTTPS.
+- One request at startup, 10-second timeout, 1 MiB response limit. Missing secrets, ambiguous sources or a vault error stop startup before MCP initialization. No local credential fallback or periodic refresh; restart after rotation.
+- Host environment values take precedence over `.env`. `MSSQL_IGNORE_LOCAL_ENV=true` skips the file entirely. A binary under `build/` loads `build/.env`, not the repository-root `.env`.
+- Initial `disconnected` status is normal in dynamic mode: call `dynamic_available`, then `dynamic_connect` with an alias. Successful vault retrieval does not guarantee that SQL Server will accept the credentials.
+
+Setup, IIS reverse proxy and diagnosis: [repository guide](docs/corporate-vault.md) · [website guide (EN)](https://mcp-go-mssql.scopweb.com/en/configuracion/vault-corporativo/).
 
 ## OpenCode
 

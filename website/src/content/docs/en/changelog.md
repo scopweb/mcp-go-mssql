@@ -7,6 +7,25 @@ All relevant changes to this project are documented here.
 
 ## Latest change
 
+### Corporate vault over HTTPS (2026-10-26)
+
+- Passwords and complete DSNs from the vault API using an application key and `*_VAULT_SECRET` references, in classic and dynamic modes.
+- One startup request, a 10-second timeout and a 1 MiB response limit. Private in-memory configuration without exporting secrets to the process environment.
+- Trusted HTTPS is mandatory; redirects and ambient HTTP proxies are not used. Vault failures, missing secrets and ambiguous sources stop startup; rotation requires restart.
+- IIS proxy path prefixes, host environment precedence and the `.env` next to the executable are covered in the [vault guide](/en/configuracion/vault-corporativo/).
+- No new tools or SQL permission changes. The standalone CLI does not gain this integration.
+
+### Recent contract and query changes
+
+- A single read using `;WITH`, nested comments or delimiters inside literals is not mistaken for a batch. Real batches remain rejected.
+- The server announces the write policy to the agent in `initialize` and write rejections.
+- Optional columnar format, unified `explore` search, response budgets and three truncation indicators.
+- Go 1.27.3 minimum; result budgets and read-only defaults are part of agent contract v2.
+
+The complete history is in the repository [CHANGELOG.md](https://github.com/scopweb/mcp-go-mssql/blob/master/CHANGELOG.md).
+
+## Earlier changes
+
 ### Absolute read-only and stacked SQL batches
 
 - `MSSQL_READ_ONLY=true` no longer allows whitelist writes. Writing requires `READ_ONLY=false` and an explicit whitelist.

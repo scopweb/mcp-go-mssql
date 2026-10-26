@@ -12,7 +12,31 @@ Todas las credenciales y opciones de configuración se gestionan mediante variab
 | `MSSQL_SERVER` | Hostname o IP del servidor SQL | `prod-server.database.windows.net` |
 | `MSSQL_DATABASE` | Nombre de la base de datos | `ProductionDB` |
 | `MSSQL_USER` | Usuario de SQL Server | `app_user` |
-| `MSSQL_PASSWORD` | Contraseña de SQL Server | _(secreto)_ |
+| `MSSQL_PASSWORD` | Contraseña de SQL Server, salvo referencia al vault o DSN completo | _(secreto)_ |
+
+Estas variables describen autenticación SQL clásica con campos separados. Con un DSN completo o autenticación integrada cambian los requisitos.
+
+## Vault corporativo (servidor MCP)
+
+| Variable | Descripción |
+|----------|-------------|
+| `MSSQL_VAULT_URL` | URL HTTPS con certificado confiable; admite un prefijo como `https://vault.example.com/vault/`. Sin credenciales, query ni fragmento |
+| `MSSQL_VAULT_API_KEY` | Clave de API de la aplicación del vault, no contraseña del administrador |
+| `MSSQL_VAULT_ENVIRONMENT` | Entorno obligatorio: `dev`, `staging` o `prod`; no hay valor por defecto |
+| `MSSQL_PASSWORD_VAULT_SECRET` | Nombre exacto del secreto que sustituye a `MSSQL_PASSWORD` |
+| `MSSQL_CONNECTION_STRING_VAULT_SECRET` | Nombre exacto del secreto que sustituye a `MSSQL_CONNECTION_STRING` |
+| `MSSQL_DYNAMIC_<ALIAS>_PASSWORD_VAULT_SECRET` | Nombre del secreto de contraseña de un alias |
+| `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING_VAULT_SECRET` | Nombre del secreto con el DSN completo de un alias |
+
+Las tres variables `MSSQL_VAULT_*` son obligatorias si hay referencias. Solo `PASSWORD` y
+`CONNECTION_STRING` admiten referencias. Una referencia y un valor local para el mismo destino
+son incompatibles. Una referencia de contraseña tampoco puede combinarse con un DSN que la anule.
+La carga se realiza una vez al arrancar; falla cerrado y requiere reinicio tras rotar secretos.
+
+El `.env` se carga junto al ejecutable; el entorno del host tiene prioridad. No se usa el `.env`
+del repositorio si el binario está en otra carpeta. `MSSQL_IGNORE_LOCAL_ENV=true` desactiva esta carga.
+El TLS del vault no se relaja con las opciones de TLS de SQL Server.
+Consulta [Vault corporativo](/configuracion/vault-corporativo/) para ejemplos y proxy IIS.
 
 ## Variables opcionales
 
@@ -57,7 +81,7 @@ El servidor decide automáticamente si funciona en **modo clásico** (una sola b
 |-----------|-----------|---------|
 | 1 | `MSSQL_DYNAMIC_MODE=false` (o `0`, `no`, `off`) | **Siempre clásico** (ignora todo lo demás) |
 | 2 | `MSSQL_DYNAMIC_MODE=true` | **Siempre dinámico** |
-| 3 | Existe `MSSQL_SERVER`, `MSSQL_CONNECTION_STRING` o `MSSQL_DATABASE` | **Clásico** (protege tus configuraciones normales en `.mcp.json`) |
+| 3 | Existe `MSSQL_SERVER`, `MSSQL_CONNECTION_STRING`, `MSSQL_CONNECTION_STRING_VAULT_SECRET` o `MSSQL_DATABASE` | **Clásico** (protege tus configuraciones normales en `.mcp.json`) |
 | 4 | Solo existen variables `MSSQL_DYNAMIC_*` | Dinámico (auto-detección) |
 
 **Esto soluciona el problema más común:**

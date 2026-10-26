@@ -5,6 +5,21 @@ description: Common problems and solutions for MCP-Go-MSSQL
 
 ## Connection errors
 
+### MCP will not load: "Vault configuration failed"
+
+Vault retrieval happens before `initialize`. Check stderr and the `.env` next to the executable
+actually launched by the client; host environment values take precedence. The URL must use HTTPS
+with a trusted certificate. HTTP 401 points to the application key; HTTP 500 requires inspecting
+vault API logs. For missing secrets, check the exact name, environment and application.
+There is no local password fallback or HTTP exception.
+
+With an IIS proxy, use the final URL, such as `https://gateway.example.com/vault/`, and place the
+vault rule before the catch-all rule. See the [vault guide](/en/configuracion/vault-corporativo/).
+
+Initial `disconnected` is normal in dynamic mode: select an alias with `dynamic_connect`.
+SQL error 18456 or a SQL timeout can happen after successful secret retrieval; they are SQL connection
+failures, not necessarily vault failures.
+
 ### "Database not connected"
 
 Environment variables are not configured or are incorrect.
@@ -16,6 +31,8 @@ echo "User: $MSSQL_USER"
 ```
 
 ### "TLS handshake failed" / "Certificate signed by unknown authority"
+
+The following options apply to **SQL Server**. The vault HTTPS certificate must be trusted even in development.
 
 **Development:** Set `DEVELOPER_MODE=true` to accept self-signed certificates.
 

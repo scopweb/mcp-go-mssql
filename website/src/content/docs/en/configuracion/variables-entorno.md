@@ -12,7 +12,31 @@ All credentials and configuration options are managed through environment variab
 | `MSSQL_SERVER` | SQL Server hostname or IP | `prod-server.database.windows.net` |
 | `MSSQL_DATABASE` | Database name | `ProductionDB` |
 | `MSSQL_USER` | SQL Server username | `app_user` |
-| `MSSQL_PASSWORD` | SQL Server password | _(secret)_ |
+| `MSSQL_PASSWORD` | SQL Server password, unless supplied by a vault reference or complete DSN | _(secret)_ |
+
+These fields describe classic SQL authentication with separate settings. Requirements differ for a complete DSN or integrated authentication.
+
+## Corporate vault (MCP server)
+
+| Variable | Description |
+|----------|-------------|
+| `MSSQL_VAULT_URL` | HTTPS URL with a trusted certificate; accepts a prefix such as `https://vault.example.com/vault/`. No embedded credentials, query or fragment |
+| `MSSQL_VAULT_API_KEY` | Vault application API key, not the administrator password |
+| `MSSQL_VAULT_ENVIRONMENT` | Required environment: `dev`, `staging` or `prod`; no default |
+| `MSSQL_PASSWORD_VAULT_SECRET` | Exact secret name replacing `MSSQL_PASSWORD` |
+| `MSSQL_CONNECTION_STRING_VAULT_SECRET` | Exact secret name replacing `MSSQL_CONNECTION_STRING` |
+| `MSSQL_DYNAMIC_<ALIAS>_PASSWORD_VAULT_SECRET` | Password secret name for an alias |
+| `MSSQL_DYNAMIC_<ALIAS>_CONNECTION_STRING_VAULT_SECRET` | Complete DSN secret name for an alias |
+
+All three `MSSQL_VAULT_*` settings are required when references exist. Only `PASSWORD` and
+`CONNECTION_STRING` support references. A reference and a local value for the same destination
+conflict. A password reference also cannot be combined with a DSN that would override it.
+Secrets load once at startup, fail closed and require restart after rotation.
+
+The `.env` is loaded next to the executable; the host environment takes precedence. The repository
+`.env` is not used if the binary lives elsewhere. `MSSQL_IGNORE_LOCAL_ENV=true` disables file loading.
+SQL Server TLS settings do not relax vault TLS.
+See [Corporate Vault](/en/configuracion/vault-corporativo/) for examples and an IIS proxy setup.
 
 ## Optional variables
 
@@ -57,7 +81,7 @@ The server decides between **classic mode** (single database) and **dynamic mode
 |----------|-----------|--------|
 | 1 | `MSSQL_DYNAMIC_MODE=false` (or `0`, `no`, `off`) | **Always classic** (ignores everything else) |
 | 2 | `MSSQL_DYNAMIC_MODE=true` | **Always dynamic** |
-| 3 | `MSSQL_SERVER`, `MSSQL_CONNECTION_STRING` or `MSSQL_DATABASE` is present | **Classic** (protects normal `.mcp.json` configs) |
+| 3 | `MSSQL_SERVER`, `MSSQL_CONNECTION_STRING`, `MSSQL_CONNECTION_STRING_VAULT_SECRET` or `MSSQL_DATABASE` is present | **Classic** (protects normal `.mcp.json` configs) |
 | 4 | Only `MSSQL_DYNAMIC_*` variables exist | Dynamic (auto-detect) |
 
 **This fixes the most common complaint:**  

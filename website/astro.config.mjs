@@ -87,6 +87,7 @@ export default defineConfig({
 					translations: { en: 'Configuration' },
 					items: [
 						{ label: 'Variables de entorno', translations: { en: 'Environment Variables' }, slug: 'configuracion/variables-entorno' },
+						{ label: 'Vault corporativo', translations: { en: 'Corporate Vault' }, slug: 'configuracion/vault-corporativo' },
 						{ label: 'Claude Desktop', slug: 'configuracion/claude-desktop' },
 						{ label: 'OpenCode', slug: 'configuracion/opencode' },
 						{ label: 'Modos de autenticación', translations: { en: 'Authentication Modes' }, slug: 'configuracion/autenticacion' },
