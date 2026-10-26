@@ -28,6 +28,14 @@ func main() {
 	// Host-passed environment variables always take precedence.
 	loadDotEnvIfPresent(secLogger)
 
+	// Resolve only explicit credential references; never export vault values to the process environment.
+	environment, err := resolveVaultEnvironment(context.Background(), os.Environ())
+	if err != nil {
+		secLogger.Printf("Vault configuration failed: %v", err)
+		os.Exit(1)
+	}
+	getenv := environmentLookup(environment)
+
 	// Determine mode once. We use this both to decide whether to load dynamic aliases
 	// and to expose the correct tool surface to the AI.
 	dynamicMode := isDynamicMode()
@@ -38,7 +46,7 @@ func main() {
 	// from polluting classic single-connection server instances.
 	var dynamicAliases map[string]DynamicAlias
 	if dynamicMode {
-		dynamicAliases = loadDynamicAliases(secLogger)
+		dynamicAliases = loadDynamicAliasesFromEnvironment(secLogger, environment)
 	} else {
 		dynamicAliases = make(map[string]DynamicAlias)
 	}
@@ -122,10 +130,10 @@ func main() {
 		serverHost := os.Getenv("MSSQL_SERVER")
 		database := os.Getenv("MSSQL_DATABASE")
 		user := os.Getenv("MSSQL_USER")
-		password := os.Getenv("MSSQL_PASSWORD")
+		password := getenv("MSSQL_PASSWORD")
 		authMode := os.Getenv("MSSQL_AUTH")
 
-		customConnStr := os.Getenv("MSSQL_CONNECTION_STRING")
+		customConnStr := getenv("MSSQL_CONNECTION_STRING")
 		if customConnStr != "" {
 			secLogger.Printf("Using custom connection string (value omitted)")
 		} else {
@@ -194,7 +202,7 @@ func main() {
 		}
 
 		// Build secure connection string
-		connStr, err := buildSecureConnectionString()
+		connStr, err := buildSecureConnectionStringFromEnvironment(getenv)
 		if err != nil {
 			if devMode {
 				secLogger.Printf("Failed to build connection string: %v", err)

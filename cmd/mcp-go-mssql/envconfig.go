@@ -130,6 +130,7 @@ func isDynamicMode() bool {
 	// No explicit MSSQL_DYNAMIC_MODE → decide based on what the user actually configured.
 	hasClassicConfig := os.Getenv("MSSQL_SERVER") != "" ||
 		os.Getenv("MSSQL_CONNECTION_STRING") != "" ||
+		os.Getenv("MSSQL_CONNECTION_STRING_VAULT_SECRET") != "" ||
 		os.Getenv("MSSQL_DATABASE") != ""
 
 	if hasClassicConfig {
@@ -146,12 +147,16 @@ func isDynamicMode() bool {
 // and builds a map of DynamicAlias with their individual security posture.
 // This enables the secure "one application - multiple related databases" pattern.
 func loadDynamicAliases(secLogger *SecurityLogger) map[string]DynamicAlias {
+	return loadDynamicAliasesFromEnvironment(secLogger, os.Environ())
+}
+
+func loadDynamicAliasesFromEnvironment(secLogger *SecurityLogger, environment []string) map[string]DynamicAlias {
 	aliases := make(map[string]DynamicAlias)
 	prefix := "MSSQL_DYNAMIC_"
 
 	// Collect all relevant env vars
 	envVars := make(map[string]string)
-	for _, env := range os.Environ() {
+	for _, env := range environment {
 		if idx := strings.Index(env, "="); idx > 0 {
 			key := env[:idx]
 			val := env[idx+1:]

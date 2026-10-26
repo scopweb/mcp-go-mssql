@@ -19,6 +19,8 @@ These controls do not replace a least-privilege SQL login. They are an extra lay
 
 Agent and harness contract: [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md).
 
+Corporate vault integration: [credential configuration guide](docs/corporate-vault.md) — load SQL passwords or connection strings from your private vault using application API keys and HTTPS.
+
 <!-- BEGIN GENERATED TOOL CATALOG -->
 <!-- Generated from tools/list by cmd/mcp-go-mssql/tools_docs_test.go. Do not edit by hand. -->
 <!-- Regenerate: go test ./cmd/mcp-go-mssql -run TestToolCatalogDocumentation -update -->

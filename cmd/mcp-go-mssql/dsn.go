@@ -40,9 +40,13 @@ func enforceProductionTLS(label, connStr string) error {
 }
 
 func buildSecureConnectionString() (string, error) {
+	return buildSecureConnectionStringFromEnvironment(os.Getenv)
+}
+
+func buildSecureConnectionStringFromEnvironment(getenv func(string) string) (string, error) {
 	// Check for custom connection string first
-	if customConnStr := os.Getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
-		isProduction := strings.ToLower(os.Getenv("DEVELOPER_MODE")) != "true"
+	if customConnStr := getenv("MSSQL_CONNECTION_STRING"); customConnStr != "" {
+		isProduction := strings.ToLower(getenv("DEVELOPER_MODE")) != "true"
 
 		if isProduction {
 			// Fail closed on insecure TLS in production (M2).
@@ -54,12 +58,12 @@ func buildSecureConnectionString() (string, error) {
 		return customConnStr, nil
 	}
 
-	server := os.Getenv("MSSQL_SERVER")
-	database := os.Getenv("MSSQL_DATABASE")
-	user := os.Getenv("MSSQL_USER")
-	password := os.Getenv("MSSQL_PASSWORD")
-	port := os.Getenv("MSSQL_PORT")
-	auth := strings.ToLower(os.Getenv("MSSQL_AUTH"))
+	server := getenv("MSSQL_SERVER")
+	database := getenv("MSSQL_DATABASE")
+	user := getenv("MSSQL_USER")
+	password := getenv("MSSQL_PASSWORD")
+	port := getenv("MSSQL_PORT")
+	auth := strings.ToLower(getenv("MSSQL_AUTH"))
 
 	if auth == "" {
 		auth = "sql"
@@ -98,9 +102,9 @@ func buildSecureConnectionString() (string, error) {
 	// For development mode, allow disabling encryption and untrusted certificates
 	encrypt := "true"
 	trustCert := "false"
-	if strings.ToLower(os.Getenv("DEVELOPER_MODE")) == "true" {
+	if strings.ToLower(getenv("DEVELOPER_MODE")) == "true" {
 		// In development mode, allow disabling encryption for local SQL Server instances
-		if envEncrypt := os.Getenv("MSSQL_ENCRYPT"); envEncrypt != "" {
+		if envEncrypt := getenv("MSSQL_ENCRYPT"); envEncrypt != "" {
 			encrypt = strings.ToLower(envEncrypt)
 		} else {
 			// Default to false for development mode to match local SQL Server setups
